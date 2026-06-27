@@ -1,9 +1,10 @@
 # Deployment Guide
 
 This guide explains how to deploy `stock-sum` on a regular machine and with
-Docker. It reflects the current project state: the HTTP daemon, configuration
-validation, models.dev cache, and X.com Playwright collector are available, while
-the full report pipeline and delivery providers are still scaffolded.
+Docker. The current project state includes the HTTP daemon, configuration
+validation, models.dev cache, shared SQLite run/index storage, Scrape Creators
+X/Reddit API collectors, and generic Playwright infrastructure. LLM summaries
+and delivery providers are still scaffolded.
 
 ## Deployment model
 
@@ -12,10 +13,9 @@ A deployment needs:
 - Python 3.12 runtime or the provided Docker image.
 - A TOML config file.
 - Environment variables for secrets.
-- Writable `data/` storage for SQLite files, models.dev cache files, and
-  Playwright browser profiles.
-- Chromium installed through Playwright.
-- Optional persistent X.com browser login profile for the X collector.
+- Writable `data/` storage for SQLite files, models.dev cache files, and future
+  browser profiles.
+- Chromium installed through Playwright for future browser-based collectors.
 
 The default daemon command is:
 
@@ -104,10 +104,16 @@ timezone = "America/Vancouver"
 [storage]
 sqlite_path = "data/stock_sum.sqlite3"
 
-[playwright.x]
-user_data_dir = "data/browser_profiles/x"
-max_posts = 10
-max_scrolls = 8
+[playwright]
+browser = "chromium"
+channel = ""
+headless = true
+timeout_seconds = 30
+
+[providers.scrape_creators]
+api_key_env = "SCRAPE_CREATORS_API_KEY"
+base_url = "https://api.scrapecreators.com"
+timeout_seconds = 30
 
 [llm]
 provider = "openai"
@@ -140,6 +146,7 @@ cp .env.example .env
 Fill in only the values needed by enabled integrations:
 
 ```env
+SCRAPE_CREATORS_API_KEY=
 OPENAI_API_KEY=
 SMTP_USERNAME=
 SMTP_PASSWORD=
@@ -154,6 +161,7 @@ the variables into the process environment before starting the daemon.
 Windows PowerShell:
 
 ```powershell
+$env:SCRAPE_CREATORS_API_KEY = "..."
 $env:OPENAI_API_KEY = "..."
 $env:SMTP_USERNAME = "..."
 $env:SMTP_PASSWORD = "..."
@@ -169,7 +177,7 @@ set +a
 stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
 ```
 
-### 1.5 Initialize cache and browser profile
+### 1.5 Initialize cache
 
 Refresh the models.dev cache:
 
@@ -177,25 +185,19 @@ Refresh the models.dev cache:
 stock-sum config sync --config config.toml
 ```
 
-Check the X profile status:
+The bundled default profile currently has no collector references. Scrape
+Creators example sources live under `[[sources.x_users]]` and
+`[[sources.subreddits]]`, but are disabled until you set `enabled = true` in
+TOML or add sources through the CLI. Source-list entries resolve to collector
+IDs such as `x.aleabitoreddit` and `reddit.wallstreetbets`.
 
 ```bash
-stock-sum x status --config config.toml
-```
-
-If scraping requires login, open a headed browser and sign in:
-
-```bash
-stock-sum x login --config config.toml --channel chrome --wait-seconds 600
-```
-
-Close the browser after login. The persistent profile remains under
-`playwright.x.user_data_dir`.
-
-Test a scrape:
-
-```bash
-stock-sum x scrape --config config.toml --handle aleabitoreddit --limit 10
+stock-sum config x-user add aleabitoreddit --config config.toml --profile default
+stock-sum config subreddit add wallstreetbets --config config.toml --profile default
+stock-sum collect --collector x.aleabitoreddit --config config.toml
+stock-sum collect --collector reddit.wallstreetbets --config config.toml
+stock-sum collect --profile default --config config.toml
+stock-sum run-report --profile default --config config.toml
 ```
 
 ### 1.6 Run the daemon
@@ -271,6 +273,7 @@ For development, run the daemon in an activated PowerShell session:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
+$env:SCRAPE_CREATORS_API_KEY = "..."
 $env:OPENAI_API_KEY = "..."
 stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
 ```
@@ -288,7 +291,7 @@ powershell.exe
 4. Use arguments like:
 
 ```text
--NoProfile -ExecutionPolicy Bypass -Command "$env:OPENAI_API_KEY='...'; & 'E:\projects\stock-sum\.venv\Scripts\stock-sum.exe' daemon --config 'E:\projects\stock-sum\config.toml' --host 0.0.0.0 --port 8000"
+-NoProfile -ExecutionPolicy Bypass -Command "$env:SCRAPE_CREATORS_API_KEY='...'; $env:OPENAI_API_KEY='...'; & 'E:\projects\stock-sum\.venv\Scripts\stock-sum.exe' daemon --config 'E:\projects\stock-sum\config.toml' --host 0.0.0.0 --port 8000"
 ```
 
 If you need many secrets, prefer setting machine/user environment variables
@@ -351,7 +354,7 @@ docker compose down
 ```
 
 Keep persistent data by leaving `./data` in place. Remove it only if you want to
-delete local cache, SQLite files, and browser profiles.
+delete local cache and SQLite files.
 
 ### 2.3 Use a custom config with Compose
 
@@ -440,34 +443,7 @@ docker run --rm `
   stock-sum daemon --config /app/config.toml --host 0.0.0.0 --port 8000
 ```
 
-### 2.5 X.com collector in Docker
-
-Headless scraping can run in Docker, but the default image is not configured for
-interactive headed login. The practical flow is:
-
-1. Mount `./data:/app/data`.
-2. Create or refresh the browser profile on a regular machine with a visible
-   browser:
-
-   ```bash
-   stock-sum x login --config config.toml --channel chrome --wait-seconds 600
-   ```
-
-3. Make sure `playwright.x.user_data_dir` points under the mounted data
-   directory, such as `data/browser_profiles/x` on the host and
-   `/app/data/browser_profiles/x` inside the container.
-4. Run the container with that same mounted `data/` directory.
-5. Test scraping in the container:
-
-   ```bash
-   docker compose run --rm stock-sum stock-sum x status --config /app/config.toml
-   docker compose run --rm stock-sum stock-sum x scrape --config /app/config.toml --handle aleabitoreddit --limit 10
-   ```
-
-If X reports a login wall or rate limit, refresh the profile on a machine with a
-visible browser and retry.
-
-### 2.6 Docker operations
+### 2.5 Docker operations
 
 View logs:
 
@@ -557,18 +533,25 @@ Playwright cannot launch Chromium:
 - On Linux, run `python -m playwright install --with-deps chromium`.
 - In Docker, rebuild the image so the Dockerfile browser install step reruns.
 
-X scraping returns an authentication error:
+Collection fails with an unsupported collector kind:
 
-- Run `stock-sum x login --config config.toml --channel chrome`.
-- Confirm `stock-sum x status --config config.toml` reports existing profile
-  files.
-- Check that Docker and host runs point at the same mounted browser profile
-  directory.
+- Scrape Creators collector kinds are `scrape_creators_x_user_tweets` and
+  `scrape_creators_reddit_subreddit`.
+- For any other future kind, add a source-specific collector implementation and
+  register it in the collector factory.
+- Add the matching source-specific storage table and mapper before persisting
+  that source type.
 
-The daemon starts but report execution does nothing:
+Collection fails with a missing Scrape Creators API key:
 
-- This is expected in the current scaffold. The API route accepts report trigger
-  requests, but the report pipeline is not implemented yet.
+- Set `SCRAPE_CREATORS_API_KEY` in the process environment.
+- Keep the TOML value as `api_key_env = "SCRAPE_CREATORS_API_KEY"`; do not put
+  the real key in config.
+
+The daemon starts but LLM summaries or deliveries do nothing:
+
+- This is expected in the current scaffold. Collection orchestration exists, but
+  summarization, rendering, and delivery are not implemented yet.
 
 Port 8000 is already in use:
 

@@ -36,18 +36,20 @@ class PlaywrightConfig(BaseModel):
     channel: Literal["", "chrome", "msedge", "chromium"] = ""
     headless: bool = True
     timeout_seconds: int = Field(default=30, ge=1)
-    x: "XPlaywrightConfig" = Field(default_factory=lambda: XPlaywrightConfig())
 
 
-class XPlaywrightConfig(BaseModel):
-    """X.com Playwright collector settings."""
+class ScrapeCreatorsProviderConfig(BaseModel):
+    """Scrape Creators API provider settings."""
 
-    user_data_dir: str = "data/browser_profiles/x"
-    base_url: str = "https://x.com"
-    max_posts: int = Field(default=10, ge=1)
-    max_scrolls: int = Field(default=8, ge=0)
-    login_required_behavior: Literal["raise", "empty"] = "raise"
-    selector_timeout_seconds: int = Field(default=15, ge=1)
+    api_key_env: str = "SCRAPE_CREATORS_API_KEY"
+    base_url: str = "https://api.scrapecreators.com"
+    timeout_seconds: int = Field(default=30, ge=1)
+
+
+class ProvidersConfig(BaseModel):
+    """External API provider settings."""
+
+    scrape_creators: ScrapeCreatorsProviderConfig = Field(default_factory=ScrapeCreatorsProviderConfig)
 
 
 class LLMConfig(BaseModel):
@@ -72,9 +74,44 @@ class CollectorConfig(BaseModel):
 
     kind: str
     enabled: bool = True
-    handles: list[str] = Field(default_factory=list)
-    subreddits: list[str] = Field(default_factory=list)
     api_url: str | None = None
+    handle: str | None = None
+    subreddit: str | None = None
+    sort: str = "new"
+    timeframe: str = "day"
+    limit: int = Field(default=10, ge=1)
+    trim: bool = True
+    include_comments: bool = False
+    comments_per_post: int = Field(default=0, ge=0)
+
+
+class XUserSourceConfig(BaseModel):
+    """Configured X user source."""
+
+    handle: str
+    enabled: bool = True
+    limit: int = Field(default=10, ge=1)
+    trim: bool = True
+
+
+class RedditSubredditSourceConfig(BaseModel):
+    """Configured Reddit subreddit source."""
+
+    subreddit: str
+    enabled: bool = True
+    sort: str = "new"
+    timeframe: str = "day"
+    limit: int = Field(default=10, ge=1)
+    trim: bool = True
+    include_comments: bool = False
+    comments_per_post: int = Field(default=0, ge=0)
+
+
+class SourcesConfig(BaseModel):
+    """Long-list source configuration."""
+
+    x_users: list[XUserSourceConfig] = Field(default_factory=list)
+    subreddits: list[RedditSubredditSourceConfig] = Field(default_factory=list)
 
 
 class EmailDeliveryConfig(BaseModel):
@@ -116,7 +153,9 @@ class AppConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     models_dev: ModelsDevConfig = Field(default_factory=ModelsDevConfig)
     playwright: PlaywrightConfig = Field(default_factory=PlaywrightConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     llm: LLMConfig
     reports: dict[str, ReportProfileConfig] = Field(default_factory=dict)
+    sources: SourcesConfig = Field(default_factory=SourcesConfig)
     collectors: dict[str, dict[str, CollectorConfig]] = Field(default_factory=dict)
     delivery: DeliveryConfig = Field(default_factory=DeliveryConfig)

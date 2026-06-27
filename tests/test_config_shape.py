@@ -10,8 +10,15 @@ def test_example_config_is_valid() -> None:
 
     assert config.service.name == "stock-sum"
     assert config.playwright.channel == ""
+    assert config.playwright.browser == "chromium"
+    assert config.playwright.headless is True
     assert config.models_dev.refresh_interval_hours == 24
-    assert config.playwright.x.user_data_dir == "data/browser_profiles/x"
-    assert config.playwright.x.max_posts == 10
-    assert "morning" in config.reports
+    assert config.providers.scrape_creators.api_key_env == "SCRAPE_CREATORS_API_KEY"
+    assert "default" in config.reports
+    assert config.reports["default"].collector_ids == []
+    assert config.sources.x_users[0].handle == "aleabitoreddit"
+    assert config.sources.x_users[0].enabled is False
+    assert config.sources.subreddits[0].subreddit == "wallstreetbets"
+    assert config.sources.subreddits[0].enabled is False
+    assert config.collectors == {}
     assert config.delivery.email["primary"].password_env == "SMTP_PASSWORD"

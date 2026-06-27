@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from stock_sum.collectors.api.scrape_creators import (
+    REDDIT_SOURCE_TYPE,
+    X_SOURCE_TYPE,
+    ScrapeCreatorsRedditSubredditCollector,
+    ScrapeCreatorsXUserTweetsCollector,
+)
 from stock_sum.collectors.base import Collector
-from stock_sum.collectors.playwright.x import XUserCollector
-from stock_sum.config.models import AppConfig, CollectorConfig
-from stock_sum.core.errors import ConfigurationError, StockSumError
-from stock_sum.storage.mappers import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
-
-
-class CollectorNotImplementedError(StockSumError):
-    """Raised when a configured collector has no implementation yet."""
+from stock_sum.config.models import AppConfig, CollectorConfig, RedditSubredditSourceConfig, XUserSourceConfig
+from stock_sum.core.errors import ConfigurationError
 
 
 def get_collector_config(config: AppConfig, collector_id: str) -> CollectorConfig:
@@ -24,6 +24,9 @@ def get_collector_config(config: AppConfig, collector_id: str) -> CollectorConfi
     try:
         return config.collectors[group][name]
     except KeyError as exc:
+        source_config = _get_source_list_collector_config(config, group, name)
+        if source_config is not None:
+            return source_config
         raise ConfigurationError(f"Unknown collector id: {collector_id}") from exc
 
 
@@ -36,11 +39,7 @@ def source_type_for_collector_id(config: AppConfig, collector_id: str) -> str:
 def source_type_for_collector_config(collector_config: CollectorConfig) -> str:
     """Resolve the raw item source type for a collector config."""
 
-    if collector_config.kind == X_SOURCE_TYPE:
-        return X_SOURCE_TYPE
-    if collector_config.kind == REDDIT_SOURCE_TYPE:
-        return REDDIT_SOURCE_TYPE
-    raise ConfigurationError(f"Unsupported collector kind: {collector_config.kind}")
+    return collector_config.kind
 
 
 def build_collector(config: AppConfig, collector_id: str) -> Collector:
@@ -51,9 +50,56 @@ def build_collector(config: AppConfig, collector_id: str) -> Collector:
         raise ConfigurationError(f"Collector is disabled: {collector_id}")
 
     if collector_config.kind == X_SOURCE_TYPE:
-        return XUserCollector(collector_id, collector_config.handles)
-
+        return ScrapeCreatorsXUserTweetsCollector(
+            collector_id=collector_id,
+            collector_config=collector_config,
+            provider_config=config.providers.scrape_creators,
+        )
     if collector_config.kind == REDDIT_SOURCE_TYPE:
-        raise CollectorNotImplementedError(f"Reddit collector is not implemented yet: {collector_id}")
+        return ScrapeCreatorsRedditSubredditCollector(
+            collector_id=collector_id,
+            collector_config=collector_config,
+            provider_config=config.providers.scrape_creators,
+        )
 
-    raise ConfigurationError(f"Unsupported collector kind: {collector_config.kind}")
+    raise ConfigurationError(f"No collector implementation registered for kind: {collector_config.kind}")
+
+
+def _get_source_list_collector_config(config: AppConfig, group: str, name: str) -> CollectorConfig | None:
+    if group == "x":
+        for source in config.sources.x_users:
+            if _source_id(source.handle) == name:
+                return _x_source_to_collector_config(source)
+    if group == "reddit":
+        for source in config.sources.subreddits:
+            if _source_id(source.subreddit) == name:
+                return _reddit_source_to_collector_config(source)
+    return None
+
+
+def _x_source_to_collector_config(source: XUserSourceConfig) -> CollectorConfig:
+    return CollectorConfig(
+        kind=X_SOURCE_TYPE,
+        enabled=source.enabled,
+        handle=source.handle.lstrip("@"),
+        limit=source.limit,
+        trim=source.trim,
+    )
+
+
+def _reddit_source_to_collector_config(source: RedditSubredditSourceConfig) -> CollectorConfig:
+    return CollectorConfig(
+        kind=REDDIT_SOURCE_TYPE,
+        enabled=source.enabled,
+        subreddit=source.subreddit.strip("/").removeprefix("r/"),
+        sort=source.sort,
+        timeframe=source.timeframe,
+        limit=source.limit,
+        trim=source.trim,
+        include_comments=source.include_comments,
+        comments_per_post=source.comments_per_post,
+    )
+
+
+def _source_id(value: str) -> str:
+    return value.strip().strip("/").removeprefix("@").removeprefix("r/")

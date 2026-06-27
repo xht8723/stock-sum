@@ -17,34 +17,37 @@ channel = ""
 headless = true
 timeout_seconds = 30
 
-[playwright.x]
-user_data_dir = "data/browser_profiles/x"
-base_url = "https://x.com"
-max_posts = 10
-max_scrolls = 8
-login_required_behavior = "raise"
-selector_timeout_seconds = 15
+[providers.scrape_creators]
+api_key_env = "SCRAPE_CREATORS_API_KEY"
+base_url = "https://api.scrapecreators.com"
+timeout_seconds = 30
 
 [llm]
 provider = "openai"
 model = "gpt-4.1-mini"
 api_key_env = "OPENAI_API_KEY"
 
-[reports.morning]
+[reports.default]
 timezone = "America/Vancouver"
 schedule = "0 8 * * 1-5"
-collector_ids = ["x.market_watch", "reddit.market_watch"]
+collector_ids = []
 delivery_ids = ["email.primary"]
 
-[collectors.x.market_watch]
-kind = "x_user_timeline"
-enabled = true
-handles = ["aleabitoreddit"]
+[[sources.x_users]]
+enabled = false
+handle = "aleabitoreddit"
+limit = 10
+trim = true
 
-[collectors.reddit.market_watch]
-kind = "subreddit_posts"
-enabled = true
-subreddits = ["stocks", "investing"]
+[[sources.subreddits]]
+enabled = false
+subreddit = "wallstreetbets"
+sort = "new"
+timeframe = "day"
+limit = 10
+trim = true
+include_comments = false
+comments_per_post = 0
 
 [delivery.email.primary]
 kind = "email"

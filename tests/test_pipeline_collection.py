@@ -8,16 +8,16 @@ from stock_sum.core.pipeline import ReportPipeline
 
 
 class FakeCollector:
-    collector_id = "x.test"
+    collector_id = "api.test"
 
     async def collect(self, context):
         return [
             RawItem(
                 source_id="123",
-                source_type="x_user_timeline",
-                url="https://x.com/user/status/123",
+                source_type="test_source",
+                url="https://example.com/items/123",
                 text="hello",
-                metadata={"handle": "user"},
+                metadata={"source": "test"},
             )
         ]
 
@@ -40,7 +40,7 @@ class FakeRepository:
     async def save_raw_items(self, items):
         self.saved.append(items)
         return RawItemSaveResult(
-            source_type="x_user_timeline",
+            source_type="test_source",
             collected_count=len(items),
             inserted_count=len(items),
             updated_count=0,
@@ -57,8 +57,8 @@ def _config(tmp_path) -> AppConfig:
     return AppConfig(
         storage=StorageConfig(sqlite_path=str(tmp_path / "test.sqlite3")),
         llm=LLMConfig(provider="openai", model="test", api_key_env="OPENAI_API_KEY"),
-        collectors={"x": {"test": CollectorConfig(kind="x_user_timeline", handles=["user"])}},
-        reports={"morning": ReportProfileConfig(schedule="0 8 * * *", collector_ids=["x.test"])},
+        collectors={"api": {"test": CollectorConfig(kind="test_source")}},
+        reports={"default": ReportProfileConfig(schedule="0 8 * * *", collector_ids=["api.test"])},
     )
 
 
@@ -70,9 +70,9 @@ async def test_pipeline_collects_and_persists_with_fake_collector(tmp_path) -> N
         collector_factory=lambda collector_id: FakeCollector(),
     )
 
-    result = await pipeline.run_report("morning")
+    result = await pipeline.run_report("default")
 
-    assert result.profile == "morning"
+    assert result.profile == "default"
     assert result.collected_count == 1
     assert result.inserted_count == 1
     assert len(repository.started) == 1

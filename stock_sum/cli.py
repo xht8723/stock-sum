@@ -15,29 +15,40 @@ import uvicorn
 from rich.console import Console
 
 from stock_sum.config.loader import load_config
-from stock_sum.config.writer import get_dotted_value, read_toml_document, set_dotted_value, write_default_config
-from stock_sum.collectors.playwright.x import (
-    XAuthenticationRequired,
-    XScrapeError,
-    XUserCollector,
-    diagnose_x_profile,
-    login_to_x,
-    x_profile_status,
+from stock_sum.config.writer import (
+    add_profile,
+    add_subreddit,
+    add_x_user,
+    delete_profile,
+    delete_subreddit,
+    delete_x_user,
+    edit_profile,
+    get_dotted_value,
+    get_profile,
+    list_subreddits,
+    list_profiles,
+    list_x_users,
+    read_toml_document,
+    set_dotted_value,
+    write_default_config,
 )
 from stock_sum.core.context import RuntimeContext
 from stock_sum.core.errors import StockSumError
-from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, RawItem
+from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult
 from stock_sum.core.pipeline import ReportPipeline
 from stock_sum.llm.catalog import load_models_dev_catalog
 from stock_sum.service.daemon import build_daemon
 
 app = typer.Typer(help="Trading information summarization service.")
 config_app = typer.Typer(help="Manage TOML configuration.")
-x_app = typer.Typer(help="Scrape and manage X.com browser sessions.")
+profile_app = typer.Typer(help="Manage report profiles in TOML configuration.")
+x_user_app = typer.Typer(help="Manage X user sources in TOML configuration.")
+subreddit_app = typer.Typer(help="Manage subreddit sources in TOML configuration.")
 app.add_typer(config_app, name="config")
-app.add_typer(x_app, name="x")
+config_app.add_typer(profile_app, name="profile")
+config_app.add_typer(x_user_app, name="x-user")
+config_app.add_typer(subreddit_app, name="subreddit")
 console = Console()
-VALID_BROWSER_CHANNELS = {"", "chrome", "msedge", "chromium"}
 
 
 def _parse_value(raw: str) -> Any:
@@ -45,12 +56,6 @@ def _parse_value(raw: str) -> Any:
         return ast.literal_eval(raw)
     except Exception:
         return raw
-
-
-def _raw_item_to_jsonable(item: RawItem) -> dict[str, Any]:
-    data = asdict(item)
-    data["collected_at"] = item.collected_at.isoformat()
-    return data
 
 
 def _collection_run_to_jsonable(result: CollectionRunResult) -> dict[str, Any]:
@@ -65,10 +70,10 @@ def _pipeline_result_to_jsonable(result: PipelineCollectionResult) -> dict[str, 
     return data
 
 
-def _validate_browser_channel(channel: str) -> str:
-    if channel not in VALID_BROWSER_CHANNELS:
-        raise typer.BadParameter("Channel must be one of: chrome, msedge, chromium.")
-    return channel
+def _split_csv(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 @app.command("run-report")
@@ -180,81 +185,216 @@ def config_sync(
     console.print(f"models.dev catalog cached from {cache_entry.source_url}")
 
 
-@x_app.command("scrape")
-def x_scrape(
-    handle: str = typer.Option(..., "--handle", help="X handle to scrape."),
-    limit: int = typer.Option(10, "--limit", "-n", min=1, help="Maximum number of posts."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
-    channel: str = typer.Option("", "--channel", help="Optional Chromium channel, such as chrome or msedge."),
-) -> None:
-    """Scrape recent X posts for one handle."""
+@profile_app.command("list")
+def profile_list(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+    """List report profile names."""
 
-    settings = load_config(config)
-    channel = _validate_browser_channel(channel)
-    if channel:
-        settings.playwright.channel = channel
-    context = RuntimeContext(config=settings)
-    collector = XUserCollector("x.cli", [handle], limit=limit)
+    console.print_json(json.dumps({"profiles": list_profiles(config)}))
+
+
+@profile_app.command("show")
+def profile_show(
+    name: str = typer.Argument(..., help="Profile name."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+) -> None:
+    """Show one report profile."""
+
     try:
-        items = asyncio.run(collector.collect(context))
-    except XAuthenticationRequired as exc:
-        console.print(f"{exc} Then retry this command.")
-        raise typer.Exit(code=2) from exc
-    except XScrapeError as exc:
+        profile = get_profile(config, name)
+    except KeyError as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
-    console.print_json(json.dumps([_raw_item_to_jsonable(item) for item in items]))
+    console.print_json(json.dumps({"name": name, "profile": profile}))
 
 
-@x_app.command("login")
-def x_login(
+@profile_app.command("add")
+def profile_add(
+    name: str = typer.Argument(..., help="Profile name."),
     config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
-    channel: str = typer.Option("chrome", "--channel", help="Chromium channel to use for the visible login browser."),
-    wait_seconds: int = typer.Option(600, "--wait-seconds", min=30, help="How long to keep the login browser open."),
+    timezone: str = typer.Option("UTC", "--timezone", help="Profile timezone."),
+    schedule: str = typer.Option("0 8 * * 1-5", "--schedule", help="Cron schedule."),
+    collectors: str = typer.Option("", "--collectors", help="Comma-separated collector ids."),
+    deliveries: str = typer.Option("", "--deliveries", help="Comma-separated delivery ids."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing profile."),
 ) -> None:
-    """Open a headed X browser session and persist the login profile."""
+    """Add a report profile."""
 
-    settings = load_config(config)
-    channel = _validate_browser_channel(channel)
-    settings.playwright.channel = channel
-    console.print(
-        "Opening a headed browser. Use it like a normal browser, then close the window; "
-        "the session profile will stay in the configured profile directory."
-    )
-    status = asyncio.run(login_to_x(RuntimeContext(config=settings), channel=channel, wait_seconds=wait_seconds))
-    console.print_json(json.dumps(status))
-
-
-@x_app.command("status")
-def x_status(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
-    """Show persistent X profile status."""
-
-    settings = load_config(config)
-    console.print_json(json.dumps(x_profile_status(settings.playwright.x.user_data_dir)))
-
-
-@x_app.command("diagnose")
-def x_diagnose(
-    handle: str = typer.Option(..., "--handle", help="X handle to inspect."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
-    channel: str = typer.Option("", "--channel", help="Optional Chromium channel, such as chrome or msedge."),
-    wait_seconds: int = typer.Option(5, "--wait-seconds", min=1, help="Seconds to wait after page load."),
-) -> None:
-    """Print public X page diagnostics for selector troubleshooting."""
-
-    settings = load_config(config)
-    channel = _validate_browser_channel(channel)
-    if channel:
-        settings.playwright.channel = channel
-    diagnostics = asyncio.run(
-        diagnose_x_profile(
-            RuntimeContext(config=settings),
-            handle=handle,
-            channel=channel,
-            wait_seconds=wait_seconds,
+    try:
+        add_profile(
+            config,
+            name,
+            timezone=timezone,
+            schedule=schedule,
+            collector_ids=_split_csv(collectors) or [],
+            delivery_ids=_split_csv(deliveries) or [],
+            overwrite=overwrite,
         )
-    )
-    console.print_json(json.dumps(diagnostics))
+    except KeyError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Added profile {name}.")
+
+
+@profile_app.command("edit")
+def profile_edit(
+    name: str = typer.Argument(..., help="Profile name."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    timezone: str | None = typer.Option(None, "--timezone", help="Profile timezone."),
+    schedule: str | None = typer.Option(None, "--schedule", help="Cron schedule."),
+    collectors: str | None = typer.Option(None, "--collectors", help="Comma-separated collector ids."),
+    deliveries: str | None = typer.Option(None, "--deliveries", help="Comma-separated delivery ids."),
+) -> None:
+    """Edit a report profile."""
+
+    try:
+        edit_profile(
+            config,
+            name,
+            timezone=timezone,
+            schedule=schedule,
+            collector_ids=_split_csv(collectors),
+            delivery_ids=_split_csv(deliveries),
+        )
+    except KeyError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Updated profile {name}.")
+
+
+@profile_app.command("delete")
+def profile_delete(
+    name: str = typer.Argument(..., help="Profile name."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+) -> None:
+    """Delete a report profile."""
+
+    try:
+        delete_profile(config, name)
+    except KeyError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Deleted profile {name}.")
+
+
+@x_user_app.command("list")
+def x_user_list(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+    """List X user sources."""
+
+    console.print_json(json.dumps({"x_users": list_x_users(config)}))
+
+
+@x_user_app.command("add")
+def x_user_add(
+    handle: str = typer.Argument(..., help="X handle, with or without @."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    limit: int = typer.Option(10, "--limit", min=1, help="Maximum posts to collect."),
+    enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether this source can be collected."),
+    trim: bool = typer.Option(True, "--trim/--no-trim", help="Request trimmed provider responses."),
+    profile: str | None = typer.Option(None, "--profile", help="Also add x.<handle> to this report profile."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing source."),
+) -> None:
+    """Add an X user source."""
+
+    try:
+        collector_id = add_x_user(
+            config,
+            handle,
+            enabled=enabled,
+            limit=limit,
+            trim=trim,
+            profile=profile,
+            overwrite=overwrite,
+        )
+    except (KeyError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Added X user source {collector_id}.")
+
+
+@x_user_app.command("delete")
+def x_user_delete(
+    handle: str = typer.Argument(..., help="X handle, with or without @."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    profile: str | None = typer.Option(None, "--profile", help="Also remove x.<handle> from this report profile."),
+) -> None:
+    """Delete an X user source."""
+
+    try:
+        collector_id = delete_x_user(config, handle, profile=profile)
+    except KeyError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Deleted X user source {collector_id}.")
+
+
+@subreddit_app.command("list")
+def subreddit_list(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+    """List subreddit sources."""
+
+    console.print_json(json.dumps({"subreddits": list_subreddits(config)}))
+
+
+@subreddit_app.command("add")
+def subreddit_add(
+    subreddit: str = typer.Argument(..., help="Subreddit name, with or without r/."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    sort: str = typer.Option("new", "--sort", help="Reddit sort mode."),
+    timeframe: str = typer.Option("day", "--timeframe", help="Timeframe used when sort=top."),
+    limit: int = typer.Option(10, "--limit", min=1, help="Maximum posts to collect."),
+    enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether this source can be collected."),
+    trim: bool = typer.Option(True, "--trim/--no-trim", help="Request trimmed provider responses."),
+    include_comments: bool = typer.Option(False, "--include-comments/--no-comments", help="Collect comments too."),
+    comments_per_post: int = typer.Option(0, "--comments-per-post", min=0, help="Maximum comments per post."),
+    profile: str | None = typer.Option(None, "--profile", help="Also add reddit.<subreddit> to this report profile."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing source."),
+) -> None:
+    """Add a subreddit source."""
+
+    try:
+        collector_id = add_subreddit(
+            config,
+            subreddit,
+            enabled=enabled,
+            sort=sort,
+            timeframe=timeframe,
+            limit=limit,
+            trim=trim,
+            include_comments=include_comments,
+            comments_per_post=comments_per_post,
+            profile=profile,
+            overwrite=overwrite,
+        )
+    except (KeyError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Added subreddit source {collector_id}.")
+
+
+@subreddit_app.command("delete")
+def subreddit_delete(
+    subreddit: str = typer.Argument(..., help="Subreddit name, with or without r/."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Also remove reddit.<subreddit> from this report profile.",
+    ),
+) -> None:
+    """Delete a subreddit source."""
+
+    try:
+        collector_id = delete_subreddit(config, subreddit, profile=profile)
+    except KeyError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Deleted subreddit source {collector_id}.")
 
 
 def main() -> None:

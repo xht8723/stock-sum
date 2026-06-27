@@ -11,7 +11,7 @@ from typing import Any
 import aiosqlite
 
 from stock_sum.core.models import RawItem, RawItemSaveResult
-from stock_sum.storage.mappers import SourceRow, map_raw_item
+from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 
 
 SCHEMA_SQL = """
@@ -40,36 +40,77 @@ CREATE TABLE IF NOT EXISTS raw_item_index (
     PRIMARY KEY (source_type, source_id)
 );
 
-CREATE TABLE IF NOT EXISTS raw_x_posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS raw_scrape_creators_x_posts (
     status_id TEXT NOT NULL,
     handle TEXT NOT NULL,
-    author TEXT,
+    author_handle TEXT,
+    author_name TEXT,
     posted_at_text TEXT,
     url TEXT,
     text TEXT NOT NULL,
-    metadata_json TEXT NOT NULL,
+    reply_count INTEGER,
+    repost_count INTEGER,
+    like_count INTEGER,
+    quote_count INTEGER,
+    view_count INTEGER,
+    raw_json TEXT NOT NULL,
     collected_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (handle, status_id)
+    PRIMARY KEY (handle, status_id)
 );
 
-CREATE TABLE IF NOT EXISTS raw_reddit_posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    subreddit TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS raw_scrape_creators_x_post_media (
+    status_id TEXT NOT NULL,
+    media_key TEXT,
+    media_type TEXT,
+    media_url TEXT NOT NULL,
+    alt_text TEXT,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (status_id, media_url)
+);
+
+CREATE TABLE IF NOT EXISTS raw_scrape_creators_reddit_posts (
     post_id TEXT NOT NULL,
-    title TEXT,
+    subreddit TEXT NOT NULL,
+    fullname TEXT,
+    title TEXT NOT NULL,
     author TEXT,
     url TEXT,
-    text TEXT,
+    permalink TEXT,
+    selftext TEXT NOT NULL,
     score INTEGER,
-    comment_count INTEGER,
-    metadata_json TEXT NOT NULL,
+    ups INTEGER,
+    upvote_ratio REAL,
+    num_comments INTEGER,
+    thumbnail_url TEXT,
+    created_at_text TEXT,
+    raw_json TEXT NOT NULL,
     collected_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (subreddit, post_id)
+    PRIMARY KEY (subreddit, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS raw_scrape_creators_reddit_comments (
+    comment_id TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    parent_id TEXT,
+    author TEXT,
+    body TEXT NOT NULL,
+    score INTEGER,
+    ups INTEGER,
+    url TEXT,
+    created_at_text TEXT,
+    depth INTEGER,
+    raw_json TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY (post_id, comment_id)
+);
+
+CREATE TABLE IF NOT EXISTS raw_scrape_creators_reddit_post_media (
+    post_id TEXT NOT NULL,
+    media_type TEXT,
+    media_url TEXT NOT NULL,
+    source_field TEXT,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (post_id, media_url)
 );
 """
 
@@ -149,26 +190,23 @@ class SQLiteStorageRepository:
         if not items:
             return RawItemSaveResult(source_type="", collected_count=0, inserted_count=0, updated_count=0)
 
-        source_types = {item.source_type for item in items}
-        if len(source_types) != 1:
-            raise ValueError("save_raw_items expects one source type per batch.")
-
         inserted = 0
         updated = 0
         async with aiosqlite.connect(self.sqlite_path) as db:
             for item in items:
-                source_row = map_raw_item(item)
-                exists = await _source_row_exists(db, source_row)
-                await _upsert_source_row(db, source_row)
+                mapped_item = map_raw_item(item)
+                row_existed = await _mapped_row_exists(db, mapped_item)
+                await _upsert_mapped_item(db, mapped_item)
                 await _upsert_index_row(db, item)
-                if exists:
+                if row_existed:
                     updated += 1
                 else:
                     inserted += 1
             await db.commit()
 
+        source_types = {item.source_type for item in items}
         return RawItemSaveResult(
-            source_type=items[0].source_type,
+            source_type=items[0].source_type if len(source_types) == 1 else "mixed",
             collected_count=len(items),
             inserted_count=inserted,
             updated_count=updated,
@@ -202,30 +240,157 @@ def _content_hash(item: RawItem) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-async def _source_row_exists(db: aiosqlite.Connection, source_row: SourceRow) -> bool:
-    where_clause = " AND ".join(f"{column} = ?" for column in source_row.unique_columns)
-    values = tuple(source_row.values[column] for column in source_row.unique_columns)
-    cursor = await db.execute(f"SELECT 1 FROM {source_row.table_name} WHERE {where_clause} LIMIT 1", values)
+async def _mapped_row_exists(db: aiosqlite.Connection, item: MappedRawItem) -> bool:
+    if item.table == "raw_scrape_creators_x_posts":
+        query = "SELECT 1 FROM raw_scrape_creators_x_posts WHERE handle = ? AND status_id = ?"
+    elif item.table == "raw_scrape_creators_reddit_posts":
+        query = "SELECT 1 FROM raw_scrape_creators_reddit_posts WHERE subreddit = ? AND post_id = ?"
+    elif item.table == "raw_scrape_creators_reddit_comments":
+        query = "SELECT 1 FROM raw_scrape_creators_reddit_comments WHERE post_id = ? AND comment_id = ?"
+    else:
+        raise ValueError(f"Unsupported mapped table: {item.table}")
+    cursor = await db.execute(query, item.key)
     try:
         return await cursor.fetchone() is not None
     finally:
         await cursor.close()
 
 
-async def _upsert_source_row(db: aiosqlite.Connection, source_row: SourceRow) -> None:
-    columns = tuple(source_row.values.keys())
-    placeholders = ", ".join("?" for _ in columns)
-    column_sql = ", ".join(columns)
-    conflict_sql = ", ".join(source_row.unique_columns)
-    update_columns = [column for column in columns if column not in source_row.unique_columns]
-    update_sql = ", ".join([f"{column} = excluded.{column}" for column in update_columns] + ["updated_at = CURRENT_TIMESTAMP"])
+async def _upsert_mapped_item(db: aiosqlite.Connection, item: MappedRawItem) -> None:
+    if item.table == "raw_scrape_creators_x_posts":
+        await _upsert_x_post(db, item.row)
+        for media_row in item.media_rows:
+            await _upsert_x_media(db, media_row)
+        return
+    if item.table == "raw_scrape_creators_reddit_posts":
+        await _upsert_reddit_post(db, item.row)
+        for media_row in item.media_rows:
+            await _upsert_reddit_media(db, media_row)
+        return
+    if item.table == "raw_scrape_creators_reddit_comments":
+        await _upsert_reddit_comment(db, item.row)
+        return
+    raise ValueError(f"Unsupported mapped table: {item.table}")
+
+
+async def _upsert_x_post(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
     await db.execute(
-        f"""
-        INSERT INTO {source_row.table_name} ({column_sql})
-        VALUES ({placeholders})
-        ON CONFLICT ({conflict_sql}) DO UPDATE SET {update_sql}
+        """
+        INSERT INTO raw_scrape_creators_x_posts (
+            status_id, handle, author_handle, author_name, posted_at_text, url, text,
+            reply_count, repost_count, like_count, quote_count, view_count, raw_json, collected_at
+        ) VALUES (
+            :status_id, :handle, :author_handle, :author_name, :posted_at_text, :url, :text,
+            :reply_count, :repost_count, :like_count, :quote_count, :view_count, :raw_json, :collected_at
+        )
+        ON CONFLICT (handle, status_id) DO UPDATE SET
+            author_handle = excluded.author_handle,
+            author_name = excluded.author_name,
+            posted_at_text = excluded.posted_at_text,
+            url = excluded.url,
+            text = excluded.text,
+            reply_count = excluded.reply_count,
+            repost_count = excluded.repost_count,
+            like_count = excluded.like_count,
+            quote_count = excluded.quote_count,
+            view_count = excluded.view_count,
+            raw_json = excluded.raw_json,
+            collected_at = excluded.collected_at
         """,
-        tuple(source_row.values[column] for column in columns),
+        row,
+    )
+
+
+async def _upsert_x_media(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        INSERT INTO raw_scrape_creators_x_post_media (
+            status_id, media_key, media_type, media_url, alt_text, raw_json
+        ) VALUES (
+            :status_id, :media_key, :media_type, :media_url, :alt_text, :raw_json
+        )
+        ON CONFLICT (status_id, media_url) DO UPDATE SET
+            media_key = excluded.media_key,
+            media_type = excluded.media_type,
+            alt_text = excluded.alt_text,
+            raw_json = excluded.raw_json
+        """,
+        row,
+    )
+
+
+async def _upsert_reddit_post(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        INSERT INTO raw_scrape_creators_reddit_posts (
+            post_id, subreddit, fullname, title, author, url, permalink, selftext,
+            score, ups, upvote_ratio, num_comments, thumbnail_url, created_at_text,
+            raw_json, collected_at
+        ) VALUES (
+            :post_id, :subreddit, :fullname, :title, :author, :url, :permalink, :selftext,
+            :score, :ups, :upvote_ratio, :num_comments, :thumbnail_url, :created_at_text,
+            :raw_json, :collected_at
+        )
+        ON CONFLICT (subreddit, post_id) DO UPDATE SET
+            fullname = excluded.fullname,
+            title = excluded.title,
+            author = excluded.author,
+            url = excluded.url,
+            permalink = excluded.permalink,
+            selftext = excluded.selftext,
+            score = excluded.score,
+            ups = excluded.ups,
+            upvote_ratio = excluded.upvote_ratio,
+            num_comments = excluded.num_comments,
+            thumbnail_url = excluded.thumbnail_url,
+            created_at_text = excluded.created_at_text,
+            raw_json = excluded.raw_json,
+            collected_at = excluded.collected_at
+        """,
+        row,
+    )
+
+
+async def _upsert_reddit_comment(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        INSERT INTO raw_scrape_creators_reddit_comments (
+            comment_id, post_id, parent_id, author, body, score, ups, url,
+            created_at_text, depth, raw_json, collected_at
+        ) VALUES (
+            :comment_id, :post_id, :parent_id, :author, :body, :score, :ups, :url,
+            :created_at_text, :depth, :raw_json, :collected_at
+        )
+        ON CONFLICT (post_id, comment_id) DO UPDATE SET
+            parent_id = excluded.parent_id,
+            author = excluded.author,
+            body = excluded.body,
+            score = excluded.score,
+            ups = excluded.ups,
+            url = excluded.url,
+            created_at_text = excluded.created_at_text,
+            depth = excluded.depth,
+            raw_json = excluded.raw_json,
+            collected_at = excluded.collected_at
+        """,
+        row,
+    )
+
+
+async def _upsert_reddit_media(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        INSERT INTO raw_scrape_creators_reddit_post_media (
+            post_id, media_type, media_url, source_field, raw_json
+        ) VALUES (
+            :post_id, :media_type, :media_url, :source_field, :raw_json
+        )
+        ON CONFLICT (post_id, media_url) DO UPDATE SET
+            media_type = excluded.media_type,
+            source_field = excluded.source_field,
+            raw_json = excluded.raw_json
+        """,
+        row,
     )
 
 
