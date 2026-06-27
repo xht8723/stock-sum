@@ -46,3 +46,54 @@ class PipelineRun:
     profile: str
     run_id: str = field(default_factory=lambda: str(uuid4()))
     requested_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True)
+class RawItemSaveResult:
+    """Persistence counts for a raw item batch."""
+
+    source_type: str
+    collected_count: int
+    inserted_count: int
+    updated_count: int
+
+
+@dataclass(frozen=True)
+class CollectionRunResult:
+    """Result for one collector execution."""
+
+    run_id: str
+    collector_id: str
+    source_type: str
+    status: str
+    collected_count: int
+    inserted_count: int
+    updated_count: int
+    sqlite_path: str
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class PipelineCollectionResult:
+    """Collection-only result for a report profile run."""
+
+    profile: str
+    runs: list[CollectionRunResult]
+
+    @property
+    def collected_count(self) -> int:
+        """Total collected items across collector runs."""
+
+        return sum(run.collected_count for run in self.runs)
+
+    @property
+    def inserted_count(self) -> int:
+        """Total inserted items across collector runs."""
+
+        return sum(run.inserted_count for run in self.runs)
+
+    @property
+    def updated_count(self) -> int:
+        """Total updated or duplicate items across collector runs."""
+
+        return sum(run.updated_count for run in self.runs)

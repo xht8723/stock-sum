@@ -25,7 +25,8 @@ from stock_sum.collectors.playwright.x import (
     x_profile_status,
 )
 from stock_sum.core.context import RuntimeContext
-from stock_sum.core.models import RawItem
+from stock_sum.core.errors import StockSumError
+from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, RawItem
 from stock_sum.core.pipeline import ReportPipeline
 from stock_sum.llm.catalog import load_models_dev_catalog
 from stock_sum.service.daemon import build_daemon
@@ -52,6 +53,18 @@ def _raw_item_to_jsonable(item: RawItem) -> dict[str, Any]:
     return data
 
 
+def _collection_run_to_jsonable(result: CollectionRunResult) -> dict[str, Any]:
+    return asdict(result)
+
+
+def _pipeline_result_to_jsonable(result: PipelineCollectionResult) -> dict[str, Any]:
+    data = asdict(result)
+    data["collected_count"] = result.collected_count
+    data["inserted_count"] = result.inserted_count
+    data["updated_count"] = result.updated_count
+    return data
+
+
 def _validate_browser_channel(channel: str) -> str:
     if channel not in VALID_BROWSER_CHANNELS:
         raise typer.BadParameter("Channel must be one of: chrome, msedge, chromium.")
@@ -67,7 +80,38 @@ def run_report(
 
     settings = load_config(config)
     pipeline = ReportPipeline(RuntimeContext(config=settings))
-    asyncio.run(pipeline.run_report(profile))
+    try:
+        result = asyncio.run(pipeline.run_report(profile))
+    except StockSumError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    console.print_json(json.dumps(_pipeline_result_to_jsonable(result)))
+
+
+@app.command()
+def collect(
+    collector: str | None = typer.Option(None, "--collector", help="Configured collector id to run."),
+    profile: str | None = typer.Option(None, "--profile", help="Configured report profile whose collectors should run."),
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+) -> None:
+    """Collect configured source data and persist it to SQLite."""
+
+    if bool(collector) == bool(profile):
+        raise typer.BadParameter("Pass exactly one of --collector or --profile.")
+
+    settings = load_config(config)
+    pipeline = ReportPipeline(RuntimeContext(config=settings))
+    try:
+        if collector:
+            result = asyncio.run(pipeline.collect_collector(collector))
+            console.print_json(json.dumps(_collection_run_to_jsonable(result)))
+            return
+
+        result = asyncio.run(pipeline.run_report(profile or ""))
+        console.print_json(json.dumps(_pipeline_result_to_jsonable(result)))
+    except StockSumError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()

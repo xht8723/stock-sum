@@ -39,7 +39,7 @@ delivery_ids = ["email.primary"]
 [collectors.x.market_watch]
 kind = "x_user_timeline"
 enabled = true
-handles = ["example_trader", "example_research"]
+handles = ["aleabitoreddit"]
 
 [collectors.reddit.market_watch]
 kind = "subreddit_posts"
