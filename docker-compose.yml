@@ -1,0 +1,11 @@
+services:
+  stock-sum:
+    build: .
+    command: ["stock-sum", "daemon", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - path: .env
+        required: false

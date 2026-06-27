@@ -1,0 +1,66 @@
+[service]
+name = "stock-sum"
+timezone = "UTC"
+
+[storage]
+sqlite_path = "data/stock_sum.sqlite3"
+
+[models_dev]
+api_url = "https://models.dev/api.json"
+catalog_url = "https://models.dev/catalog.json"
+cache_path = "data/cache/models_dev_api.json"
+refresh_interval_hours = 24
+
+[playwright]
+browser = "chromium"
+channel = ""
+headless = true
+timeout_seconds = 30
+
+[playwright.x]
+user_data_dir = "data/browser_profiles/x"
+base_url = "https://x.com"
+max_posts = 10
+max_scrolls = 8
+login_required_behavior = "raise"
+selector_timeout_seconds = 15
+
+[llm]
+provider = "openai"
+model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+
+[reports.default]
+timezone = "UTC"
+schedule = "0 8 * * *"
+collector_ids = ["x.default", "reddit.default"]
+delivery_ids = ["email.default"]
+
+[collectors.x.default]
+kind = "x_user_timeline"
+enabled = true
+handles = ["example_trader"]
+
+[collectors.reddit.default]
+kind = "subreddit_posts"
+enabled = true
+subreddits = ["stocks", "investing"]
+
+[delivery.email.default]
+kind = "email"
+enabled = false
+smtp_host = "smtp.example.com"
+smtp_port = 587
+username_env = "SMTP_USERNAME"
+password_env = "SMTP_PASSWORD"
+from_address = "reports@example.com"
+to_addresses = ["user@example.com"]
+
+[delivery.whatsapp.default]
+kind = "whatsapp"
+enabled = false
+provider = "twilio"
+account_sid_env = "TWILIO_ACCOUNT_SID"
+auth_token_env = "TWILIO_AUTH_TOKEN"
+from_number_env = "TWILIO_WHATSAPP_FROM"
+to_numbers = ["whatsapp:+10000000000"]
