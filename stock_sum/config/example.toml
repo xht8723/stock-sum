@@ -2,8 +2,22 @@
 name = "stock-sum"
 timezone = "America/Vancouver"
 
+[server]
+host = "127.0.0.1"
+port = 8000
+auth_token_env = "STOCK_SUM_HTTP_TOKEN"
+artifact_dir = "data/http_jobs"
+job_retention_hours = 24
+
 [storage]
 sqlite_path = "data/stock_sum.sqlite3"
+
+[media]
+download_enabled = false
+root_dir = "data/media"
+max_bytes = 5000000
+timeout_seconds = 20
+allowed_content_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 [models_dev]
 api_url = "https://models.dev/api.json"
@@ -13,19 +27,31 @@ refresh_interval_hours = 24
 
 [playwright]
 browser = "chromium"
-channel = ""
+channel = "chromium"
 headless = true
 timeout_seconds = 30
 
-[providers.scrape_creators]
-api_key_env = "SCRAPE_CREATORS_API_KEY"
-base_url = "https://api.scrapecreators.com"
-timeout_seconds = 30
+[playwright.x]
+base_url = "https://x.com"
+max_scrolls = 12
+selector_timeout_seconds = 10
+page_settle_ms = 1500
+scroll_pause_ms = 1200
+
+[providers.xpoz]
+api_key_env = "XPOZ_API_KEY"
+server_url = "https://mcp.xpoz.ai/mcp"
+timeout_seconds = 60
 
 [llm]
-provider = "openai"
-model = "gpt-4.1-mini"
-api_key_env = "OPENAI_API_KEY"
+provider = "deepseek"
+model = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com"
+timeout_seconds = 60
+temperature = 0.2
+max_tokens = 5000
+thinking_enabled = false
 
 [reports.default]
 timezone = "America/Vancouver"
@@ -37,7 +63,6 @@ delivery_ids = ["email.primary"]
 enabled = false
 handle = "aleabitoreddit"
 limit = 10
-trim = true
 
 [[sources.subreddits]]
 enabled = false

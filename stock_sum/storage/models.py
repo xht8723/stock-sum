@@ -1,15 +1,122 @@
-"""Persistence model placeholders."""
+"""Stored source-specific row models."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from typing import Any
 
 
 @dataclass(frozen=True)
-class StoredRecord:
-    """Minimal stored record placeholder."""
+class StoredDownloadedMedia:
+    """Metadata for a downloaded media asset."""
 
-    record_id: str
-    kind: str
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    remote_url_hash: str
+    remote_url: str
+    local_path: str
+    content_type: str
+    byte_size: int
+    sha256: str
+    downloaded_at: str
+
+
+@dataclass(frozen=True)
+class StoredMediaAsset:
+    """Stored remote media row with optional local download metadata."""
+
+    remote_url: str
+    media_type: str | None
+    raw_metadata: dict[str, Any] = field(default_factory=dict)
+    local_path: str | None = None
+    content_type: str | None = None
+    byte_size: int | None = None
+    sha256: str | None = None
+
+    @property
+    def width(self) -> int | None:
+        value = self.raw_metadata.get("width")
+        return value if isinstance(value, int) else None
+
+    @property
+    def height(self) -> int | None:
+        value = self.raw_metadata.get("height")
+        return value if isinstance(value, int) else None
+
+
+@dataclass(frozen=True)
+class StoredCollectionRun:
+    """Stored collection run metadata."""
+
+    run_id: str
+    profile: str | None
+    collector_id: str
+    source_type: str | None
+    status: str
+    started_at: str
+    finished_at: str | None
+    collected_count: int
+    inserted_count: int
+    updated_count: int
+    error_text: str | None
+
+
+@dataclass(frozen=True)
+class StoredXPost:
+    """Stored X post with media rows."""
+
+    status_id: str
+    handle: str
+    author_handle: str | None
+    author_name: str | None
+    posted_at_text: str | None
+    url: str | None
+    text: str
+    reply_count: int | None
+    repost_count: int | None
+    like_count: int | None
+    quote_count: int | None
+    view_count: int | None
+    raw_metadata: dict[str, Any]
+    collected_at: str
+    media: list[StoredMediaAsset] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class StoredRedditComment:
+    """Stored Reddit comment linked to a post."""
+
+    comment_id: str
+    post_id: str
+    parent_id: str | None
+    author: str | None
+    body: str
+    score: int | None
+    ups: int | None
+    url: str | None
+    created_at_text: str | None
+    depth: int | None
+    raw_metadata: dict[str, Any]
+    collected_at: str
+
+
+@dataclass(frozen=True)
+class StoredRedditPost:
+    """Stored Reddit post with media and linked comments."""
+
+    post_id: str
+    subreddit: str
+    fullname: str | None
+    title: str
+    author: str | None
+    url: str | None
+    permalink: str | None
+    selftext: str
+    score: int | None
+    ups: int | None
+    upvote_ratio: float | None
+    num_comments: int | None
+    thumbnail_url: str | None
+    created_at_text: str | None
+    raw_metadata: dict[str, Any]
+    collected_at: str
+    media: list[StoredMediaAsset] = field(default_factory=list)
+    comments: list[StoredRedditComment] = field(default_factory=list)

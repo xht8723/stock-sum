@@ -14,10 +14,30 @@ class ServiceConfig(BaseModel):
     timezone: str = "UTC"
 
 
+class ServerConfig(BaseModel):
+    """Local HTTP automation server configuration."""
+
+    host: str = "127.0.0.1"
+    port: int = Field(default=8000, ge=1, le=65535)
+    auth_token_env: str = "STOCK_SUM_HTTP_TOKEN"
+    artifact_dir: str = "data/http_jobs"
+    job_retention_hours: int = Field(default=24, ge=1)
+
+
 class StorageConfig(BaseModel):
     """SQLite storage configuration."""
 
     sqlite_path: str = "data/stock_sum.sqlite3"
+
+
+class MediaConfig(BaseModel):
+    """Media download configuration."""
+
+    download_enabled: bool = False
+    root_dir: str = "data/media"
+    max_bytes: int = Field(default=5_000_000, ge=1)
+    timeout_seconds: int = Field(default=20, ge=1)
+    allowed_content_types: list[str] = Field(default_factory=lambda: ["image/jpeg", "image/png", "image/gif", "image/webp"])
 
 
 class ModelsDevConfig(BaseModel):
@@ -29,35 +49,51 @@ class ModelsDevConfig(BaseModel):
     refresh_interval_hours: int = Field(default=24, ge=1)
 
 
+class PlaywrightXConfig(BaseModel):
+    """X timeline scraping settings for public Playwright access."""
+
+    base_url: str = "https://x.com"
+    max_scrolls: int = Field(default=12, ge=0)
+    selector_timeout_seconds: int = Field(default=10, ge=1)
+    page_settle_ms: int = Field(default=1500, ge=0)
+    scroll_pause_ms: int = Field(default=1200, ge=0)
+
+
 class PlaywrightConfig(BaseModel):
     """Browser automation defaults for Playwright collectors."""
 
     browser: Literal["chromium", "firefox", "webkit"] = "chromium"
-    channel: Literal["", "chrome", "msedge", "chromium"] = ""
+    channel: Literal["", "chrome", "msedge", "chromium"] = "chromium"
     headless: bool = True
     timeout_seconds: int = Field(default=30, ge=1)
+    x: PlaywrightXConfig = Field(default_factory=PlaywrightXConfig)
 
 
-class ScrapeCreatorsProviderConfig(BaseModel):
-    """Scrape Creators API provider settings."""
+class XpozProviderConfig(BaseModel):
+    """Xpoz MCP-over-HTTP provider settings."""
 
-    api_key_env: str = "SCRAPE_CREATORS_API_KEY"
-    base_url: str = "https://api.scrapecreators.com"
-    timeout_seconds: int = Field(default=30, ge=1)
+    api_key_env: str = "XPOZ_API_KEY"
+    server_url: str = "https://mcp.xpoz.ai/mcp"
+    timeout_seconds: int = Field(default=60, ge=1)
 
 
 class ProvidersConfig(BaseModel):
     """External API provider settings."""
 
-    scrape_creators: ScrapeCreatorsProviderConfig = Field(default_factory=ScrapeCreatorsProviderConfig)
+    xpoz: XpozProviderConfig = Field(default_factory=XpozProviderConfig)
 
 
 class LLMConfig(BaseModel):
     """Provider-neutral LLM selection."""
 
-    provider: str
-    model: str
-    api_key_env: str
+    provider: str = "deepseek"
+    model: str = "deepseek-v4-flash"
+    api_key_env: str = "DEEPSEEK_API_KEY"
+    base_url: str = "https://api.deepseek.com"
+    timeout_seconds: int = Field(default=60, ge=1)
+    temperature: float = Field(default=0.2, ge=0, le=2)
+    max_tokens: int = Field(default=5000, ge=1)
+    thinking_enabled: bool = False
 
 
 class ReportProfileConfig(BaseModel):
@@ -91,7 +127,6 @@ class XUserSourceConfig(BaseModel):
     handle: str
     enabled: bool = True
     limit: int = Field(default=10, ge=1)
-    trim: bool = True
 
 
 class RedditSubredditSourceConfig(BaseModel):
@@ -150,7 +185,9 @@ class AppConfig(BaseModel):
     """Complete application configuration."""
 
     service: ServiceConfig = Field(default_factory=ServiceConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    media: MediaConfig = Field(default_factory=MediaConfig)
     models_dev: ModelsDevConfig = Field(default_factory=ModelsDevConfig)
     playwright: PlaywrightConfig = Field(default_factory=PlaywrightConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)

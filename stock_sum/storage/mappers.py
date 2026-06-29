@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 import json
 
-from stock_sum.collectors.api.scrape_creators import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
+from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
 from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import RawItem
 
@@ -55,13 +55,13 @@ def _map_x_post(item: RawItem) -> MappedRawItem:
             "media_type": media.get("media_type"),
             "media_url": media.get("url"),
             "alt_text": media.get("alt_text"),
-            "raw_json": raw_json(media.get("raw", media)),
+            "raw_json": raw_json(media),
         }
         for media in item.metadata.get("media", [])
         if isinstance(media, dict) and media.get("url")
     ]
     return MappedRawItem(
-        table="raw_scrape_creators_x_posts",
+        table="raw_x_posts",
         key=(item.metadata.get("handle"), item.source_id),
         row={
             "status_id": item.source_id,
@@ -90,13 +90,13 @@ def _map_reddit_post(item: RawItem) -> MappedRawItem:
             "media_type": media.get("media_type"),
             "media_url": media.get("url"),
             "source_field": media.get("source_field"),
-            "raw_json": raw_json(media.get("raw", media)),
+            "raw_json": raw_json(media),
         }
         for media in item.metadata.get("media", [])
         if isinstance(media, dict) and media.get("url")
     ]
     return MappedRawItem(
-        table="raw_scrape_creators_reddit_posts",
+        table="raw_reddit_posts",
         key=(item.metadata.get("subreddit"), item.source_id),
         row={
             "post_id": item.source_id,
@@ -122,7 +122,7 @@ def _map_reddit_post(item: RawItem) -> MappedRawItem:
 
 def _map_reddit_comment(item: RawItem) -> MappedRawItem:
     return MappedRawItem(
-        table="raw_scrape_creators_reddit_comments",
+        table="raw_reddit_comments",
         key=(item.metadata.get("post_id"), item.metadata.get("comment_id")),
         row={
             "comment_id": item.metadata.get("comment_id"),

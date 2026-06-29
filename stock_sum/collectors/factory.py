@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from stock_sum.collectors.api.scrape_creators import (
+from stock_sum.collectors.api.xpoz import (
     REDDIT_SOURCE_TYPE,
     X_SOURCE_TYPE,
-    ScrapeCreatorsRedditSubredditCollector,
-    ScrapeCreatorsXUserTweetsCollector,
+    XpozRedditSubredditCollector,
+    XpozXUserTimelineCollector,
 )
 from stock_sum.collectors.base import Collector
 from stock_sum.config.models import AppConfig, CollectorConfig, RedditSubredditSourceConfig, XUserSourceConfig
@@ -50,16 +50,16 @@ def build_collector(config: AppConfig, collector_id: str) -> Collector:
         raise ConfigurationError(f"Collector is disabled: {collector_id}")
 
     if collector_config.kind == X_SOURCE_TYPE:
-        return ScrapeCreatorsXUserTweetsCollector(
+        return XpozXUserTimelineCollector(
             collector_id=collector_id,
             collector_config=collector_config,
-            provider_config=config.providers.scrape_creators,
+            provider_config=config.providers.xpoz,
         )
     if collector_config.kind == REDDIT_SOURCE_TYPE:
-        return ScrapeCreatorsRedditSubredditCollector(
+        return XpozRedditSubredditCollector(
             collector_id=collector_id,
             collector_config=collector_config,
-            provider_config=config.providers.scrape_creators,
+            provider_config=config.providers.xpoz,
         )
 
     raise ConfigurationError(f"No collector implementation registered for kind: {collector_config.kind}")
@@ -83,7 +83,6 @@ def _x_source_to_collector_config(source: XUserSourceConfig) -> CollectorConfig:
         enabled=source.enabled,
         handle=source.handle.lstrip("@"),
         limit=source.limit,
-        trim=source.trim,
     )
 
 

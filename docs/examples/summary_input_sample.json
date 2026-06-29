@@ -1,0 +1,1517 @@
+{
+  "profile": "default",
+  "generated_at": "2026-06-27T07:01:38.383512+00:00",
+  "collection_runs": [],
+  "x": [
+    {
+      "handle": "aleabitoreddit",
+      "posts": [
+        {
+          "status_id": "1973799361332326443",
+          "url": "https://x.com/aleabitoreddit/status/1973799361332326443",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G2RYDtqbMAI9XJq.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/373b5e0ef8e26cae255621a679e4344d0314208ab2a678f06cd99b76728c19cf.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 46027,
+              "sha256": "74e0f47899834dea84e5c80e58586afe7d6fe4f3943d94a1caab4fc6d8183a2c",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/jByQ9zchvB",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1973799361332326443/photo/1",
+                "media_key": "3_1973799357515509762",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 722,
+                      "w": 1290,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1290,
+                      "w": 1290,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1471,
+                      "w": 1290,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1871,
+                      "w": 936,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1871,
+                      "w": 1290,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 1871,
+                  "width": 1290
+                },
+                "sizes": {
+                  "large": {
+                    "h": 1871,
+                    "resize": "fit",
+                    "w": 1290
+                  },
+                  "medium": {
+                    "h": 1200,
+                    "resize": "fit",
+                    "w": 827
+                  },
+                  "small": {
+                    "h": 680,
+                    "resize": "fit",
+                    "w": 469
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        },
+        {
+          "status_id": "1980786077003833508",
+          "url": "https://x.com/aleabitoreddit/status/1980786077003833508",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G30jTFyXEAA-FZv.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/a38e656122c0f42a40d30eca4053df3a6f1d809617e752bf92982c96ee88d7ab.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 47887,
+              "sha256": "e8fdd464170c814d4da4dfe4bc05a6afd01b31ab45a9aa65366467f8a8f7e771",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/sebk4BMtCP",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1980786077003833508/photo/1",
+                "media_key": "3_1980778221990776832",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 961,
+                      "w": 1716,
+                      "x": 37,
+                      "y": 0
+                    },
+                    {
+                      "h": 961,
+                      "w": 961,
+                      "x": 415,
+                      "y": 0
+                    },
+                    {
+                      "h": 961,
+                      "w": 843,
+                      "x": 474,
+                      "y": 0
+                    },
+                    {
+                      "h": 961,
+                      "w": 481,
+                      "x": 655,
+                      "y": 0
+                    },
+                    {
+                      "h": 961,
+                      "w": 1791,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 961,
+                  "width": 1791
+                },
+                "sizes": {
+                  "large": {
+                    "h": 961,
+                    "resize": "fit",
+                    "w": 1791
+                  },
+                  "medium": {
+                    "h": 644,
+                    "resize": "fit",
+                    "w": 1200
+                  },
+                  "small": {
+                    "h": 365,
+                    "resize": "fit",
+                    "w": 680
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        },
+        {
+          "status_id": "1981009544546591207",
+          "url": "https://x.com/aleabitoreddit/status/1981009544546591207",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G330da3XUAA7w70.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/be6369d02bae13f8b34f6f1d05fb1c11db2c1d9e17dcca8960c7ff8284846d46.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 50817,
+              "sha256": "9af16ed6f9dddcf7cd20a07b0b59fe16440f6f1edfe726dc136e1dabec5f8e8c",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/Yv0s3t1cuy",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1981009544546591207/photo/1",
+                "media_key": "3_1981008197377806336",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 706,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 86
+                    },
+                    {
+                      "h": 1260,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1436,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1955,
+                      "w": 978,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1955,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 1955,
+                  "width": 1260
+                },
+                "sizes": {
+                  "large": {
+                    "h": 1955,
+                    "resize": "fit",
+                    "w": 1260
+                  },
+                  "medium": {
+                    "h": 1200,
+                    "resize": "fit",
+                    "w": 773
+                  },
+                  "small": {
+                    "h": 680,
+                    "resize": "fit",
+                    "w": 438
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        },
+        {
+          "status_id": "1981981029029298374",
+          "url": "https://x.com/aleabitoreddit/status/1981981029029298374",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": []
+        },
+        {
+          "status_id": "1982428584431251483",
+          "url": "https://x.com/aleabitoreddit/status/1982428584431251483",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": []
+        },
+        {
+          "status_id": "1983030739332673923",
+          "url": "https://x.com/aleabitoreddit/status/1983030739332673923",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G4Ub-rIbQAAWKS_.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/2493d53335e367706826406d07054bf0f14c156fbd94eed92f34a5414d65c764.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 44585,
+              "sha256": "0c522228833c090e4922e9a38df448f46f0593ae48b4d8abc5cd8b7870646b22",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/AS0xuiBv0Y",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1983030739332673923/photo/1",
+                "media_key": "3_1983021974470475776",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 677,
+                      "w": 1209,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1209,
+                      "w": 1209,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1378,
+                      "w": 1209,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1876,
+                      "w": 938,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1876,
+                      "w": 1209,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 1876,
+                  "width": 1209
+                },
+                "sizes": {
+                  "large": {
+                    "h": 1876,
+                    "resize": "fit",
+                    "w": 1209
+                  },
+                  "medium": {
+                    "h": 1200,
+                    "resize": "fit",
+                    "w": 773
+                  },
+                  "small": {
+                    "h": 680,
+                    "resize": "fit",
+                    "w": 438
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            },
+            {
+              "remote_url": "https://pbs.twimg.com/media/G4UczcZasAAroF_.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/d72f112b3533a233e2413543e81d93a0edc7cde89fd71586b42e68b6718c8d21.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 49103,
+              "sha256": "daeafa066e86c325d9eaba470e4d5b54093911532a6899fb78e1d6fef38a9585",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/AS0xuiBv0Y",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1983030739332673923/photo/1",
+                "media_key": "3_1983022881048276992",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 688,
+                      "w": 1228,
+                      "x": 0,
+                      "y": 83
+                    },
+                    {
+                      "h": 1228,
+                      "w": 1228,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1400,
+                      "w": 1228,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1902,
+                      "w": 951,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1902,
+                      "w": 1228,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 1902,
+                  "width": 1228
+                },
+                "sizes": {
+                  "large": {
+                    "h": 1902,
+                    "resize": "fit",
+                    "w": 1228
+                  },
+                  "medium": {
+                    "h": 1200,
+                    "resize": "fit",
+                    "w": 775
+                  },
+                  "small": {
+                    "h": 680,
+                    "resize": "fit",
+                    "w": 439
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        },
+        {
+          "status_id": "1984293587295866986",
+          "url": "https://x.com/aleabitoreddit/status/1984293587295866986",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G4mge0UaAAA_s5c.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/0533837527f0f0a91004d13322a808a5e3192641c83d2851dafccfb58f4271bf.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 47642,
+              "sha256": "5504b619c8b76f7baf77685b9ab265ab49f03316a0c432a63fb6c69bd3c35856",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/bGgLxmtjTz",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1984293587295866986/photo/1",
+                "media_key": "3_1984293562134167552",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 706,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 83
+                    },
+                    {
+                      "h": 1260,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1436,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1939,
+                      "w": 970,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1939,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 1939,
+                  "width": 1260
+                },
+                "sizes": {
+                  "large": {
+                    "h": 1939,
+                    "resize": "fit",
+                    "w": 1260
+                  },
+                  "medium": {
+                    "h": 1200,
+                    "resize": "fit",
+                    "w": 780
+                  },
+                  "small": {
+                    "h": 680,
+                    "resize": "fit",
+                    "w": 442
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            },
+            {
+              "remote_url": "https://pbs.twimg.com/media/G4mge5-aIAADsuf.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/e8da41399970cada031354d16ccc51a13212e229c0855d98238a2a2da2d10bb8.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 51506,
+              "sha256": "ea6b1d9197fd24aad400f37342f9cb17586cb831f609496775aeed8948e72abf",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/bGgLxmtjTz",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1984293587295866986/photo/1",
+                "media_key": "3_1984293563652513792",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 706,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 79
+                    },
+                    {
+                      "h": 1260,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1436,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1921,
+                      "w": 961,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1921,
+                      "w": 1260,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 1921,
+                  "width": 1260
+                },
+                "sizes": {
+                  "large": {
+                    "h": 1921,
+                    "resize": "fit",
+                    "w": 1260
+                  },
+                  "medium": {
+                    "h": 1200,
+                    "resize": "fit",
+                    "w": 787
+                  },
+                  "small": {
+                    "h": 680,
+                    "resize": "fit",
+                    "w": 446
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        },
+        {
+          "status_id": "1984837960735285593",
+          "url": "https://x.com/aleabitoreddit/status/1984837960735285593",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G4uPXwsaUAAWNHE.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/8498bed873964616e4fde86b5530eb0b8f75691bba73cad2fce6030686a439ea.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 124455,
+              "sha256": "abc068cfdb3ee97a1bd9ece0a0af205d5519b4eb01904c538a9a6db553f4f1d1",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/z3HZ07q5wn",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1984837960735285593/photo/1",
+                "media_key": "3_1984837699157774336",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 853,
+                      "w": 1523,
+                      "x": 152,
+                      "y": 0
+                    },
+                    {
+                      "h": 853,
+                      "w": 853,
+                      "x": 487,
+                      "y": 0
+                    },
+                    {
+                      "h": 853,
+                      "w": 748,
+                      "x": 539,
+                      "y": 0
+                    },
+                    {
+                      "h": 853,
+                      "w": 427,
+                      "x": 700,
+                      "y": 0
+                    },
+                    {
+                      "h": 853,
+                      "w": 1928,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 853,
+                  "width": 1928
+                },
+                "sizes": {
+                  "large": {
+                    "h": 853,
+                    "resize": "fit",
+                    "w": 1928
+                  },
+                  "medium": {
+                    "h": 531,
+                    "resize": "fit",
+                    "w": 1200
+                  },
+                  "small": {
+                    "h": 301,
+                    "resize": "fit",
+                    "w": 680
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        },
+        {
+          "status_id": "1985334909108433014",
+          "url": "https://x.com/aleabitoreddit/status/1985334909108433014",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G41StSYaMAAcXGP.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/e1c703f20ac22104865e6c9ea1b3276d52304a42f735cbff6ae81bda5919f35b.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 62147,
+              "sha256": "531c76c596acba66b5a0968f26614e2d020c2a0744d341bd8b5d2596870dbb85",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/vPeLY3cRgY",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1985334909108433014/photo/1",
+                "media_key": "3_1985333948722065408",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 615,
+                      "w": 1098,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 615,
+                      "w": 615,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 615,
+                      "w": 539,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 615,
+                      "w": 308,
+                      "x": 101,
+                      "y": 0
+                    },
+                    {
+                      "h": 615,
+                      "w": 1140,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 615,
+                  "width": 1140
+                },
+                "sizes": {
+                  "large": {
+                    "h": 615,
+                    "resize": "fit",
+                    "w": 1140
+                  },
+                  "medium": {
+                    "h": 615,
+                    "resize": "fit",
+                    "w": 1140
+                  },
+                  "small": {
+                    "h": 367,
+                    "resize": "fit",
+                    "w": 680
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        },
+        {
+          "status_id": "1988993526517100814",
+          "url": "https://x.com/aleabitoreddit/status/1988993526517100814",
+          "text": "",
+          "author_handle": null,
+          "author_name": null,
+          "posted_at_text": null,
+          "collected_at": "2026-06-27T07:01:14.294399+00:00",
+          "engagement": {
+            "reply_count": null,
+            "repost_count": null,
+            "like_count": null,
+            "quote_count": null,
+            "view_count": null
+          },
+          "media": [
+            {
+              "remote_url": "https://pbs.twimg.com/media/G5pTDBibkAAY1XY.jpg",
+              "media_type": "photo",
+              "local_path": "data/media/x/7dd479ea6b5a1142f80ccd4ed3042f5105bf01cc95089992ab4c92bc6d48f50c.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 114197,
+              "sha256": "2324e8a0bec8add618314369831aa4455bb8ce9e53e4c1ff3368d5b210e8c05d",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "alt_text": null,
+                "display_url": "pic.x.com/fAodtM0F4s",
+                "expanded_url": "https://x.com/aleabitoreddit/status/1988993526517100814/photo/1",
+                "media_key": "3_1988993496855056384",
+                "original_info": {
+                  "focus_rects": [
+                    {
+                      "h": 669,
+                      "w": 1194,
+                      "x": 0,
+                      "y": 362
+                    },
+                    {
+                      "h": 1194,
+                      "w": 1194,
+                      "x": 0,
+                      "y": 99
+                    },
+                    {
+                      "h": 1328,
+                      "w": 1165,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1328,
+                      "w": 664,
+                      "x": 0,
+                      "y": 0
+                    },
+                    {
+                      "h": 1328,
+                      "w": 1194,
+                      "x": 0,
+                      "y": 0
+                    }
+                  ],
+                  "height": 1328,
+                  "width": 1194
+                },
+                "sizes": {
+                  "large": {
+                    "h": 1328,
+                    "resize": "fit",
+                    "w": 1194
+                  },
+                  "medium": {
+                    "h": 1200,
+                    "resize": "fit",
+                    "w": 1079
+                  },
+                  "small": {
+                    "h": 680,
+                    "resize": "fit",
+                    "w": 611
+                  },
+                  "thumb": {
+                    "h": 150,
+                    "resize": "crop",
+                    "w": 150
+                  }
+                },
+                "source_path": "legacy.entities.media"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "reddit": [
+    {
+      "subreddit": "wallstreetbets",
+      "posts": [
+        {
+          "post_id": "1ugtw7z",
+          "fullname": "t3_1ugtw7z",
+          "title": "US bans imports of more Chinese technology goods",
+          "author": "SnooHedgehogs5162",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugtw7z/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugtw7z/",
+          "body": "WASHINGTON, June 26 (Reuters) - The U.S. Federal Communications Commission on Friday said it will ban the import of more equipment from a group of Chinese manufacturers, the latest move by Washington to crack down on Chinese-made electronic gear.\n\nThe move expands an FCC ban imposed in 2022 on new models of telecommunications and video surveillance equipment made by Huawei, ZTE, Hytera, Hikvision, and Dahua, citing U.S. national security risks.The ban now includes old models, not just those designed starting in late 2022, of equipment used for \"public safety, security of government facilities, physical security surveillance of critical infrastructure, and other national security purposes,” the FCC said.\n\nThe expanded ban is set to take effect in early July. The FCC said the action \"is necessary to protect national security by mitigating risks to the U.S. communications sector.\"The Chinese Embassy in Washington and the companies did not immediately respond to inquiries.The FCC said it would allow Americans to continue to use equipment they already own.\n\nThe ⁠FCC has taken a number of actions targeting Chinese tech, including banning imports of all new models of Chinese drones in December. In March it banned the import of new models of Chinese-made consumer routers, the boxes that connect computers, phones and smart devices to the internet.\n\nhttps://www.reuters.com/world/asia-pacific/us-launches-new-chinese-tech-crackdown-will-ban-some-imports-2026-06-26/",
+          "created_at_text": "1782537640",
+          "collected_at": "2026-06-27T07:01:34.909355+00:00",
+          "score": 16,
+          "ups": 16,
+          "upvote_ratio": 0.8636363636363636,
+          "num_comments": 2,
+          "media": [],
+          "comments": [
+            {
+              "comment_id": "ou2poet",
+              "post_id": "1ugtw7z",
+              "parent_id": "t3_1ugtw7z",
+              "author": "Straight-Ad6926",
+              "body": "So the Chinese government can only spy on us using the millions of devices we already bought? What a devastating blow to their intelligence operations.",
+              "score": 9,
+              "ups": 9,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugtw7z/",
+              "created_at_text": "1782537899",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2r4ch",
+              "post_id": "1ugtw7z",
+              "parent_id": "t3_1ugtw7z",
+              "author": "Shot-Discipline2026",
+              "body": "Meanwhile ... https://www.reuters.com/world/asia-pacific/apple-seeks-approval-buy-chips-blacklisted-chinese-company-ft-reports-2026-06-27/",
+              "score": 3,
+              "ups": 3,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugtw7z/",
+              "created_at_text": "1782538552",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugud9e",
+          "fullname": "t3_1ugud9e",
+          "title": "Nancy Pelosi bought $UBER and $INTC",
+          "author": "vanish_vanish",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugud9e/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugud9e/",
+          "body": "",
+          "created_at_text": "1782539187",
+          "collected_at": "2026-06-27T07:01:33.629070+00:00",
+          "score": 0,
+          "ups": 0,
+          "upvote_ratio": 0.4,
+          "num_comments": 4,
+          "media": [
+            {
+              "remote_url": "https://i.redd.it/mksgr5kfhr9h1.png",
+              "media_type": "image",
+              "local_path": "data/media/reddit/e2c5936f60b57f5c1e73eb3dbef2136e3deff7969b3189011ba98074e6f4259b.png",
+              "content_type": "image/png",
+              "byte_size": 42847,
+              "sha256": "653cb2ccc1fdc82e3d6113e675dc301363d6afb33af1a11dbcbe8bb19d18b1c3",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "source_field": "url"
+              }
+            }
+          ],
+          "comments": [
+            {
+              "comment_id": "ou2stz4",
+              "post_id": "1ugud9e",
+              "parent_id": "t3_1ugud9e",
+              "author": "DJMaxLVL",
+              "body": "Is it good sign when she buy thing",
+              "score": 2,
+              "ups": 2,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugud9e/",
+              "created_at_text": "1782539347",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2t6f3",
+              "post_id": "1ugud9e",
+              "parent_id": "t3_1ugud9e",
+              "author": "OregonHotPocket",
+              "body": "",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugud9e/",
+              "created_at_text": "1782539508",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2w2sh",
+              "post_id": "1ugud9e",
+              "parent_id": "t3_1ugud9e",
+              "author": "Zestyclose_Compote98",
+              "body": "lol ya tooBad she made that move a month ago lol",
+              "score": 3,
+              "ups": 3,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugud9e/",
+              "created_at_text": "1782540877",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugunuk",
+          "fullname": "t3_1ugunuk",
+          "title": "How long was WEN paused on Thursday?",
+          "author": "AdhesivenessLimp1864",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugunuk/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugunuk/",
+          "body": "I was refreshing and keeping my eye on it. On my end after fifteen minutes on Fidelity the halt was lifted for about one minute then immediately reactivated for about fifteen minutes.\n\nWas that somehow only on my end? Like a bad connection or something?\n\nI can’t read Barron’s because there’s a paywall to double check Google’s AI results but that’s saying the halt only occurred once for seven minutes.\n\nhttps://www.barrons.com/articles/wendys-stock-micron-nasdaq-halts-trading-647e5cf5",
+          "created_at_text": "1782540144",
+          "collected_at": "2026-06-27T07:01:31.473251+00:00",
+          "score": 0,
+          "ups": 0,
+          "upvote_ratio": 0.4,
+          "num_comments": 4,
+          "media": [],
+          "comments": [
+            {
+              "comment_id": "ou2up53",
+              "post_id": "1ugunuk",
+              "parent_id": "t3_1ugunuk",
+              "author": "OregonHotPocket",
+              "body": "124 minutes",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugunuk/",
+              "created_at_text": "1782540224",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2upmk",
+              "post_id": "1ugunuk",
+              "parent_id": "t3_1ugunuk",
+              "author": "ShittyBidet123",
+              "body": "well halts are the stock moves 5% in 5 min either way. or something like that? so either a glitch or you saw wrong",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugunuk/",
+              "created_at_text": "1782540230",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2y3yl",
+              "post_id": "1ugunuk",
+              "parent_id": "t3_1ugunuk",
+              "author": "Quiet_Internal_4527",
+              "body": "Great shampoo!!",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugunuk/",
+              "created_at_text": "1782541847",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugupt5",
+          "fullname": "t3_1ugupt5",
+          "title": "Does anyone scalp SPY options or any other ticker/exchange?",
+          "author": "PirateCorrect",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugupt5/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugupt5/",
+          "body": "",
+          "created_at_text": "1782540323",
+          "collected_at": "2026-06-27T07:01:29.772305+00:00",
+          "score": 1,
+          "ups": 1,
+          "upvote_ratio": 0.5714285714285714,
+          "num_comments": 19,
+          "media": [],
+          "comments": [
+            {
+              "comment_id": "ou2vl06",
+              "post_id": "1ugupt5",
+              "parent_id": "t3_1ugupt5",
+              "author": "JustNumbersOnAScreen",
+              "body": "This seems like the most stressful way to make $500. Have you considered longer DTE and being patient?",
+              "score": 9,
+              "ups": 9,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugupt5/",
+              "created_at_text": "1782540642",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2vocv",
+              "post_id": "1ugupt5",
+              "parent_id": "t3_1ugupt5",
+              "author": "Isaiah4206940332",
+              "body": "What happens when the PDT rule gets removed lmao",
+              "score": 4,
+              "ups": 4,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugupt5/",
+              "created_at_text": "1782540686",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2wcw3",
+              "post_id": "1ugupt5",
+              "parent_id": "t3_1ugupt5",
+              "author": "theilya",
+              "body": "If I see spy bouncing off same resistance levels couple times and I see it going down to that level for third I’ll buy a couple dailies or 1 day if it’s later in the day. usually bag easy 30-100%",
+              "score": 4,
+              "ups": 4,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugupt5/",
+              "created_at_text": "1782541011",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugv3hg",
+          "fullname": "t3_1ugv3hg",
+          "title": "How the $MSTR Q2 earnings call will go",
+          "author": "beholdthemoldman",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugv3hg/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugv3hg/",
+          "body": "",
+          "created_at_text": "1782541571",
+          "collected_at": "2026-06-27T07:01:27.859768+00:00",
+          "score": 15,
+          "ups": 15,
+          "upvote_ratio": 0.9411764705882353,
+          "num_comments": 7,
+          "media": [],
+          "comments": [
+            {
+              "comment_id": "ou2xqst",
+              "post_id": "1ugv3hg",
+              "parent_id": "t3_1ugv3hg",
+              "author": "Saltlife_Junkie",
+              "body": "Absolutely know you are correct. I am mad at my money.",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugv3hg/",
+              "created_at_text": "1782541671",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2y1m2",
+              "post_id": "1ugv3hg",
+              "parent_id": "t3_1ugv3hg",
+              "author": "Wonder_bread317",
+              "body": "oh god oh god oh god thats so funny !!!! I only got like 600 bucks into WNTR but i feel like im winning preeeety well.",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugv3hg/",
+              "created_at_text": "1782541815",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2yetn",
+              "post_id": "1ugv3hg",
+              "parent_id": "t3_1ugv3hg",
+              "author": "CalligrapherAlive829",
+              "body": "Saylor is working on a fix with Grok right now, keep calm guys",
+              "score": 4,
+              "ups": 4,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugv3hg/",
+              "created_at_text": "1782541991",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugv87c",
+          "fullname": "t3_1ugv87c",
+          "title": "18 yr old fullports his Wendys paychecks in his roth on mu earnings",
+          "author": "Plneaqqle",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugv87c/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugv87c/",
+          "body": "",
+          "created_at_text": "1782542012",
+          "collected_at": "2026-06-27T07:01:25.495921+00:00",
+          "score": 2,
+          "ups": 2,
+          "upvote_ratio": 0.75,
+          "num_comments": 2,
+          "media": [],
+          "comments": [
+            {
+              "comment_id": "ou2z566",
+              "post_id": "1ugv87c",
+              "parent_id": "t3_1ugv87c",
+              "author": "Bubbly-Badger-3496",
+              "body": "Atleast someone's making $",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugv87c/",
+              "created_at_text": "1782542346",
+              "depth": null
+            },
+            {
+              "comment_id": "ou2zvtv",
+              "post_id": "1ugv87c",
+              "parent_id": "t3_1ugv87c",
+              "author": "-depreciatedland-",
+              "body": "Can always count on Wendy’s degens to provide my light reading before bed",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugv87c/",
+              "created_at_text": "1782542708",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugvczh",
+          "fullname": "t3_1ugvczh",
+          "title": "The strait of Hormuz explained in details",
+          "author": "The_eternal_fight",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvczh/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugvczh/",
+          "body": "Ok with alot of info about the strait , we still don't know wtf is happening.\n\nThe news are conflicting, contradictory and possibly built in a way to make us dumber ( as always)\n\nAnd nowadays it seems the news headlines are made to make the AI algorithms even dumber. (New)\n\nAnyway, I wanted to write this to help wsb fellows make a better trade at the casino.\n\nI spent some time doing research. Which I'm sure you can do the same ,only if you ask the right questions, and use reasoning.\n\nAnyway about the strait. Is it open ? No\n\nAre ships passing through? Yes!\n\nIs the number of traffic equal / higher than pre war ? Yes\n\nIs the volume of oil or any cargo the same pre war? No where near.\n\nAre there mines in the strait? Yes\n\nSo how are vessels passing through?  Keep reading\n\nHow many routes are in that gulf conflict now ? Currently 3 different routes.\n\nAre all three routes safe / functional and toll free ?No\n\nWhat are these routes in simple words  ?\n\nThe middle channel  (hazaradous) . The deepest channel and the only channel where mega cargo and oil vessels can be used. The most cost efficient for all cargo and energy trades.\n\nSince the war has started and Currently,  full of mines and a no-go-zone-by any cargo vessel .\n\nIf any civilian cargo vessel passes through and got mined, attacked . Then the insurance is not liable and won't pay a penny to any of those affected.\n\n2)The side channel (safe and currently toll free . Subject to intermittent closures & reopening and so on) depending of the pre set war game and hype.\n\nThis channel has been left safe from mines since day one of war. This is the channel where the dark fleet used to pass ,and current oil vessels are passing through. This passage is currently free of toll for two months up until the MOU between USA and Iran is finalised / renewed.\n\nlarge numbers of vessels of oil and cargo  in the news for the last 10 days ,that have hammered the price of oil  futures down. (Note large numbers of vessels,not a large volume of oil)\n\nThis is where the headlines are fooling us and the AI that runs the market.\n\nThese small to medium vessels maybe 200 of them have passed the last two days alone. The capacity of these small / medium vessels are a fraction ,of what a mega oil taker can carry on one single vessel.\n\n3) The UN Oman route\n\nThis channel came out of the blue. It was basically the UN adding another alternative shipping route through Oman. In order to let the mega carriers pass through, by the time the USA & Iran reach final agreement.\n\nThis operation by the UN is now at a halt after Iran strikes tankers passing through this route.\n\nSo please be careful when you check stupid websites that were built a month ago about the state of strait of Hormuz\n\nThese are all scams and inaccurate data.\n\nLook for much credible resources.",
+          "created_at_text": "1782542469",
+          "collected_at": "2026-06-27T07:01:23.734012+00:00",
+          "score": 3,
+          "ups": 3,
+          "upvote_ratio": 0.7142857142857143,
+          "num_comments": 3,
+          "media": [],
+          "comments": [
+            {
+              "comment_id": "ou307gh",
+              "post_id": "1ugvczh",
+              "parent_id": "t3_1ugvczh",
+              "author": "Hi_Keyboard_Warriors",
+              "body": "Ain’t gonna read that, Calls???",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvczh/",
+              "created_at_text": "1782542865",
+              "depth": null
+            },
+            {
+              "comment_id": "ou31spw",
+              "post_id": "1ugvczh",
+              "parent_id": "t3_1ugvczh",
+              "author": "Odd-Block-2998",
+              "body": "Truth is no one in the white house knows what happens too. Iran also doesn't know either. No one knows.",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvczh/",
+              "created_at_text": "1782543642",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugvdh8",
+          "fullname": "t3_1ugvdh8",
+          "title": "It doesn't count if I don't know what it means, right?",
+          "author": "HERE_COMES_SENAAAAAA",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvdh8/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugvdh8/",
+          "body": "",
+          "created_at_text": "1782542514",
+          "collected_at": "2026-06-27T07:01:20.545512+00:00",
+          "score": 5,
+          "ups": 5,
+          "upvote_ratio": 0.7777777777777778,
+          "num_comments": 3,
+          "media": [
+            {
+              "remote_url": "https://i.redd.it/pglpiks2ur9h1.jpeg",
+              "media_type": "image",
+              "local_path": "data/media/reddit/f70734f8919af995398234239b8bec90f4f74fb6e5e333e09b3f9b7c9800b63e.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 46728,
+              "sha256": "44499265939df71f624358b53984c9ebff3b8d180bce4ccec464a3e047905442",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "source_field": "url"
+              }
+            }
+          ],
+          "comments": [
+            {
+              "comment_id": "ou30b5c",
+              "post_id": "1ugvdh8",
+              "parent_id": "t3_1ugvdh8",
+              "author": "Saltlife_Junkie",
+              "body": "It’s that weird friend from high school. Just don’t answer. They will stop calling.",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvdh8/",
+              "created_at_text": "1782542913",
+              "depth": null
+            },
+            {
+              "comment_id": "ou30me9",
+              "post_id": "1ugvdh8",
+              "parent_id": "t3_1ugvdh8",
+              "author": "Odd-Block-2998",
+              "body": "Just block it. Uninstall the app. Go live in jungle for a few years. You will come back fine.",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvdh8/",
+              "created_at_text": "1782543065",
+              "depth": null
+            },
+            {
+              "comment_id": "ou31fya",
+              "post_id": "1ugvdh8",
+              "parent_id": "t3_1ugvdh8",
+              "author": "LegitimateAccess9501",
+              "body": "Can't get margin called if you don't answer calls from unknown numbers.",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvdh8/",
+              "created_at_text": "1782543468",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugvjr3",
+          "fullname": "t3_1ugvjr3",
+          "title": "The sell-off means the company’s bonds are trading at levels closer to those of junk-rated borrowers",
+          "author": "Conscious-Quarter423",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvjr3/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugvjr3/",
+          "body": "",
+          "created_at_text": "1782543108",
+          "collected_at": "2026-06-27T07:01:18.766928+00:00",
+          "score": 8,
+          "ups": 8,
+          "upvote_ratio": 0.75,
+          "num_comments": 5,
+          "media": [
+            {
+              "remote_url": "https://i.redd.it/zj30wkupvr9h1.jpeg",
+              "media_type": "image",
+              "local_path": "data/media/reddit/89b9a4223ce5636ee265c48e506eadbfff1c41d43262c7026a40a9baed519c7e.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 76642,
+              "sha256": "dc372a9ba9fb9727472a9ac570653d80497a0be12ab553578b5a66e427aeebd3",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "source_field": "url"
+              }
+            }
+          ],
+          "comments": [
+            {
+              "comment_id": "ou3129x",
+              "post_id": "1ugvjr3",
+              "parent_id": "t3_1ugvjr3",
+              "author": "Easy_Explorer255",
+              "body": "There are no retail retarts in the bond market ;)",
+              "score": 11,
+              "ups": 11,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvjr3/",
+              "created_at_text": "1782543282",
+              "depth": null
+            },
+            {
+              "comment_id": "ou3144c",
+              "post_id": "1ugvjr3",
+              "parent_id": "t3_1ugvjr3",
+              "author": "Disastrous-Oven204",
+              "body": "It belongs in Watto’s junkyard",
+              "score": 3,
+              "ups": 3,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvjr3/",
+              "created_at_text": "1782543308",
+              "depth": null
+            },
+            {
+              "comment_id": "ou316gr",
+              "post_id": "1ugvjr3",
+              "parent_id": "t3_1ugvjr3",
+              "author": "CryptoBoy-007",
+              "body": "The Elon crowd turned out to be paper hands afterall ... lol",
+              "score": 4,
+              "ups": 4,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvjr3/",
+              "created_at_text": "1782543339",
+              "depth": null
+            }
+          ]
+        },
+        {
+          "post_id": "1ugvkwq",
+          "fullname": "t3_1ugvkwq",
+          "title": "I gambled, and I'm bound to lose big time thanks to mango man",
+          "author": "HERE_COMES_SENAAAAAA",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvkwq/",
+          "permalink": "https://www.reddit.com/r/wallstreetbets/comments/1ugvkwq/",
+          "body": "",
+          "created_at_text": "1782543225",
+          "collected_at": "2026-06-27T07:01:16.995777+00:00",
+          "score": 3,
+          "ups": 3,
+          "upvote_ratio": 0.8,
+          "num_comments": 5,
+          "media": [
+            {
+              "remote_url": "https://i.redd.it/qp7rt5i6wr9h1.jpeg",
+              "media_type": "image",
+              "local_path": "data/media/reddit/1c81bd5ead2bb21fdd02a71eba6135fc46bad319a23ba7ea1841d9be8ad8f44e.jpg",
+              "content_type": "image/jpeg",
+              "byte_size": 101559,
+              "sha256": "9f947ef32afc13434779c22f82a3a3e5fc7b0cb8b37f3532231d6154e8d12bed",
+              "width": null,
+              "height": null,
+              "source_metadata": {
+                "source_field": "url"
+              }
+            }
+          ],
+          "comments": [
+            {
+              "comment_id": "ou31bdt",
+              "post_id": "1ugvkwq",
+              "parent_id": "t3_1ugvkwq",
+              "author": "Burnitoffmeow",
+              "body": "Better start putting chapstick on those lips. Your new job demands it",
+              "score": 2,
+              "ups": 2,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvkwq/",
+              "created_at_text": "1782543406",
+              "depth": null
+            },
+            {
+              "comment_id": "ou31cio",
+              "post_id": "1ugvkwq",
+              "parent_id": "t3_1ugvkwq",
+              "author": "anon4crypto",
+              "body": "You're not alone",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvkwq/",
+              "created_at_text": "1782543421",
+              "depth": null
+            },
+            {
+              "comment_id": "ou31kx1",
+              "post_id": "1ugvkwq",
+              "parent_id": "t3_1ugvkwq",
+              "author": "Saltlife_Junkie",
+              "body": "I have puts. Mango got permission on Thursday and a reason on Friday. Who didn’t see the posts today? Literally said it’s coming.",
+              "score": 1,
+              "ups": 1,
+              "url": "https://www.reddit.com/r/wallstreetbets/comments/1ugvkwq/",
+              "created_at_text": "1782543537",
+              "depth": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "x_handles": [
+      "aleabitoreddit"
+    ],
+    "subreddits": [
+      "wallstreetbets"
+    ],
+    "download_images": true,
+    "download_errors": []
+  }
+}

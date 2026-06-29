@@ -2,9 +2,8 @@
 
 This guide explains how to deploy `stock-sum` on a regular machine and with
 Docker. The current project state includes the HTTP daemon, configuration
-validation, models.dev cache, shared SQLite run/index storage, Scrape Creators
-X/Reddit API collectors, and generic Playwright infrastructure. LLM summaries
-and delivery providers are still scaffolded.
+validation, models.dev cache, shared SQLite run/index storage, Xpoz X/Reddit
+API collectors, and generic Playwright infrastructure.
 
 ## Deployment model
 
@@ -110,10 +109,10 @@ channel = ""
 headless = true
 timeout_seconds = 30
 
-[providers.scrape_creators]
-api_key_env = "SCRAPE_CREATORS_API_KEY"
-base_url = "https://api.scrapecreators.com"
-timeout_seconds = 30
+[providers.xpoz]
+api_key_env = "XPOZ_API_KEY"
+server_url = "https://mcp.xpoz.ai/mcp"
+timeout_seconds = 60
 
 [llm]
 provider = "openai"
@@ -146,7 +145,7 @@ cp .env.example .env
 Fill in only the values needed by enabled integrations:
 
 ```env
-SCRAPE_CREATORS_API_KEY=
+XPOZ_API_KEY=
 OPENAI_API_KEY=
 SMTP_USERNAME=
 SMTP_PASSWORD=
@@ -161,7 +160,7 @@ the variables into the process environment before starting the daemon.
 Windows PowerShell:
 
 ```powershell
-$env:SCRAPE_CREATORS_API_KEY = "..."
+$env:XPOZ_API_KEY = "..."
 $env:OPENAI_API_KEY = "..."
 $env:SMTP_USERNAME = "..."
 $env:SMTP_PASSWORD = "..."
@@ -185,11 +184,11 @@ Refresh the models.dev cache:
 stock-sum config sync --config config.toml
 ```
 
-The bundled default profile currently has no collector references. Scrape
-Creators example sources live under `[[sources.x_users]]` and
-`[[sources.subreddits]]`, but are disabled until you set `enabled = true` in
-TOML or add sources through the CLI. Source-list entries resolve to collector
-IDs such as `x.aleabitoreddit` and `reddit.wallstreetbets`.
+The bundled default profile currently has no collector references. Example
+sources live under `[[sources.x_users]]` and `[[sources.subreddits]]`, but are
+disabled until you set `enabled = true` in TOML or add sources through the CLI.
+X and Reddit sources use Xpoz. Source-list entries resolve to collector IDs
+such as `x.aleabitoreddit` and `reddit.wallstreetbets`.
 
 ```bash
 stock-sum config x-user add aleabitoreddit --config config.toml --profile default
@@ -273,7 +272,7 @@ For development, run the daemon in an activated PowerShell session:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-$env:SCRAPE_CREATORS_API_KEY = "..."
+$env:XPOZ_API_KEY = "..."
 $env:OPENAI_API_KEY = "..."
 stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
 ```
@@ -291,7 +290,7 @@ powershell.exe
 4. Use arguments like:
 
 ```text
--NoProfile -ExecutionPolicy Bypass -Command "$env:SCRAPE_CREATORS_API_KEY='...'; $env:OPENAI_API_KEY='...'; & 'E:\projects\stock-sum\.venv\Scripts\stock-sum.exe' daemon --config 'E:\projects\stock-sum\config.toml' --host 0.0.0.0 --port 8000"
+-NoProfile -ExecutionPolicy Bypass -Command "$env:XPOZ_API_KEY='...'; $env:OPENAI_API_KEY='...'; & 'E:\projects\stock-sum\.venv\Scripts\stock-sum.exe' daemon --config 'E:\projects\stock-sum\config.toml' --host 0.0.0.0 --port 8000"
 ```
 
 If you need many secrets, prefer setting machine/user environment variables
@@ -535,17 +534,17 @@ Playwright cannot launch Chromium:
 
 Collection fails with an unsupported collector kind:
 
-- Scrape Creators collector kinds are `scrape_creators_x_user_tweets` and
-  `scrape_creators_reddit_subreddit`.
+- Built-in collector kinds are `x_user_timeline` for Xpoz X collection and
+  `reddit_subreddit` for Xpoz Reddit collection.
 - For any other future kind, add a source-specific collector implementation and
   register it in the collector factory.
 - Add the matching source-specific storage table and mapper before persisting
   that source type.
 
-Collection fails with a missing Scrape Creators API key:
+Collection fails with a missing Xpoz API key:
 
-- Set `SCRAPE_CREATORS_API_KEY` in the process environment.
-- Keep the TOML value as `api_key_env = "SCRAPE_CREATORS_API_KEY"`; do not put
+- Set `XPOZ_API_KEY` in the process environment.
+- Keep the TOML value as `api_key_env = "XPOZ_API_KEY"`; do not put
   the real key in config.
 
 The daemon starts but LLM summaries or deliveries do nothing:

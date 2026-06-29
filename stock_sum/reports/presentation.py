@@ -1,0 +1,1167 @@
+"""Presentation renderers for LLM summary responses."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from html import escape
+from typing import Any, Literal
+import json
+
+PresentationMode = Literal["html", "markdown", "text"]
+
+SECTION_TITLES = {
+    "executive_summary": "Executive Summary",
+    "x_signals": "X Signals",
+    "reddit_signals": "Reddit Signals",
+    "media_observations": "Media Observations",
+    "risks_or_uncertainties": "Risks And Uncertainties",
+    "notable_sources": "Notable Sources",
+    "metadata": "Metadata",
+}
+
+
+class PresentationRenderError(ValueError):
+    """Raised when a presentation cannot be rendered."""
+
+
+@dataclass(frozen=True)
+class PresentationRenderer:
+    """Render LLM response JSON into final presentation artifacts."""
+
+    title: str = "Market Social Digest"
+
+    def render(self, response: dict[str, Any], *, mode: str) -> str:
+        """Render a response in html, markdown, or text mode."""
+
+        mode = mode.lower()
+        summary = _summary_from_response(response)
+        if mode == "html":
+            return self._render_html(response, summary)
+        if mode == "markdown":
+            return self._render_markdown(response, summary)
+        if mode == "text":
+            return self._render_text(response, summary)
+        raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
+
+    def _render_html(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        media_by_ref = _media_by_source_ref(response, summary)
+        sections = [
+            _html_social_sentiment(summary, media_by_ref),
+            _html_capitol_trades(response.get("capitol_trades")),
+        ]
+        return "\n".join(
+            [
+                "<!doctype html>",
+                '<html lang="en">',
+                "<head>",
+                '<meta charset="utf-8">',
+                '<meta name="viewport" content="width=device-width, initial-scale=1">',
+                f"<title>{escape(self.title)}</title>",
+                f"<style>{_html_css()}</style>",
+                "</head>",
+                "<body>",
+                '<main class="page">',
+                '<header class="hero">',
+                f"<h1>{escape(self.title)}</h1>",
+                "</header>",
+                *sections,
+                "</main>",
+                "</body>",
+                "</html>",
+            ]
+        )
+
+    def _render_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        media_by_ref = _media_by_source_ref(response, summary)
+        lines = [
+            f"# {self.title}",
+            "",
+            _markdown_social_sentiment(summary, media_by_ref),
+            _markdown_capitol_trades(response.get("capitol_trades")),
+        ]
+        return "\n".join(line for line in lines if line is not None).strip() + "\n"
+
+    def _render_text(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        media_by_ref = _media_by_source_ref(response, summary)
+        lines = [
+            self.title.upper(),
+            "",
+            _text_social_sentiment(summary, media_by_ref),
+            _text_capitol_trades(response.get("capitol_trades")),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
+
+
+def _summary_from_response(response: dict[str, Any]) -> dict[str, Any]:
+    summary = response.get("summary")
+    if isinstance(summary, dict):
+        return summary
+    summary_text = response.get("summary_text")
+    if isinstance(summary_text, str) and summary_text.strip():
+        try:
+            parsed = json.loads(_strip_json_fence(summary_text.strip()))
+        except ValueError:
+            return {"executive_summary": [summary_text]}
+        if isinstance(parsed, dict):
+            return parsed
+    return {"executive_summary": ["No structured summary was available."]}
+
+
+def _has_grouped_layout(summary: dict[str, Any]) -> bool:
+    return isinstance(summary.get("x_reports"), list) or isinstance(summary.get("reddit_report"), dict)
+
+
+def _html_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    buckets = _social_items_by_importance(summary)
+    groups = []
+    for bucket, title in _importance_titles():
+        items = buckets.get(bucket, [])
+        if not items:
+            continue
+        cards = [_html_social_card(item, media_by_ref) for item in items]
+        groups.append(
+            "\n".join(
+                [
+                    '<article class="importance-group">',
+                    f"<h3>{escape(title)}</h3>",
+                    '<div class="compact-grid">',
+                    *cards,
+                    "</div>",
+                    "</article>",
+                ]
+            )
+        )
+    return _html_section("Social Media Sentiment", "\n".join(groups) or '<p class="empty">No social signals.</p>')
+
+
+def _html_social_card(item: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    source_ref = str(item.get("source_ref") or "")
+    title = _post_title(item, reddit=item.get("source_kind") == "reddit")
+    lines = [
+        '<article class="card signal compact">',
+        _html_social_badges(item),
+        f"<h4>{escape(title)}</h4>",
+        _html_paragraph("Summary", item.get("post_summary") or item.get("claim") or item.get("summary")),
+    ]
+    if item.get("comments_sentiment"):
+        lines.append(_html_paragraph("Comments", item.get("comments_sentiment")))
+    lines.extend(
+        [
+            _html_paragraph("Sentiment", item.get("sentiment")),
+            _html_paragraph("Takeaway", item.get("interpretation") or item.get("reason")),
+            _html_links(item.get("urls") or item.get("url")),
+            _html_linked_media(source_ref, media_by_ref),
+            "</article>",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _html_social_badges(item: dict[str, Any]) -> str:
+    badges = []
+    label = item.get("source_label")
+    if label:
+        badges.append(f'<span class="badge">{escape(str(label))}</span>')
+    sentiment = item.get("sentiment")
+    if sentiment:
+        badges.append(f'<span class="badge sentiment">{escape(str(sentiment))}</span>')
+    confidence = item.get("confidence")
+    if confidence:
+        badges.append(f'<span class="badge confidence">{escape(str(confidence))}</span>')
+    return f'<div class="badges">{"".join(badges)}</div>' if badges else ""
+
+
+def _markdown_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    buckets = _social_items_by_importance(summary)
+    lines = ["## Social Media Sentiment", ""]
+    if not any(buckets.values()):
+        return "\n".join([*lines, "_No social signals._", ""])
+    for bucket, title in _importance_titles():
+        items = buckets.get(bucket, [])
+        if not items:
+            continue
+        lines.extend([f"### {title}", ""])
+        for item in items:
+            lines.extend(_markdown_social_item(item, media_by_ref))
+    return "\n".join(lines)
+
+
+def _markdown_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> list[str]:
+    source_ref = str(item.get("source_ref") or "")
+    title = _post_title(item, reddit=item.get("source_kind") == "reddit")
+    labels = " / ".join(str(value) for value in (item.get("source_label"), item.get("sentiment"), item.get("confidence")) if value)
+    lines = [f"#### {title}", ""]
+    if labels:
+        lines.append(f"- **{labels}**")
+    if item.get("post_summary") or item.get("claim") or item.get("summary"):
+        lines.append(f"- Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
+    if item.get("comments_sentiment"):
+        lines.append(f"- Comments: {_stringify_item(item['comments_sentiment'])}")
+    if item.get("interpretation") or item.get("reason"):
+        lines.append(f"- Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
+    for index, url in enumerate(_as_list(item.get("urls") or item.get("url")), start=1):
+        lines.append(f"- Source: [{_source_link_label(index)}]({url})")
+    lines.extend(_markdown_linked_media(source_ref, media_by_ref))
+    lines.append("")
+    return lines
+
+
+def _text_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    buckets = _social_items_by_importance(summary)
+    lines = ["SOCIAL MEDIA SENTIMENT"]
+    if not any(buckets.values()):
+        return "\n".join([*lines, "  No social signals."])
+    for bucket, title in _importance_titles():
+        items = buckets.get(bucket, [])
+        if not items:
+            continue
+        lines.extend(["", title.upper()])
+        for item in items:
+            lines.extend(_text_social_item(item, media_by_ref))
+    return "\n".join(lines)
+
+
+def _text_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> list[str]:
+    source_ref = str(item.get("source_ref") or "")
+    title = _post_title(item, reddit=item.get("source_kind") == "reddit")
+    labels = " / ".join(str(value) for value in (item.get("source_label"), item.get("sentiment"), item.get("confidence")) if value)
+    lines = [f"- {title}" + (f" [{labels}]" if labels else "")]
+    if item.get("post_summary") or item.get("claim") or item.get("summary"):
+        lines.append(f"  Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
+    if item.get("comments_sentiment"):
+        lines.append(f"  Comments: {_stringify_item(item['comments_sentiment'])}")
+    if item.get("interpretation") or item.get("reason"):
+        lines.append(f"  Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
+    for url in _as_list(item.get("urls") or item.get("url")):
+        lines.append(f"  Source: {url}")
+    lines.extend(_text_linked_media(source_ref, media_by_ref))
+    return lines
+
+
+def _social_items_by_importance(summary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    buckets: dict[str, list[dict[str, Any]]] = {"high": [], "medium": [], "low": []}
+    for item in _social_items(summary):
+        buckets[_importance_bucket(item)].append(item)
+    return buckets
+
+
+def _social_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for report in _as_list(summary.get("x_reports")):
+        if not isinstance(report, dict):
+            continue
+        handle = str(report.get("handle") or "unknown")
+        for post in _as_list(report.get("posts")):
+            if isinstance(post, dict):
+                items.append({**post, "source_kind": "x", "source_label": f"X @{handle}"})
+
+    reddit_report = summary.get("reddit_report")
+    if isinstance(reddit_report, dict):
+        for post in _as_list(reddit_report.get("posts")):
+            if isinstance(post, dict):
+                subreddit = post.get("subreddit") or reddit_report.get("subreddit") or "Reddit"
+                label = str(subreddit)
+                if not label.startswith("r/") and label != "Reddit":
+                    label = f"r/{label}"
+                items.append({**post, "source_kind": "reddit", "source_label": label})
+
+    for item in _as_list(summary.get("x_signals")):
+        if isinstance(item, dict):
+            items.append({**item, "source_kind": "x", "source_label": "X"})
+    for item in _as_list(summary.get("reddit_signals")):
+        if isinstance(item, dict):
+            items.append({**item, "source_kind": "reddit", "source_label": "Reddit"})
+    return items
+
+
+def _importance_bucket(item: dict[str, Any]) -> str:
+    explicit = str(item.get("importance") or item.get("priority") or "").lower()
+    if explicit.startswith("high"):
+        return "high"
+    if explicit.startswith("low"):
+        return "low"
+    if explicit.startswith("med"):
+        return "medium"
+    confidence = str(item.get("confidence") or "").lower()
+    if confidence.startswith("high"):
+        return "high"
+    if confidence.startswith("low"):
+        return "low"
+    return "medium"
+
+
+def _importance_titles() -> list[tuple[str, str]]:
+    return [("high", "High Importance"), ("medium", "Medium Importance"), ("low", "Low Importance")]
+
+
+def _html_x_reports(value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    groups = []
+    for report in _as_list(value):
+        if not isinstance(report, dict):
+            continue
+        handle = str(report.get("handle") or "unknown")
+        posts = [_html_grouped_post(post, media_by_ref) for post in _as_list(report.get("posts")) if isinstance(post, dict)]
+        groups.append(
+            "\n".join(
+                [
+                    '<article class="group">',
+                    f"<h3>{escape(handle)}</h3>",
+                    '<h4>Overall Summary</h4>',
+                    _html_bullets(report.get("overall_summary")),
+                    *posts,
+                    "</article>",
+                ]
+            )
+        )
+    return _html_section("X Reports", "\n".join(groups) or '<p class="empty">No X reports.</p>')
+
+
+def _html_reddit_report(value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    report = value if isinstance(value, dict) else {}
+    posts = [_html_grouped_post(post, media_by_ref, reddit=True) for post in _as_list(report.get("posts")) if isinstance(post, dict)]
+    body = "\n".join(
+        [
+            '<article class="group">',
+            '<h3>Overall Summary</h3>',
+            _html_bullets(report.get("overall_summary")),
+            *posts,
+            "</article>",
+        ]
+    )
+    return _html_section("Reddit Reports", body)
+
+
+def _html_grouped_post(post: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]], *, reddit: bool = False) -> str:
+    source_ref = str(post.get("source_ref") or "")
+    lines = [
+        '<article class="card signal nested">',
+        _html_badges(post),
+        f"<h4>{escape(_post_title(post, reddit=reddit))}</h4>",
+        _html_paragraph("Post Summary", post.get("post_summary") or post.get("claim") or post.get("summary")),
+    ]
+    if reddit:
+        lines.append(_html_paragraph("Comments Sentiment", post.get("comments_sentiment")))
+    lines.extend(
+        [
+            _html_paragraph("Sentiment", post.get("sentiment")),
+            _html_paragraph("Interpretation", post.get("interpretation")),
+            _html_links(post.get("urls") or post.get("url")),
+            _html_linked_media(source_ref, media_by_ref),
+            _html_extra_fields(
+                post,
+                {
+                    "source_ref",
+                    "title",
+                    "post_summary",
+                    "claim",
+                    "summary",
+                    "comments_sentiment",
+                    "sentiment",
+                    "interpretation",
+                    "confidence",
+                    "urls",
+                    "url",
+                    "media_ids",
+                    "comment_refs",
+                },
+            ),
+            "</article>",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _html_bullets(value: Any) -> str:
+    items = _as_list(value)
+    if not items:
+        return '<p class="empty">No summary.</p>'
+    return "<ul>" + "".join(f"<li>{escape(_stringify_item(item))}</li>" for item in items) + "</ul>"
+
+
+def _html_executive(value: Any) -> str:
+    return _html_simple_list("Executive Summary", value)
+
+
+def _html_signal_section(title: str, value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    cards = []
+    for item in _as_list(value):
+        if isinstance(item, dict):
+            cards.append(
+                "\n".join(
+                    [
+                        '<article class="card signal">',
+                        _html_badges(item),
+                        f"<h3>{escape(str(item.get('claim') or item.get('title') or 'Signal'))}</h3>",
+                        _html_paragraph("Interpretation", item.get("interpretation")),
+                        _html_paragraph("Reason", item.get("reason")),
+                        _html_links(item.get("urls") or item.get("url")),
+                        _html_linked_media(str(item.get("source_ref") or ""), media_by_ref),
+                        _html_extra_fields(item, {"source_ref", "confidence", "claim", "title", "interpretation", "reason", "urls", "url", "media_ids"}),
+                        "</article>",
+                    ]
+                )
+            )
+        else:
+            cards.append(f'<article class="card"><p>{escape(str(item))}</p></article>')
+    return _html_section(title, "\n".join(cards) or '<p class="empty">No items.</p>')
+
+
+def _html_linked_media(source_ref: str, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    media_items = media_by_ref.get(source_ref, [])
+    if not media_items:
+        return ""
+    cards = []
+    for media in media_items:
+        url = _media_url(media)
+        image = ""
+        if url and _is_image_media(media):
+            safe_url = escape(url, quote=True)
+            image = f'<a href="{safe_url}" rel="noreferrer"><img src="{safe_url}" alt="Post image"></a>'
+        elif url:
+            safe_url = escape(url, quote=True)
+            image = f'<a href="{safe_url}" rel="noreferrer">Open media</a>'
+        cards.append(
+            "\n".join(
+                [
+                    '<div class="media-card">',
+                    image,
+                    "</div>",
+                ]
+            )
+        )
+    return f'<div class="linked-media">{"".join(cards)}</div>'
+
+
+def _html_media(value: Any) -> str:
+    cards = []
+    for item in _as_list(value):
+        if isinstance(item, dict):
+            cards.append(
+                "\n".join(
+                    [
+                        '<article class="card">',
+                        _html_badges(item, media=True),
+                        f"<p>{escape(str(item.get('observation') or item))}</p>",
+                        "</article>",
+                    ]
+                )
+            )
+        else:
+            cards.append(f'<article class="card"><p>{escape(str(item))}</p></article>')
+    return _html_section("Media Observations", "\n".join(cards) or '<p class="empty">No media observations.</p>')
+
+
+def _html_capitol_trades(value: Any) -> str:
+    snapshot = value if isinstance(value, dict) else {}
+    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
+    if not trades:
+        return _html_section("Politician Trading Info", '<p class="empty">No politician trading data attached.</p>')
+    rows = []
+    for trade in trades:
+        tx_type = str(trade.get("transaction_type") or "")
+        action_class = "buy" if tx_type.startswith("BUY") else "sell" if tx_type.startswith("SELL") else "other"
+        politician_bits = [
+            str(trade.get("politician") or "Unknown"),
+            " | ".join(
+                str(part)
+                for part in (trade.get("party"), trade.get("chamber"), trade.get("state"))
+                if part
+            ),
+        ]
+        politician = "<br>".join(escape(part) for part in politician_bits if part)
+        issuer = escape(str(trade.get("issuer") or "Unknown"))
+        ticker = trade.get("ticker")
+        if ticker:
+            issuer += f"<br><span>{escape(str(ticker))}</span>"
+        rows.append(
+            "\n".join(
+                [
+                    "<tr>",
+                    f"<td>{politician}</td>",
+                    f"<td>{issuer}</td>",
+                    f'<td><span class="tx {action_class}">{escape(tx_type)}</span></td>',
+                    f"<td>{escape(str(trade.get('size') or ''))}</td>",
+                    f"<td>{escape(str(trade.get('price') or ''))}</td>",
+                    f"<td>{escape(str(trade.get('traded') or ''))}</td>",
+                    f"<td>{escape(str(trade.get('published') or ''))}</td>",
+                    "</tr>",
+                ]
+            )
+        )
+    source = snapshot.get("source_url")
+    source_link = _html_links(source) if source else ""
+    table = "\n".join(
+        [
+            '<div class="table-wrap"><table class="trades-table">',
+            "<thead><tr><th>Politician</th><th>Issuer</th><th>Type</th><th>Size</th><th>Price</th><th>Traded</th><th>Published</th></tr></thead>",
+            f"<tbody>{''.join(rows)}</tbody>",
+            "</table></div>",
+            source_link,
+        ]
+    )
+    return _html_section("Politician Trading Info", table)
+
+
+def _html_capitol_cards(value: Any) -> str:
+    cards = [card for card in _as_list(value) if isinstance(card, dict)]
+    if not cards:
+        return ""
+    return '<div class="stat-grid">' + "".join(
+        f'<div class="stat"><strong>{escape(str(card.get("value") or ""))}</strong><span>{escape(str(card.get("label") or ""))}</span></div>'
+        for card in cards
+    ) + "</div>"
+
+
+def _html_simple_list(title: str, value: Any) -> str:
+    items = _as_list(value)
+    if not items:
+        return _html_section(title, '<p class="empty">No items.</p>')
+    html_items = []
+    for item in items:
+        text = _stringify_item(item)
+        html_items.append(f"<li>{escape(text)}</li>")
+    return _html_section(title, f"<ul>{''.join(html_items)}</ul>")
+
+
+def _html_notable(value: Any) -> str:
+    cards = []
+    for item in _as_list(value):
+        if isinstance(item, dict):
+            cards.append(
+                "\n".join(
+                    [
+                        '<article class="card">',
+                        _html_badges(item),
+                        f"<p>{escape(str(item.get('reason') or item.get('claim') or item))}</p>",
+                        _html_links(item.get("url") or item.get("urls")),
+                        "</article>",
+                    ]
+                )
+            )
+        else:
+            cards.append(f'<article class="card"><p>{escape(str(item))}</p></article>')
+    return _html_section("Notable Sources", "\n".join(cards) or '<p class="empty">No notable sources.</p>')
+
+
+def _html_metadata(response: dict[str, Any], metadata: Any) -> str:
+    rows: dict[str, Any] = {}
+    if isinstance(metadata, dict):
+        rows.update(metadata)
+    rows["provider"] = response.get("provider")
+    rows["model"] = response.get("model")
+    usage = _safe_usage(response)
+    if usage:
+        rows["tokens"] = usage
+    return _html_section("Metadata", _html_kv(rows))
+
+
+def _html_section(title: str, body: str) -> str:
+    return f'<section class="section"><h2>{escape(title)}</h2><div class="content">{body}</div></section>'
+
+
+def _html_badges(item: dict[str, Any], *, media: bool = False) -> str:
+    badges = []
+    ref = item.get("source_ref")
+    if ref:
+        badges.append(f'<span class="badge">{escape(str(ref))}</span>')
+    media_id = item.get("media_id")
+    if media and media_id:
+        badges.append(f'<span class="badge media">{escape(str(media_id))}</span>')
+    confidence = item.get("confidence")
+    if confidence:
+        badges.append(f'<span class="badge confidence">{escape(str(confidence))}</span>')
+    return f'<div class="badges">{"".join(badges)}</div>' if badges else ""
+
+
+def _html_paragraph(label: str, value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    return f'<p><strong>{escape(label)}:</strong> {escape(_stringify_item(value))}</p>'
+
+
+def _html_links(value: Any) -> str:
+    links = [item for item in _as_list(value) if item]
+    if not links:
+        return ""
+    rendered = []
+    for index, url in enumerate(links, start=1):
+        safe_url = escape(str(url), quote=True)
+        rendered.append(f'<a href="{safe_url}" rel="noreferrer">{escape(_source_link_label(index))}</a>')
+    return f'<div class="links">{"".join(rendered)}</div>'
+
+
+def _html_extra_fields(item: dict[str, Any], known: set[str]) -> str:
+    extras = {key: value for key, value in item.items() if key not in known and value not in (None, "", [], {})}
+    return _html_kv(extras) if extras else ""
+
+
+def _html_kv(rows: dict[str, Any]) -> str:
+    items = []
+    for key, value in rows.items():
+        if value in (None, "", [], {}):
+            continue
+        items.append(f"<dt>{escape(str(key))}</dt><dd>{escape(_stringify_item(value))}</dd>")
+    return f"<dl>{''.join(items)}</dl>" if items else '<p class="empty">No metadata.</p>'
+
+
+def _html_response_meta(response: dict[str, Any]) -> str:
+    parts = []
+    provider = response.get("provider")
+    model = response.get("model")
+    if provider:
+        parts.append(f"Provider: {escape(str(provider))}")
+    if model:
+        parts.append(f"Model: {escape(str(model))}")
+    usage = _safe_usage(response)
+    if usage:
+        parts.append(f"Tokens: {escape(usage)}")
+    return " | ".join(parts)
+
+
+def _html_css() -> str:
+    return """
+:root { color-scheme: light; font-family: Inter, Segoe UI, Arial, sans-serif; background: #f5f7f9; color: #172026; }
+body { margin: 0; }
+.page { max-width: 1080px; margin: 0 auto; padding: 24px 18px 40px; }
+.hero { border-bottom: 1px solid #d9e0e7; padding-bottom: 14px; margin-bottom: 18px; }
+h1 { margin: 0; font-size: 30px; letter-spacing: 0; }
+h2 { font-size: 20px; margin: 0 0 12px; }
+h3 { font-size: 16px; margin: 8px 0; }
+.subtitle { color: #52616f; margin: 8px 0; }
+.meta { color: #64717f; font-size: 13px; }
+.section { margin: 18px 0; }
+.content { display: grid; gap: 12px; }
+.group { display: grid; gap: 12px; }
+.group h3 { font-size: 18px; margin: 4px 0 0; color: #263747; }
+.group h4 { font-size: 15px; margin: 4px 0; color: #3b4856; }
+.importance-group { display: grid; gap: 8px; }
+.importance-group h3 { color: #263747; margin: 2px 0; }
+.compact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
+.card { background: #fff; border: 1px solid #dde4eb; border-radius: 8px; padding: 12px; box-shadow: 0 1px 2px rgba(20, 35, 50, 0.04); }
+.card.nested { margin-left: 10px; }
+.card.compact p { margin: 7px 0; font-size: 13px; line-height: 1.38; }
+.card.compact h4 { margin: 8px 0 6px; color: #1d3d5c; font-size: 15px; }
+.signal h3 { color: #1d3d5c; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge { display: inline-flex; align-items: center; border-radius: 999px; background: #e8f0f8; color: #234361; padding: 3px 8px; font-size: 12px; font-weight: 600; }
+.badge.confidence { background: #eef6e9; color: #315a26; }
+.badge.sentiment { background: #f3efe4; color: #624708; }
+.badge.media { background: #fff4d8; color: #6b4a00; }
+.links { display: grid; gap: 4px; margin-top: 8px; font-size: 12px; }
+.linked-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 10px; }
+.media-card { border: 1px solid #e4ebf1; border-radius: 8px; padding: 8px; background: #f8fafc; }
+.media-card img { width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: #fff; }
+.media-card p { margin: 6px 0 0; font-size: 13px; color: #465563; }
+.media-title { font-size: 12px; font-weight: 700; color: #566575; margin-bottom: 6px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.stat { background: #f8fafc; border: 1px solid #e4ebf1; border-radius: 8px; padding: 10px; }
+.stat strong { display: block; font-size: 18px; color: #1d3d5c; }
+.stat span { display: block; margin-top: 2px; color: #64717f; font-size: 12px; text-transform: uppercase; }
+.table-wrap { overflow-x: auto; border: 1px solid #dde4eb; border-radius: 8px; background: #fff; }
+.trades-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.trades-table th, .trades-table td { padding: 8px 9px; border-bottom: 1px solid #edf1f5; text-align: left; vertical-align: top; }
+.trades-table th { color: #566575; background: #f8fafc; font-size: 11px; text-transform: uppercase; }
+.trades-table td span { color: #64717f; }
+.tx { font-weight: 800; }
+.tx.buy { color: #008a78; }
+.tx.sell { color: #b87800; }
+a { color: #0b66c3; overflow-wrap: anywhere; }
+ul { margin: 0; padding-left: 22px; }
+li { margin: 7px 0; }
+dl { display: grid; grid-template-columns: minmax(120px, 220px) 1fr; gap: 8px 14px; margin: 0; }
+dt { font-weight: 700; color: #3b4856; }
+dd { margin: 0; overflow-wrap: anywhere; }
+.empty { color: #7c8792; font-style: italic; }
+@media (max-width: 680px) { .page { padding: 20px 12px 36px; } h1 { font-size: 28px; } dl { grid-template-columns: 1fr; } }
+"""
+
+
+def _markdown_executive(value: Any) -> str:
+    return _markdown_simple_list("Executive Summary", value)
+
+
+def _markdown_x_reports(value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    lines = ["# X Reports", ""]
+    reports = [report for report in _as_list(value) if isinstance(report, dict)]
+    if not reports:
+        return "\n".join([*lines, "_No X reports._", ""])
+    for report in reports:
+        lines.extend([f"## {report.get('handle') or 'unknown'}", "", "### Overall Summary", ""])
+        lines.extend(_markdown_bullets(report.get("overall_summary")))
+        for post in _as_list(report.get("posts")):
+            if isinstance(post, dict):
+                lines.extend(_markdown_grouped_post(post, media_by_ref))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_reddit_report(value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    report = value if isinstance(value, dict) else {}
+    lines = ["# Reddit Reports", "", "## Overall Summary", ""]
+    lines.extend(_markdown_bullets(report.get("overall_summary")))
+    for post in _as_list(report.get("posts")):
+        if isinstance(post, dict):
+            lines.extend(_markdown_grouped_post(post, media_by_ref, reddit=True, heading="###"))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_grouped_post(
+    post: dict[str, Any],
+    media_by_ref: dict[str, list[dict[str, Any]]],
+    *,
+    reddit: bool = False,
+    heading: str = "####",
+) -> list[str]:
+    source_ref = str(post.get("source_ref") or "")
+    title = _post_title(post, reddit=reddit)
+    lines = [f"{heading} {title}", ""]
+    if source_ref:
+        lines.append(f"- **source_ref**: {source_ref}")
+    if post.get("confidence"):
+        lines.append(f"- **confidence**: {post['confidence']}")
+    if post.get("post_summary") or post.get("claim") or post.get("summary"):
+        lines.append(f"- **post_summary**: {_stringify_item(post.get('post_summary') or post.get('claim') or post.get('summary'))}")
+    if reddit and post.get("comments_sentiment"):
+        lines.append(f"- **comments_sentiment**: {_stringify_item(post['comments_sentiment'])}")
+    if post.get("sentiment"):
+        lines.append(f"- **sentiment**: {_stringify_item(post['sentiment'])}")
+    if post.get("interpretation"):
+        lines.append(f"- **interpretation**: {_stringify_item(post['interpretation'])}")
+    for index, url in enumerate(_as_list(post.get("urls") or post.get("url")), start=1):
+        lines.append(f"- **source**: [{_source_link_label(index)}]({url})")
+    lines.extend(_markdown_linked_media(source_ref, media_by_ref))
+    lines.append("")
+    return lines
+
+
+def _markdown_bullets(value: Any) -> list[str]:
+    items = _as_list(value)
+    if not items:
+        return ["_No summary._", ""]
+    return [f"- {_stringify_item(item)}" for item in items] + [""]
+
+
+def _markdown_signal_section(title: str, value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    lines = [f"## {title}", ""]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "_No items._", ""])
+    for item in items:
+        if isinstance(item, dict):
+            label = item.get("source_ref") or "signal"
+            confidence = f" [{item['confidence']}]" if item.get("confidence") else ""
+            lines.append(f"- **{label}{confidence}**: {_stringify_item(item.get('claim') or item.get('title') or 'Signal')}")
+            if item.get("interpretation"):
+                lines.append(f"  Interpretation: {_stringify_item(item['interpretation'])}")
+            if item.get("reason"):
+                lines.append(f"  Reason: {_stringify_item(item['reason'])}")
+            for index, url in enumerate(_as_list(item.get("urls") or item.get("url")), start=1):
+                lines.append(f"  Source: [{_source_link_label(index)}]({url})")
+            lines.extend(_markdown_linked_media(str(label), media_by_ref))
+        else:
+            lines.append(f"- {_stringify_item(item)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_linked_media(source_ref: str, media_by_ref: dict[str, list[dict[str, Any]]]) -> list[str]:
+    lines: list[str] = []
+    for media in media_by_ref.get(source_ref, []):
+        url = _media_url(media)
+        if url and _is_image_media(media):
+            lines.append(f"  ![Post image]({url})")
+        elif url:
+            lines.append(f"  [Open media]({url})")
+    return lines
+
+
+def _markdown_media(value: Any) -> str:
+    lines = ["## Media Observations", ""]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "_No media observations._", ""])
+    for item in items:
+        if isinstance(item, dict):
+            label = " / ".join(str(part) for part in (item.get("media_id"), item.get("source_ref")) if part)
+            lines.append(f"- **{label or 'media'}**: {_stringify_item(item.get('observation') or item)}")
+        else:
+            lines.append(f"- {_stringify_item(item)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_capitol_trades(value: Any) -> str:
+    snapshot = value if isinstance(value, dict) else {}
+    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
+    lines = ["## Politician Trading Info", ""]
+    if not trades:
+        return "\n".join([*lines, "_No politician trading data attached._", ""])
+    lines.extend(
+        [
+            "| Politician | Issuer | Type | Size | Price | Traded | Published |",
+            "|---|---|---|---|---|---|---|",
+        ]
+    )
+    for trade in trades:
+        politician = _politician_label(trade)
+        issuer = _issuer_label(trade)
+        lines.append(
+            "| "
+            + " | ".join(
+                _markdown_table_cell(value)
+                for value in (
+                    politician,
+                    issuer,
+                    trade.get("transaction_type"),
+                    trade.get("size"),
+                    trade.get("price"),
+                    trade.get("traded"),
+                    trade.get("published"),
+                )
+            )
+            + " |"
+        )
+    if snapshot.get("source_url"):
+        lines.extend(["", f"Source: [Read source]({snapshot['source_url']})"])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_simple_list(title: str, value: Any) -> str:
+    lines = [f"## {title}", ""]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "_No items._", ""])
+    lines.extend(f"- {_stringify_item(item)}" for item in items)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_notable(value: Any) -> str:
+    lines = ["## Notable Sources", ""]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "_No notable sources._", ""])
+    for item in items:
+        if isinstance(item, dict):
+            ref = item.get("source_ref") or "source"
+            reason = _stringify_item(item.get("reason") or item.get("claim") or item)
+            url = item.get("url")
+            lines.append(f"- **{ref}**: {reason}")
+            if url:
+                lines.append(f"  Source: [Read source]({url})")
+        else:
+            lines.append(f"- {_stringify_item(item)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_metadata(value: Any) -> str:
+    lines = ["## Metadata", ""]
+    if not isinstance(value, dict) or not value:
+        return "\n".join([*lines, "_No metadata._", ""])
+    lines.extend(f"- **{key}**: {_stringify_item(item)}" for key, item in value.items())
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _markdown_response_meta(response: dict[str, Any]) -> str:
+    parts = []
+    for key in ("provider", "model"):
+        if response.get(key):
+            parts.append(f"**{key}**: {response[key]}")
+    usage = _safe_usage(response)
+    if usage:
+        parts.append(f"**tokens**: {usage}")
+    return " | ".join(parts)
+
+
+def _text_executive(value: Any) -> str:
+    return _text_simple_list("EXECUTIVE SUMMARY", value)
+
+
+def _text_x_reports(value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    lines = ["X REPORTS"]
+    reports = [report for report in _as_list(value) if isinstance(report, dict)]
+    if not reports:
+        return "\n".join([*lines, "  No X reports."])
+    for report in reports:
+        lines.extend(["", f"USER: {report.get('handle') or 'unknown'}", "OVERALL SUMMARY"])
+        lines.extend(f"- {_stringify_item(item)}" for item in _as_list(report.get("overall_summary")) or ["No summary."])
+        for post in _as_list(report.get("posts")):
+            if isinstance(post, dict):
+                lines.extend(_text_grouped_post(post, media_by_ref))
+    return "\n".join(lines)
+
+
+def _text_reddit_report(value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    report = value if isinstance(value, dict) else {}
+    lines = ["REDDIT REPORTS", "OVERALL SUMMARY"]
+    lines.extend(f"- {_stringify_item(item)}" for item in _as_list(report.get("overall_summary")) or ["No summary."])
+    for post in _as_list(report.get("posts")):
+        if isinstance(post, dict):
+            lines.extend(_text_grouped_post(post, media_by_ref, reddit=True))
+    return "\n".join(lines)
+
+
+def _text_grouped_post(
+    post: dict[str, Any],
+    media_by_ref: dict[str, list[dict[str, Any]]],
+    *,
+    reddit: bool = False,
+) -> list[str]:
+    source_ref = str(post.get("source_ref") or "")
+    lines = ["", _post_title(post, reddit=reddit)]
+    if source_ref:
+        lines.append(f"- source_ref: {source_ref}")
+    if post.get("confidence"):
+        lines.append(f"- confidence: {post['confidence']}")
+    if post.get("post_summary") or post.get("claim") or post.get("summary"):
+        lines.append(f"- post_summary: {_stringify_item(post.get('post_summary') or post.get('claim') or post.get('summary'))}")
+    if reddit and post.get("comments_sentiment"):
+        lines.append(f"- comments_sentiment: {_stringify_item(post['comments_sentiment'])}")
+    if post.get("sentiment"):
+        lines.append(f"- sentiment: {_stringify_item(post['sentiment'])}")
+    if post.get("interpretation"):
+        lines.append(f"- interpretation: {_stringify_item(post['interpretation'])}")
+    for url in _as_list(post.get("urls") or post.get("url")):
+        lines.append(f"- source: {url}")
+    lines.extend(_text_linked_media(source_ref, media_by_ref))
+    return lines
+
+
+def _text_signal_section(title: str, value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    lines = [title]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "  No items."])
+    for item in items:
+        if isinstance(item, dict):
+            label = item.get("source_ref") or "signal"
+            confidence = f" [{item['confidence']}]" if item.get("confidence") else ""
+            lines.append(f"- {label}{confidence}: {_stringify_item(item.get('claim') or item.get('title') or 'Signal')}")
+            if item.get("interpretation"):
+                lines.append(f"  Interpretation: {_stringify_item(item['interpretation'])}")
+            if item.get("reason"):
+                lines.append(f"  Reason: {_stringify_item(item['reason'])}")
+            for url in _as_list(item.get("urls") or item.get("url")):
+                lines.append(f"  Source: {url}")
+            lines.extend(_text_linked_media(str(label), media_by_ref))
+        else:
+            lines.append(f"- {_stringify_item(item)}")
+    return "\n".join(lines)
+
+
+def _text_linked_media(source_ref: str, media_by_ref: dict[str, list[dict[str, Any]]]) -> list[str]:
+    lines: list[str] = []
+    for media in media_by_ref.get(source_ref, []):
+        url = _media_url(media)
+        if url:
+            lines.append(f"  Media: {url}")
+    return lines
+
+
+def _text_media(value: Any) -> str:
+    lines = ["MEDIA OBSERVATIONS"]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "  No media observations."])
+    for item in items:
+        if isinstance(item, dict):
+            label = " / ".join(str(part) for part in (item.get("media_id"), item.get("source_ref")) if part)
+            lines.append(f"- {label or 'media'}: {_stringify_item(item.get('observation') or item)}")
+        else:
+            lines.append(f"- {_stringify_item(item)}")
+    return "\n".join(lines)
+
+
+def _text_capitol_trades(value: Any) -> str:
+    snapshot = value if isinstance(value, dict) else {}
+    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
+    lines = ["POLITICIAN TRADING INFO"]
+    if not trades:
+        return "\n".join([*lines, "  No politician trading data attached."])
+    for trade in trades:
+        lines.append(
+            "- "
+            + f"{_politician_label(trade)} {trade.get('transaction_type') or ''} "
+            + f"{trade.get('issuer') or 'Unknown issuer'}"
+            + (f" ({trade.get('ticker')})" if trade.get("ticker") else "")
+            + f"; size {trade.get('size') or 'unknown'}; "
+            + f"price {trade.get('price') or 'unknown'}; traded {trade.get('traded') or 'unknown'}; "
+            + f"published {trade.get('published') or 'unknown'}."
+        )
+    if snapshot.get("source_url"):
+        lines.append(f"Source: {snapshot['source_url']}")
+    return "\n".join(lines)
+
+
+def _text_simple_list(title: str, value: Any) -> str:
+    lines = [title]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "  No items."])
+    lines.extend(f"- {_stringify_item(item)}" for item in items)
+    return "\n".join(lines)
+
+
+def _text_notable(value: Any) -> str:
+    lines = ["NOTABLE SOURCES"]
+    items = _as_list(value)
+    if not items:
+        return "\n".join([*lines, "  No notable sources."])
+    for item in items:
+        if isinstance(item, dict):
+            ref = item.get("source_ref") or "source"
+            lines.append(f"- {ref}: {_stringify_item(item.get('reason') or item.get('claim') or item)}")
+            if item.get("url"):
+                lines.append(f"  Source: {item['url']}")
+        else:
+            lines.append(f"- {_stringify_item(item)}")
+    return "\n".join(lines)
+
+
+def _text_metadata(value: Any) -> str:
+    lines = ["METADATA"]
+    if not isinstance(value, dict) or not value:
+        return "\n".join([*lines, "  No metadata."])
+    lines.extend(f"- {key}: {_stringify_item(item)}" for key, item in value.items())
+    return "\n".join(lines)
+
+
+def _text_response_meta(response: dict[str, Any]) -> str:
+    parts = []
+    for key in ("provider", "model"):
+        if response.get(key):
+            parts.append(f"{key}: {response[key]}")
+    usage = _safe_usage(response)
+    if usage:
+        parts.append(f"tokens: {usage}")
+    return " | ".join(parts)
+
+
+def _safe_usage(response: dict[str, Any]) -> str:
+    metadata = response.get("metadata")
+    usage = metadata.get("usage") if isinstance(metadata, dict) else None
+    if not isinstance(usage, dict):
+        return ""
+    total = usage.get("total_tokens")
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    parts = []
+    if total is not None:
+        parts.append(f"total {total}")
+    if prompt is not None:
+        parts.append(f"prompt {prompt}")
+    if completion is not None:
+        parts.append(f"completion {completion}")
+    return ", ".join(parts)
+
+
+def _post_title(post: dict[str, Any], *, reddit: bool) -> str:
+    fallback = "Post And Comments Sentiment" if reddit else "Post"
+    title = post.get("title") or post.get("claim") or post.get("post_summary") or fallback
+    return _stringify_item(title)
+
+
+def _source_link_label(index: int) -> str:
+    return "Read source" if index == 1 else f"Read source {index}"
+
+
+def _media_by_source_ref(response: dict[str, Any], summary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    observations_by_id: dict[str, dict[str, Any]] = {}
+    observations_without_media: list[dict[str, Any]] = []
+    for item in _as_list(summary.get("media_observations")):
+        if not isinstance(item, dict):
+            continue
+        media_id = item.get("media_id")
+        if media_id:
+            observations_by_id[str(media_id)] = item
+        else:
+            observations_without_media.append(item)
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    input_media = response.get("input_media")
+    if isinstance(input_media, dict):
+        for media_id, media in input_media.items():
+            if not isinstance(media, dict):
+                continue
+            source_ref = media.get("source_ref")
+            if not source_ref:
+                continue
+            observation = observations_by_id.get(str(media_id), {})
+            merged = {
+                **media,
+                **{key: value for key, value in observation.items() if value not in (None, "", [], {})},
+                "media_id": str(media_id),
+            }
+            grouped.setdefault(str(source_ref), []).append(merged)
+
+    for media_id, observation in observations_by_id.items():
+        source_ref = observation.get("source_ref")
+        if not source_ref:
+            continue
+        existing = grouped.setdefault(str(source_ref), [])
+        if not any(item.get("media_id") == media_id for item in existing):
+            existing.append({"media_id": media_id, **observation})
+
+    for observation in observations_without_media:
+        source_ref = observation.get("source_ref")
+        if source_ref:
+            grouped.setdefault(str(source_ref), []).append(observation)
+    return grouped
+
+
+def _media_url(media: dict[str, Any]) -> str:
+    value = media.get("remote_url") or media.get("local_path") or media.get("url")
+    return str(value) if value else ""
+
+
+def _is_image_media(media: dict[str, Any]) -> bool:
+    kind = str(media.get("kind") or media.get("media_type") or "").lower()
+    url = _media_url(media).lower()
+    return kind in {"image", "photo", "thumbnail", "gif"} or url.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp"))
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value in (None, "", {}, []):
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _stringify_item(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _politician_label(trade: dict[str, Any]) -> str:
+    meta = " | ".join(str(part) for part in (trade.get("party"), trade.get("chamber"), trade.get("state")) if part)
+    name = str(trade.get("politician") or "Unknown")
+    return f"{name} ({meta})" if meta else name
+
+
+def _issuer_label(trade: dict[str, Any]) -> str:
+    issuer = str(trade.get("issuer") or "Unknown")
+    ticker = trade.get("ticker")
+    return f"{issuer} ({ticker})" if ticker else issuer
+
+
+def _markdown_table_cell(value: Any) -> str:
+    return _stringify_item(value or "").replace("|", "\\|").replace("\n", " ")
+
+
+def _strip_json_fence(content: str) -> str:
+    if not content.startswith("```"):
+        return content
+    lines = content.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()

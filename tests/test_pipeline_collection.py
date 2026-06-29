@@ -56,7 +56,7 @@ class FakeRepository:
 def _config(tmp_path) -> AppConfig:
     return AppConfig(
         storage=StorageConfig(sqlite_path=str(tmp_path / "test.sqlite3")),
-        llm=LLMConfig(provider="openai", model="test", api_key_env="OPENAI_API_KEY"),
+        llm=LLMConfig(provider="deepseek", model="deepseek-v4-flash", api_key_env="DEEPSEEK_API_KEY"),
         collectors={"api": {"test": CollectorConfig(kind="test_source")}},
         reports={"default": ReportProfileConfig(schedule="0 8 * * *", collector_ids=["api.test"])},
     )

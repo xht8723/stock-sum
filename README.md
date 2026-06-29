@@ -11,15 +11,15 @@ The project is currently an API-first service scaffold:
   report runs.
 - TOML-based configuration with Pydantic validation.
 - Cache-first `models.dev` metadata refresh support.
-- Scrape Creators API collectors for X user tweets and Reddit subreddit posts.
+- Xpoz API collectors for X user timelines and Reddit subreddit posts.
 - Generic collector interfaces and Playwright infrastructure for future
   site-specific collectors.
-- SQLite shared collection run/index storage plus source-specific Scrape
-  Creators X/Reddit raw tables.
+- SQLite shared collection run/index storage plus source-specific X/Reddit raw
+  tables.
 
 The bundled X and Reddit collectors are disabled in the example config by
-default. Enable the collector you want, set `SCRAPE_CREATORS_API_KEY` in the
-process environment, and reference the collector from a report profile.
+default. Enable the collector you want, set `XPOZ_API_KEY` in the process
+environment, and reference the collector from a report profile.
 
 ## Requirements
 
@@ -135,10 +135,12 @@ Important configuration sections:
 - `[service]`: service name and default timezone.
 - `[storage]`: SQLite database path.
 - `[models_dev]`: external model catalog URL, cache path, and refresh interval.
-- `[playwright]`: generic browser automation defaults for future collectors.
-- `[providers.scrape_creators]`: Scrape Creators API base URL, timeout, and API
-  key environment-variable name.
-- `[llm]`: provider, model, and API key environment variable name.
+- `[playwright]`: browser automation defaults for future site-specific browser
+  collectors.
+- `[providers.xpoz]`: Xpoz MCP-over-HTTP server URL, timeout, and API key
+  environment-variable name for X and Reddit collection.
+- `[llm]`: DeepSeek provider settings, model, timeout, temperature, token cap,
+  and API key environment-variable name.
 - `[reports.*]`: named report profiles and cron schedules.
 - `[[sources.x_users]]`: long-list X user sources. Each one resolves to
   collector ID `x.<handle>`.
@@ -153,23 +155,24 @@ Use `.env.example` as the template for local environment variables:
 Copy-Item .env.example .env
 ```
 
-Then fill in values such as `SCRAPE_CREATORS_API_KEY`, `OPENAI_API_KEY`,
+Then fill in values such as `XPOZ_API_KEY`, `DEEPSEEK_API_KEY`,
 `SMTP_USERNAME`, `SMTP_PASSWORD`, `TWILIO_ACCOUNT_SID`,
 `TWILIO_AUTH_TOKEN`, and `TWILIO_WHATSAPP_FROM` as needed.
 
-For a one-off PowerShell session, set the Scrape Creators key directly:
+For a one-off PowerShell session, set API keys directly:
 
 ```powershell
-$env:SCRAPE_CREATORS_API_KEY = "your_real_key"
+$env:XPOZ_API_KEY = "your_real_key"
+$env:DEEPSEEK_API_KEY = "your_real_key"
 ```
 
 The TOML config stores only the variable name:
 
 ```toml
-[providers.scrape_creators]
-api_key_env = "SCRAPE_CREATORS_API_KEY"
-base_url = "https://api.scrapecreators.com"
-timeout_seconds = 30
+[providers.xpoz]
+api_key_env = "XPOZ_API_KEY"
+server_url = "https://mcp.xpoz.ai/mcp"
+timeout_seconds = 60
 ```
 
 ## CLI
@@ -186,7 +189,7 @@ Configuration commands:
 stock-sum config init config.toml
 stock-sum config validate config.toml
 stock-sum config get config.toml llm.model
-stock-sum config set config.toml llm.model "'gpt-4.1-mini'"
+stock-sum config set config.toml llm.model "'deepseek-v4-flash'"
 stock-sum config sync --config config.toml
 stock-sum config sync --config config.toml --force
 stock-sum config profile list --config config.toml
@@ -202,14 +205,36 @@ stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
 stock-sum collect --profile default --config config.toml
 stock-sum collect --collector x.aleabitoreddit --config config.toml
 stock-sum collect --collector reddit.wallstreetbets --config config.toml
+stock-sum payload build --profile default --output docs/examples/summary_input_sample.json --config config.toml --download-images --mode vision
+stock-sum llm summarize --profile default --payload docs/examples/summary_input_sample.json --output C:\tmp\stock-sum-deepseek-response.json --config config.toml
+stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode html --output C:\tmp\stock-sum-report.html
+stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode markdown --output C:\tmp\stock-sum-report.md
+stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode text --output C:\tmp\stock-sum-report.txt
 stock-sum run-report --profile default --config config.toml
 ```
 
 The bundled example sources are disabled. To use them, either set
 `enabled = true` in TOML or add a source through the CLI, then run the generated
-collector ID directly or through a report profile. Scrape Creators' X
-user-tweets endpoint may return popular public tweets rather than a strict
-latest-only timeline, so treat it as provider-ranked public tweet data.
+collector ID directly or through a report profile. X and Reddit collection use
+Xpoz through an internal MCP-over-HTTP client.
+
+`payload build` reads collected data from SQLite and writes an LLM-ready JSON
+payload with separate X and Reddit sections. X posts are grouped by handle;
+Reddit posts are grouped by subreddit with comments nested under the matching
+post. With `--download-images`, eligible image media is saved under ignored
+`data/media/` and referenced from the JSON payload. Use `--mode full` for a
+debug payload, `--mode compact` for a lower-token text payload, and
+`--mode vision` for the compact payload plus an ordered image attachment
+manifest.
+
+`llm summarize` sends the compact payload text to the configured DeepSeek model
+and writes the full response metadata plus parsed JSON summary to the requested
+output file. The first provider client is text-only; media is referenced by
+media IDs, URLs, or local paths rather than uploaded as image bytes.
+
+`report render` turns the LLM response JSON into final presentation artifacts.
+Use `--mode html` for a standalone visual report, `--mode markdown` for a
+portable document, or `--mode text` for plain email/terminal output.
 
 ## HTTP API
 
@@ -274,9 +299,9 @@ stock-sum collect --help
 
 ## Current limitations
 
-- Scrape Creators X/Reddit collectors are implemented, but disabled by default.
-- The first implementation persists remote media URLs and metadata only; it does
-  not download image files.
+- Xpoz X/Reddit collectors are implemented, but disabled by default.
+- The first implementation persists remote media URLs and metadata; image
+  downloads are available through `payload build --download-images`.
 - Each future API integration should get its own source-specific raw tables.
 - Scheduler jobs are configured in memory but scheduler execution is scaffolded.
 - LLM providers, report rendering, email delivery, and WhatsApp delivery are

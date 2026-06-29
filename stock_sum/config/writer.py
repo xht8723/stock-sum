@@ -149,7 +149,6 @@ def add_x_user(
     *,
     enabled: bool,
     limit: int,
-    trim: bool,
     profile: str | None = None,
     overwrite: bool = False,
 ) -> str:
@@ -167,7 +166,6 @@ def add_x_user(
     source["handle"] = normalized
     source["enabled"] = enabled
     source["limit"] = limit
-    source["trim"] = trim
     if existing is None:
         x_users.append(source)
     else:
