@@ -205,16 +205,22 @@ class StockSumHttpClient:
     async def _poll_until_done(self, session: _ClientSession, job_id: str) -> dict[str, Any]:
         url = f"{self.base_url}/v1/jobs/{quote(job_id, safe='')}"
         deadline = asyncio.get_running_loop().time() + self.timeout_seconds
+        last_poll_error: Exception | None = None
         while True:
             if asyncio.get_running_loop().time() >= deadline:
-                raise StockSumRequestError(f"Report job {job_id} timed out after {int(self.timeout_seconds)} seconds.")
+                message = f"Report job {job_id} timed out after {int(self.timeout_seconds)} seconds."
+                if last_poll_error is not None:
+                    message += f" Last poll error: {last_poll_error}"
+                raise StockSumRequestError(message)
             try:
                 async with session.get(url, headers=self._headers()) as response:
                     payload = await self._json_response(response, expected_status=200)
             except StockSumCogError:
                 raise
             except Exception as exc:
-                raise StockSumRequestError(f"Could not poll stock-sum job {job_id}: {exc}") from exc
+                last_poll_error = exc
+                await asyncio.sleep(self.poll_seconds)
+                continue
 
             status = str(payload.get("status") or "")
             if status == "succeeded":

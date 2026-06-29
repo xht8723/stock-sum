@@ -98,6 +98,23 @@ async def test_client_reports_failed_job() -> None:
         await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
 
 
+async def test_client_retries_transient_poll_disconnect() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "job-retry"})],
+        get_responses=[
+            ConnectionError("Server disconnected"),
+            FakeResponse(200, {"job_id": "job-retry", "status": "succeeded"}),
+            FakeResponse(200, body=b"ok", headers={"content-type": "text/plain; charset=utf-8"}),
+        ],
+    )
+    client = StockSumHttpClient(session=session, poll_seconds=0, timeout_seconds=10)
+
+    artifact = await client.run_report(profile="default", output_format="text", include_capitol_trades=False)
+
+    assert artifact.job_id == "job-retry"
+    assert artifact.content == b"ok"
+
+
 async def test_client_reports_timeout() -> None:
     session = FakeSession(
         post_responses=[FakeResponse(202, {"job_id": "job-3"})],
@@ -125,7 +142,7 @@ async def test_client_maps_blacklist_failure() -> None:
 
 
 class FakeSession:
-    def __init__(self, *, post_responses: list[FakeResponse], get_responses: list[FakeResponse]) -> None:
+    def __init__(self, *, post_responses: list[FakeResponse], get_responses: list[FakeResponse | Exception]) -> None:
         self.post_responses = post_responses
         self.get_responses = get_responses
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
@@ -137,7 +154,10 @@ class FakeSession:
 
     def get(self, url: str, **kwargs: Any) -> "FakeContext":
         self.requests.append(("GET", url, kwargs))
-        return FakeContext(self.get_responses.pop(0))
+        response = self.get_responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return FakeContext(response)
 
     async def close(self) -> None:
         self.closed = True
