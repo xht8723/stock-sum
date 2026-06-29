@@ -74,11 +74,23 @@ class CollectionRunResult:
 
 
 @dataclass(frozen=True)
+class PipelineSectionWarning:
+    """Recoverable failure for one report pipeline section."""
+
+    section: str
+    source_id: str
+    phase: str
+    message: str
+    recoverable: bool = True
+
+
+@dataclass(frozen=True)
 class PipelineCollectionResult:
     """Collection-only result for a report profile run."""
 
     profile: str
     runs: list[CollectionRunResult]
+    warnings: list[PipelineSectionWarning] = field(default_factory=list)
 
     @property
     def collected_count(self) -> int:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal
@@ -12,7 +12,7 @@ import json
 from stock_sum.collectors.playwright.capitol_trades import CAPITOL_TRADES_URL, scrape_capitol_trades
 from stock_sum.config.models import AppConfig
 from stock_sum.core.context import RuntimeContext
-from stock_sum.core.models import PipelineCollectionResult, Summary
+from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.core.pipeline import ReportPipeline
 from stock_sum.llm.registry import build_llm_client
 from stock_sum.media.downloader import MediaDownloader
@@ -58,6 +58,7 @@ class HttpJobRecord:
     artifact_media_type: str | None = None
     summary_path: str | None = None
     collection_result: dict[str, Any] | None = None
+    warnings: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe representation."""
@@ -125,12 +126,21 @@ class HttpJobManager:
             self._mark_running(job_id, phase="collecting")
             job = self._require_job(job_id)
             collection_result = await self._pipeline_factory().run_report(job.profile)
-            self._update(job_id, phase="building_payload", collection_result=_pipeline_result_to_dict(collection_result))
+            warnings = list(collection_result.warnings)
+            warning_data = _warnings_to_dicts(warnings)
+            self._update(
+                job_id,
+                phase="building_payload",
+                collection_result=_pipeline_result_to_dict(collection_result),
+                warnings=warning_data,
+            )
 
             repository = self._repository_factory()
             downloader = MediaDownloader(self.config.media, repository) if options.download_images else None
             builder = SummaryInputBuilder(config=self.config, repository=repository, downloader=downloader)
             summary_input = await builder.build(profile=job.profile, download_images=options.download_images)
+            if not _summary_input_has_social_data(summary_input):
+                raise RuntimeError(_no_social_data_message(collection_result))
             payload_data = summary_input.to_dict(
                 mode="compact",
                 max_images_per_post=options.max_images_per_post,
@@ -148,11 +158,26 @@ class HttpJobManager:
 
             if options.include_capitol_trades:
                 self._update(job_id, phase="scraping_capitol_trades")
-                snapshot = await self._capitol_scraper(
-                    url=CAPITOL_TRADES_URL,
-                    limit=options.capitol_trades_limit,
-                )
-                response_data["capitol_trades"] = snapshot.to_dict()
+                try:
+                    snapshot = await self._capitol_scraper(
+                        url=CAPITOL_TRADES_URL,
+                        limit=options.capitol_trades_limit,
+                    )
+                    response_data["capitol_trades"] = snapshot.to_dict()
+                except Exception as exc:
+                    warnings.append(
+                        PipelineSectionWarning(
+                            section="capitol_trades",
+                            source_id=CAPITOL_TRADES_URL,
+                            phase="scraping_capitol_trades",
+                            message=str(exc),
+                        )
+                    )
+
+            warning_data = _warnings_to_dicts(warnings)
+            response_data["pipeline_warnings"] = warning_data
+            response_data["failed_sections"] = warning_data
+            self._update(job_id, warnings=warning_data)
 
             summary_path = self._job_dir(job_id) / "summary.json"
             self._write_json(summary_path, response_data)
@@ -164,6 +189,7 @@ class HttpJobManager:
                 artifact_path=str(artifact_path),
                 artifact_media_type=media_type,
                 summary_path=str(summary_path),
+                warnings=warning_data,
             )
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
@@ -225,17 +251,20 @@ class HttpJobManager:
         artifact_media_type: str,
         summary_path: str | None,
         collection_result: dict[str, Any] | None = None,
+        warnings: list[dict[str, Any]] | None = None,
     ) -> None:
-        self._update(
-            job_id,
-            status="succeeded",
-            phase="succeeded",
-            finished_at=_utc_now(),
-            artifact_path=artifact_path,
-            artifact_media_type=artifact_media_type,
-            summary_path=summary_path,
-            collection_result=collection_result,
-        )
+        changes: dict[str, Any] = {
+            "status": "succeeded",
+            "phase": "succeeded",
+            "finished_at": _utc_now(),
+            "artifact_path": artifact_path,
+            "artifact_media_type": artifact_media_type,
+            "summary_path": summary_path,
+            "collection_result": collection_result,
+        }
+        if warnings is not None:
+            changes["warnings"] = warnings
+        self._update(job_id, **changes)
 
     def _mark_failed(self, job_id: str, error: str) -> None:
         self._update(job_id, status="failed", phase="failed", finished_at=_utc_now(), error=error)
@@ -294,6 +323,28 @@ def _pipeline_result_to_dict(result: PipelineCollectionResult) -> dict[str, Any]
     data["inserted_count"] = result.inserted_count
     data["updated_count"] = result.updated_count
     return data
+
+
+def _warnings_to_dicts(warnings: list[PipelineSectionWarning]) -> list[dict[str, Any]]:
+    return [asdict(warning) for warning in warnings]
+
+
+def _summary_input_has_social_data(summary_input: Any) -> bool:
+    for section in getattr(summary_input, "x", []):
+        if getattr(section, "posts", []):
+            return True
+    for section in getattr(summary_input, "reddit", []):
+        if getattr(section, "posts", []):
+            return True
+    return False
+
+
+def _no_social_data_message(result: PipelineCollectionResult) -> str:
+    failed = [run.collector_id for run in result.runs if run.status == "failed"]
+    message = "Collection completed with no usable source data."
+    if failed:
+        message += f" Failed collectors: {', '.join(failed)}."
+    return message
 
 
 def _summary_response_data(

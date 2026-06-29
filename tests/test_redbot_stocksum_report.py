@@ -7,8 +7,12 @@ from typing import Any
 import pytest
 
 from redbot_cogs.stocksum_report.stocksum_report import (
+    StockSumArtifact,
+    StockSumReport,
     StockSumHttpClient,
     StockSumRequestError,
+    _failure_message,
+    _split_discord_markdown,
 )
 
 
@@ -98,6 +102,29 @@ async def test_client_reports_failed_job() -> None:
         await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
 
 
+async def test_client_downloads_successful_job_with_warnings() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "job-warn"})],
+        get_responses=[
+            FakeResponse(
+                200,
+                {
+                    "job_id": "job-warn",
+                    "status": "succeeded",
+                    "warnings": [{"section": "capitol_trades", "message": "blocked"}],
+                },
+            ),
+            FakeResponse(200, body=b"report", headers={"content-type": "text/markdown; charset=utf-8"}),
+        ],
+    )
+    client = StockSumHttpClient(session=session, poll_seconds=0)
+
+    artifact = await client.run_report(profile="default", output_format="discord", include_capitol_trades=True)
+
+    assert artifact.content == b"report"
+    assert artifact.status["warnings"][0]["section"] == "capitol_trades"
+
+
 async def test_client_retries_transient_poll_disconnect() -> None:
     session = FakeSession(
         post_responses=[FakeResponse(202, {"job_id": "job-retry"})],
@@ -139,6 +166,93 @@ async def test_client_maps_blacklist_failure() -> None:
 
     with pytest.raises(StockSumRequestError, match="blacklisted"):
         await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
+
+
+def test_split_discord_markdown_prefers_blank_lines() -> None:
+    chunks = _split_discord_markdown("alpha\n\nbravo\n\ncharlie", limit=14)
+
+    assert chunks == ["alpha\n\nbravo", "charlie"]
+    assert all(len(chunk) <= 14 for chunk in chunks)
+
+
+def test_split_discord_markdown_falls_back_to_lines_and_hard_splits() -> None:
+    chunks = _split_discord_markdown("alpha\nbravo\n" + ("x" * 25), limit=11)
+
+    assert chunks == ["alpha\nbravo", "xxxxxxxxxxx", "xxxxxxxxxxx", "xxx"]
+    assert all(len(chunk) <= 11 for chunk in chunks)
+
+
+def test_failure_message_is_truncated() -> None:
+    message = _failure_message(RuntimeError("x" * 3000))
+
+    assert message.startswith("stock-sum report failed:")
+    assert len(message) <= 1900
+
+
+async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    monkeypatch.setattr(
+        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        lambda: FakeStockSumClient(content=("first paragraph\n\n" + ("x" * 1950)).encode("utf-8")),
+    )
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.report(interaction, profile="default", format="discord", include_capitol_trades=True, private=True)
+
+    assert interaction.response.messages == [
+        {
+            "content": "Report is being generated, please wait a few minutes.",
+            "ephemeral": True,
+        }
+    ]
+    sent_text = [message["content"] for message in interaction.followup.messages]
+    assert len(sent_text) == 3
+    assert sent_text[0] == "first paragraph"
+    assert "job:" not in "\n".join(sent_text)
+    assert "format:" not in "\n".join(sent_text)
+    assert all(len(item) <= 1900 for item in sent_text)
+
+
+async def test_report_command_sends_file_for_non_discord_format(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    monkeypatch.setattr(
+        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        lambda: FakeStockSumClient(content=b"<html>report</html>", filename="report.html"),
+    )
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.report(interaction, profile="default", format="html", include_capitol_trades=True, private=False)
+
+    assert interaction.response.messages[0]["content"] == "Report is being generated, please wait a few minutes."
+    assert interaction.followup.messages == [
+        {
+            "content": "Report generated.",
+            "ephemeral": False,
+            "file": "report.html",
+        }
+    ]
+
+
+async def test_report_command_sends_failure_message(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    monkeypatch.setattr(
+        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        lambda: FakeFailingStockSumClient(),
+    )
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.report(interaction, profile="default", format="discord", include_capitol_trades=True, private=True)
+
+    assert interaction.response.messages[0]["content"] == "Report is being generated, please wait a few minutes."
+    assert interaction.followup.messages == [
+        {
+            "content": "stock-sum report failed: broken",
+            "ephemeral": True,
+        }
+    ]
 
 
 class FakeSession:
@@ -198,3 +312,55 @@ class FakeResponse:
 
     async def read(self) -> bytes:
         return self.body
+
+
+class FakeStockSumClient:
+    def __init__(self, *, content: bytes, filename: str = "report.md") -> None:
+        self.content = content
+        self.filename = filename
+
+    async def run_report(self, *, profile: str, output_format: str, include_capitol_trades: bool) -> StockSumArtifact:
+        return StockSumArtifact(
+            job_id="job-1",
+            filename=self.filename,
+            content_type="text/markdown; charset=utf-8",
+            content=self.content,
+            status={"status": "succeeded"},
+        )
+
+
+class FakeFailingStockSumClient:
+    async def run_report(self, *, profile: str, output_format: str, include_capitol_trades: bool) -> StockSumArtifact:
+        raise StockSumRequestError("broken")
+
+
+class FakeInteraction:
+    def __init__(self) -> None:
+        self.response = FakeResponseSender()
+        self.followup = FakeFollowupSender()
+
+
+class FakeResponseSender:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, Any]] = []
+
+    async def send_message(self, content: str, *, ephemeral: bool) -> None:
+        self.messages.append({"content": content, "ephemeral": ephemeral})
+
+
+class FakeFollowupSender:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, Any]] = []
+
+    async def send(self, content: str, *, ephemeral: bool, file: Any | None = None) -> None:
+        message = {"content": content, "ephemeral": ephemeral}
+        if file is not None:
+            message["file"] = file.filename
+        self.messages.append(message)
+
+
+class FakeDiscord:
+    class File:
+        def __init__(self, fp: Any, *, filename: str) -> None:
+            self.fp = fp
+            self.filename = filename

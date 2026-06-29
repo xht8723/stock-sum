@@ -48,6 +48,7 @@ class PresentationRenderer:
     def _render_html(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         sections = [
+            _html_pipeline_warnings(response.get("pipeline_warnings")),
             _html_social_sentiment(summary, media_by_ref),
             _html_capitol_trades(response.get("capitol_trades")),
         ]
@@ -78,6 +79,7 @@ class PresentationRenderer:
         lines = [
             f"# {self.title}",
             "",
+            _markdown_pipeline_warnings(response.get("pipeline_warnings")),
             _markdown_social_sentiment(summary, media_by_ref),
             _markdown_capitol_trades(response.get("capitol_trades")),
         ]
@@ -88,6 +90,7 @@ class PresentationRenderer:
         lines = [
             f"**{self.title}**",
             "",
+            _discord_pipeline_warnings(response.get("pipeline_warnings")),
             _discord_social_sentiment(summary, media_by_ref),
             _discord_capitol_trades(response.get("capitol_trades")),
         ]
@@ -98,6 +101,7 @@ class PresentationRenderer:
         lines = [
             self.title.upper(),
             "",
+            _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_social_sentiment(summary, media_by_ref),
             _text_capitol_trades(response.get("capitol_trades")),
         ]
@@ -121,6 +125,59 @@ def _summary_from_response(response: dict[str, Any]) -> dict[str, Any]:
 
 def _has_grouped_layout(summary: dict[str, Any]) -> bool:
     return isinstance(summary.get("x_reports"), list) or isinstance(summary.get("reddit_report"), dict)
+
+
+def _html_pipeline_warnings(value: Any) -> str:
+    warnings = _pipeline_warnings(value)
+    if not warnings:
+        return ""
+    items = "".join(
+        f"<li><strong>{escape(_warning_title(warning))}</strong>: {escape(_warning_message(warning))}</li>"
+        for warning in warnings
+    )
+    return _html_section("Unavailable Sections", f"<ul>{items}</ul>")
+
+
+def _markdown_pipeline_warnings(value: Any) -> str:
+    warnings = _pipeline_warnings(value)
+    if not warnings:
+        return ""
+    lines = ["## Unavailable Sections", ""]
+    lines.extend(f"- **{_warning_title(warning)}**: {_warning_message(warning)}" for warning in warnings)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _discord_pipeline_warnings(value: Any) -> str:
+    warnings = _pipeline_warnings(value)
+    if not warnings:
+        return ""
+    lines = ["**Unavailable Sections**"]
+    lines.extend(f"- **{_warning_title(warning)}**: {_warning_message(warning)}" for warning in warnings)
+    return "\n".join(lines)
+
+
+def _text_pipeline_warnings(value: Any) -> str:
+    warnings = _pipeline_warnings(value)
+    if not warnings:
+        return ""
+    lines = ["UNAVAILABLE SECTIONS"]
+    lines.extend(f"- {_warning_title(warning)}: {_warning_message(warning)}" for warning in warnings)
+    return "\n".join(lines)
+
+
+def _pipeline_warnings(value: Any) -> list[dict[str, Any]]:
+    return [item for item in _as_list(value) if isinstance(item, dict)]
+
+
+def _warning_title(warning: dict[str, Any]) -> str:
+    section = str(warning.get("section") or "section").replace("_", " ").title()
+    source_id = warning.get("source_id")
+    return f"{section} ({source_id})" if source_id else section
+
+
+def _warning_message(warning: dict[str, Any]) -> str:
+    return _stringify_item(warning.get("message") or "Unavailable.")
 
 
 def _html_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:

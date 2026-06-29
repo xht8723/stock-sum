@@ -262,3 +262,27 @@ def test_grouped_text_renderer_includes_capitol_trades() -> None:
     assert "POLITICIAN TRADING INFO" in rendered
     assert "Nancy Pelosi (Democrat | House | CA) BUY* Intel Corp" in rendered
     assert "TRADES: 36,776" not in rendered
+
+
+def test_renderer_outputs_pipeline_warnings_in_all_modes() -> None:
+    response = _grouped_response()
+    response["pipeline_warnings"] = [
+        {
+            "section": "capitol_trades",
+            "source_id": "https://www.capitoltrades.com/trades?page=1",
+            "phase": "scraping_capitol_trades",
+            "message": "Vercel checkpoint",
+            "recoverable": True,
+        }
+    ]
+
+    html = PresentationRenderer().render(response, mode="html")
+    markdown = PresentationRenderer().render(response, mode="markdown")
+    discord = PresentationRenderer().render(response, mode="discord")
+    text = PresentationRenderer().render(response, mode="text")
+
+    assert "Unavailable Sections" in html
+    assert "Vercel checkpoint" in html
+    assert "## Unavailable Sections" in markdown
+    assert "**Unavailable Sections**" in discord
+    assert "UNAVAILABLE SECTIONS" in text

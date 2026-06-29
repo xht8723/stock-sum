@@ -56,6 +56,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_POLL_SECONDS = 5.0
 DEFAULT_TIMEOUT_SECONDS = 14 * 60
 DISCORD_INLINE_LIMIT = 1900
+DISCORD_FAILURE_LIMIT = 1900
 SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
 
 
@@ -306,7 +307,10 @@ class StockSumReport(commands.Cog):
     ) -> None:
         """Slash command handler for report generation."""
 
-        await interaction.response.defer(ephemeral=private, thinking=True)
+        await interaction.response.send_message(
+            "Report is being generated, please wait a few minutes.",
+            ephemeral=private,
+        )
         try:
             artifact = await StockSumHttpClient.from_env().run_report(
                 profile=profile,
@@ -314,29 +318,21 @@ class StockSumReport(commands.Cog):
                 include_capitol_trades=include_capitol_trades,
             )
         except StockSumCogError as exc:
-            await interaction.followup.send(f"stock-sum report failed: {exc}", ephemeral=private)
+            await interaction.followup.send(_failure_message(exc), ephemeral=private)
             return
 
         if discord is None:
             await interaction.followup.send("stock-sum report is ready, but discord.py is not available.", ephemeral=private)
             return
 
-        message = (
-            f"stock-sum report complete.\n"
-            f"profile: `{profile}`\n"
-            f"format: `{format}`\n"
-            f"job: `{artifact.job_id}`"
-        )
         if format == "discord":
             report_text = artifact.content.decode("utf-8", errors="replace").strip()
-            inline_message = f"{message}\n\n{report_text}" if report_text else message
-            if len(inline_message) <= DISCORD_INLINE_LIMIT:
-                await interaction.followup.send(inline_message, ephemeral=private)
-                return
-            message += "\nReport was too long for one Discord message, so it is attached."
+            for chunk in _split_discord_markdown(report_text):
+                await interaction.followup.send(chunk, ephemeral=private)
+            return
 
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await interaction.followup.send(message, file=file, ephemeral=private)
+        await interaction.followup.send("Report generated.", file=file, ephemeral=private)
 
 
 async def _response_error_text(response: _ClientResponse) -> str:
@@ -357,6 +353,69 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise StockSumRequestError(f"stock-sum response is missing {key}.")
     return value
+
+
+def _failure_message(exc: Exception) -> str:
+    message = f"stock-sum report failed: {exc}"
+    if len(message) <= DISCORD_FAILURE_LIMIT:
+        return message
+    return message[: DISCORD_FAILURE_LIMIT - 3].rstrip() + "..."
+
+
+def _split_discord_markdown(content: str, *, limit: int = DISCORD_INLINE_LIMIT) -> list[str]:
+    """Split Discord markdown into message-sized chunks, preserving readable boundaries."""
+
+    clean = content.strip()
+    if not clean:
+        return ["Report generated, but it did not contain any text."]
+    if len(clean) <= limit:
+        return [clean]
+
+    chunks: list[str] = []
+    current = ""
+    for block in clean.split("\n\n"):
+        current = _append_segment(chunks, current, block, separator="\n\n", limit=limit)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _append_segment(chunks: list[str], current: str, segment: str, *, separator: str, limit: int) -> str:
+    segment = segment.strip()
+    if not segment:
+        return current
+    if len(segment) > limit:
+        current = _flush_current(chunks, current)
+        for line in segment.splitlines():
+            current = _append_line(chunks, current, line, limit=limit)
+        return current
+
+    candidate = f"{current}{separator}{segment}" if current else segment
+    if len(candidate) <= limit:
+        return candidate
+    chunks.append(current)
+    return segment
+
+
+def _append_line(chunks: list[str], current: str, line: str, *, limit: int) -> str:
+    line = line.rstrip()
+    if not line:
+        return current
+    if len(line) > limit:
+        current = _flush_current(chunks, current)
+        chunks.extend(line[index : index + limit] for index in range(0, len(line), limit))
+        return ""
+    candidate = f"{current}\n{line}" if current else line
+    if len(candidate) <= limit:
+        return candidate
+    chunks.append(current)
+    return line
+
+
+def _flush_current(chunks: list[str], current: str) -> str:
+    if current:
+        chunks.append(current)
+    return ""
 
 
 def _header_value(headers: Any, key: str) -> str | None:
