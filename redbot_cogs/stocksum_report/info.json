@@ -1,0 +1,11 @@
+{
+  "author": ["stock-sum"],
+  "description": "Request stock-sum reports through a Discord slash command.",
+  "install_msg": "Set STOCK_SUM_HTTP_TOKEN for the Redbot process, make sure stock-sum daemon is running, then sync slash commands.",
+  "short": "Slash command bridge for stock-sum reports.",
+  "name": "stocksum_report",
+  "tags": ["stock-sum", "reports", "slash"],
+  "requirements": [],
+  "min_bot_version": "3.5.0",
+  "end_user_data_statement": "This cog sends Discord user requests to a local stock-sum HTTP service and does not persist Discord user data."
+}
