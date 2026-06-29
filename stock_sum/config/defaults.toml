@@ -5,7 +5,7 @@ timezone = "UTC"
 [server]
 host = "127.0.0.1"
 port = 8000
-auth_token_env = "STOCK_SUM_HTTP_TOKEN"
+blacklisted_ips = []
 artifact_dir = "data/http_jobs"
 job_retention_hours = 24
 

@@ -5,14 +5,14 @@ HTTP server.
 
 ## Environment
 
-The Redbot process needs:
+The Redbot process may set:
 
 ```bash
-STOCK_SUM_HTTP_TOKEN=the_same_token_used_by_stock_sum
 STOCK_SUM_BASE_URL=http://127.0.0.1:8000
 ```
 
 `STOCK_SUM_BASE_URL` is optional and defaults to `http://127.0.0.1:8000`.
+The stock-sum HTTP API is open to non-blacklisted clients.
 
 ## Load
 

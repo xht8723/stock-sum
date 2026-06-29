@@ -68,6 +68,8 @@ def test_cli_help() -> None:
     assert "run-report" in result.output
     assert "collect" in result.output
     assert "config" in result.output
+    assert "setup" in result.output
+    assert "secrets" in result.output
     assert "payload" in result.output
     assert "llm" in result.output
     assert "report" in result.output
@@ -130,6 +132,197 @@ def test_config_source_help() -> None:
     assert reddit_result.exit_code == 0
     assert "add" in reddit_result.output
     assert "delete" in reddit_result.output
+
+
+def test_llm_providers_lists_deepseek() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["llm", "providers"])
+
+    assert result.exit_code == 0
+    assert '"provider": "deepseek"' in result.output
+    assert '"api_key_env": "DEEPSEEK_API_KEY"' in result.output
+    assert '"implemented": true' in result.output
+
+
+def test_secrets_set_list_remove_without_printing_value(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    runner = CliRunner()
+
+    set_result = runner.invoke(
+        app,
+        ["secrets", "set", "TEST_SECRET", "--env-file", str(env_file), "--value", "super-secret"],
+    )
+    env_text_after_set = env_file.read_text(encoding="utf-8")
+    list_result = runner.invoke(app, ["secrets", "list", "--env-file", str(env_file)])
+    remove_result = runner.invoke(app, ["secrets", "remove", "TEST_SECRET", "--env-file", str(env_file)])
+    list_after_remove = runner.invoke(app, ["secrets", "list", "--env-file", str(env_file)])
+
+    assert set_result.exit_code == 0
+    assert "super-secret" not in set_result.output
+    assert env_text_after_set == "TEST_SECRET=super-secret\n"
+    assert list_result.exit_code == 0
+    assert "TEST_SECRET" in list_result.output
+    assert "super-secret" not in list_result.output
+    assert remove_result.exit_code == 0
+    assert list_after_remove.exit_code == 0
+    assert "TEST_SECRET" not in list_after_remove.output
+
+
+def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / ".env"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "setup",
+            "init",
+            "--yes",
+            "--config",
+            str(config_path),
+            "--env-file",
+            str(env_file),
+            "--xpoz-api-key",
+            "xpoz-secret",
+            "--llm-api-key",
+            "deepseek-secret",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--x-user",
+            "aleabitoreddit",
+            "--subreddit",
+            "wallstreetbets",
+        ],
+    )
+
+    assert result.exit_code == 0
+    config_text = config_path.read_text(encoding="utf-8")
+    env_text = env_file.read_text(encoding="utf-8")
+    assert 'host = "0.0.0.0"' in config_text
+    assert "port = 8080" in config_text
+    assert 'provider = "deepseek"' in config_text
+    assert '"x.aleabitoreddit"' in config_text
+    assert '"reddit.wallstreetbets"' in config_text
+    assert "XPOZ_API_KEY=xpoz-secret" in env_text
+    assert "DEEPSEEK_API_KEY=deepseek-secret" in env_text
+    assert "deepseek-secret" not in result.output
+    assert "Next steps" in result.output
+
+
+def test_setup_check_reports_missing_and_present_secrets(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / ".env"
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    set_xpoz_env = runner.invoke(
+        app,
+        ["config", "set", str(config_path), "providers.xpoz.api_key_env", "'MISSING_TEST_XPOZ_KEY'"],
+    )
+    set_llm_env = runner.invoke(
+        app,
+        ["config", "set", str(config_path), "llm.api_key_env", "'MISSING_TEST_DEEPSEEK_KEY'"],
+    )
+    missing_result = runner.invoke(app, ["setup", "check", "--config", str(config_path), "--env-file", str(env_file)])
+    set_xpoz = runner.invoke(app, ["secrets", "set", "MISSING_TEST_XPOZ_KEY", "--env-file", str(env_file), "--value", "x"])
+    set_llm = runner.invoke(app, ["secrets", "set", "MISSING_TEST_DEEPSEEK_KEY", "--env-file", str(env_file), "--value", "d"])
+    passed_result = runner.invoke(app, ["setup", "check", "--config", str(config_path), "--env-file", str(env_file)])
+
+    assert init_result.exit_code == 0
+    assert set_xpoz_env.exit_code == 0
+    assert set_llm_env.exit_code == 0
+    assert missing_result.exit_code == 1
+    assert "Missing required secrets" in missing_result.output
+    assert set_xpoz.exit_code == 0
+    assert set_llm.exit_code == 0
+    assert passed_result.exit_code == 0
+    assert "Setup check passed" in passed_result.output
+
+
+def test_setup_reset_requires_double_confirmation_and_removes_targets(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / ".env"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "stock_sum.sqlite3").write_text("db", encoding="utf-8")
+    config_path.write_text("[service]\nname = \"stock-sum\"\n", encoding="utf-8")
+    env_file.write_text("XPOZ_API_KEY=secret\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "setup",
+            "reset",
+            "--config",
+            str(config_path),
+            "--env-file",
+            str(env_file),
+            "--data-dir",
+            str(data_dir),
+        ],
+        input="y\nRESET\n",
+    )
+
+    assert result.exit_code == 0
+    assert not config_path.exists()
+    assert not env_file.exists()
+    assert not data_dir.exists()
+    assert '"status": "reset"' in result.output
+    assert "stock-sum setup init" in result.output
+
+
+def test_setup_reset_cancel_keeps_targets(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / ".env"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    config_path.write_text("[service]\nname = \"stock-sum\"\n", encoding="utf-8")
+    env_file.write_text("XPOZ_API_KEY=secret\n", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "setup",
+            "reset",
+            "--config",
+            str(config_path),
+            "--env-file",
+            str(env_file),
+            "--data-dir",
+            str(data_dir),
+        ],
+        input="n\n",
+    )
+
+    assert result.exit_code == 1
+    assert config_path.exists()
+    assert env_file.exists()
+    assert data_dir.exists()
+    assert "Reset cancelled" in result.output
+
+
+def test_daemon_reports_missing_setup_without_starting_server(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config.toml"
+    runner = CliRunner()
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    set_result = runner.invoke(
+        app,
+        ["config", "set", str(config_path), "llm.api_key_env", "'MISSING_TEST_LLM_KEY'"],
+    )
+    monkeypatch.delenv("MISSING_TEST_LLM_KEY", raising=False)
+
+    result = runner.invoke(app, ["daemon", "--config", str(config_path)])
+
+    assert init_result.exit_code == 0
+    assert set_result.exit_code == 0
+    assert result.exit_code == 1
+    assert "stock-sum" in result.output
+    assert "setup init" in result.output
 
 
 def test_config_profile_add_edit_delete(tmp_path) -> None:

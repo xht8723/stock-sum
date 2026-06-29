@@ -19,7 +19,7 @@ class ServerConfig(BaseModel):
 
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
-    auth_token_env: str = "STOCK_SUM_HTTP_TOKEN"
+    blacklisted_ips: list[str] = Field(default_factory=list)
     artifact_dir: str = "data/http_jobs"
     job_retention_hours: int = Field(default=24, ge=1)
 

@@ -9,7 +9,7 @@ from typing import Any
 import asyncio
 import ast
 import json
-import os
+import shutil
 
 import typer
 import uvicorn
@@ -17,6 +17,15 @@ from rich.console import Console
 
 from stock_sum.config.loader import load_config
 from stock_sum.collectors.playwright.capitol_trades import CAPITOL_TRADES_URL, scrape_capitol_trades
+from stock_sum.config.secrets import (
+    load_env_file,
+    missing_secret_names,
+    read_env_file,
+    remove_secret,
+    required_secret_names,
+    set_secret,
+    write_env_file,
+)
 from stock_sum.config.writer import (
     add_profile,
     add_subreddit,
@@ -35,11 +44,11 @@ from stock_sum.config.writer import (
     write_default_config,
 )
 from stock_sum.core.context import RuntimeContext
-from stock_sum.core.errors import StockSumError
+from stock_sum.core.errors import ConfigurationError, StockSumError
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult
 from stock_sum.core.pipeline import ReportPipeline
 from stock_sum.llm.catalog import load_models_dev_catalog
-from stock_sum.llm.registry import build_llm_client
+from stock_sum.llm.registry import build_llm_client, get_llm_provider, list_llm_providers
 from stock_sum.media.downloader import MediaDownloader
 from stock_sum.reports.presentation import PresentationRenderError, PresentationRenderer
 from stock_sum.reports.summary_input import SummaryInputBuilder
@@ -48,6 +57,8 @@ from stock_sum.storage.sqlite import SQLiteStorageRepository
 
 app = typer.Typer(help="Trading information summarization service.")
 config_app = typer.Typer(help="Manage TOML configuration.")
+setup_app = typer.Typer(help="First-run setup and environment validation.")
+secrets_app = typer.Typer(help="Manage local env-file secrets.")
 profile_app = typer.Typer(help="Manage report profiles in TOML configuration.")
 x_user_app = typer.Typer(help="Manage X user sources in TOML configuration.")
 subreddit_app = typer.Typer(help="Manage subreddit sources in TOML configuration.")
@@ -55,6 +66,8 @@ payload_app = typer.Typer(help="Build LLM-ready payloads from collected data.")
 llm_app = typer.Typer(help="Run LLM summarization against payloads.")
 report_app = typer.Typer(help="Render final presentation reports.")
 app.add_typer(config_app, name="config")
+app.add_typer(setup_app, name="setup")
+app.add_typer(secrets_app, name="secrets")
 app.add_typer(payload_app, name="payload")
 app.add_typer(llm_app, name="llm")
 app.add_typer(report_app, name="report")
@@ -92,17 +105,68 @@ def _split_csv(value: str | None) -> list[str] | None:
 def _load_env_file(path: Path = Path(".env")) -> None:
     """Load simple KEY=VALUE pairs from a local env file without overriding the process."""
 
+    load_env_file(path)
+
+
+def _setup_issues(config_path: Path, env_file: Path) -> list[str]:
+    """Return actionable setup issues."""
+
+    issues: list[str] = []
+    try:
+        settings = load_config(config_path)
+    except Exception as exc:
+        return [f"Config is invalid: {exc}"]
+
+    try:
+        provider = get_llm_provider(settings.llm.provider)
+        if not provider.implemented:
+            issues.append(f"LLM provider is not implemented: {settings.llm.provider}")
+    except ConfigurationError as exc:
+        issues.append(str(exc))
+
+    required = required_secret_names(
+        xpoz_api_key_env=settings.providers.xpoz.api_key_env,
+        llm_api_key_env=settings.llm.api_key_env,
+    )
+    missing = missing_secret_names(required, env_file=env_file)
+    if missing:
+        issues.append(f"Missing required secrets: {', '.join(missing)}")
+
+    storage_parent = Path(settings.storage.sqlite_path).parent
+    try:
+        storage_parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        issues.append(f"SQLite directory is not writable: {storage_parent} ({exc})")
+    return issues
+
+
+def _validate_runtime_setup(settings) -> None:
+    """Fail daemon startup with actionable setup guidance."""
+
+    missing = missing_secret_names(
+        required_secret_names(
+            xpoz_api_key_env=settings.providers.xpoz.api_key_env,
+            llm_api_key_env=settings.llm.api_key_env,
+        ),
+        env_file=Path(".env"),
+    )
+    if missing:
+        raise ConfigurationError(
+            "Missing required environment variables: "
+            f"{', '.join(missing)}. Run `stock-sum setup init` or set them in an env file."
+        )
+
+
+def _remove_reset_target(path: Path) -> bool:
+    """Remove one setup reset target if it exists."""
+
     if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+        return False
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return True
 
 
 @app.command("run-report")
@@ -160,7 +224,202 @@ def daemon(
 
     _load_env_file()
     settings = load_config(config)
+    try:
+        _validate_runtime_setup(settings)
+    except ConfigurationError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
     uvicorn.run(build_daemon(settings), host=host or settings.server.host, port=port or settings.server.port)
+
+
+@setup_app.command("init")
+def setup_init(
+    config: Path = typer.Option(Path("config.toml"), "--config", "-c", help="Config TOML path to write."),
+    env_file: Path = typer.Option(Path(".env"), "--env-file", help="Env file path for secrets."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing config file."),
+    yes: bool = typer.Option(False, "--yes", help="Accept defaults and use provided key options."),
+    host: str | None = typer.Option(None, "--host", help="HTTP server host."),
+    port: int | None = typer.Option(None, "--port", help="HTTP server port."),
+    llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider id."),
+    xpoz_api_key: str | None = typer.Option(None, "--xpoz-api-key", help="Xpoz API key to store in env file."),
+    llm_api_key: str | None = typer.Option(None, "--llm-api-key", help="LLM API key to store in env file."),
+    x_user: str | None = typer.Option(None, "--x-user", help="Optional first X handle to add to default profile."),
+    subreddit: str | None = typer.Option(None, "--subreddit", help="Optional first subreddit to add to default profile."),
+) -> None:
+    """Run the first-time interactive setup wizard."""
+
+    providers = list_llm_providers()
+    default_provider = "deepseek"
+    console.print("stock-sum setup")
+    console.print("Supported LLM providers:")
+    for index, provider in enumerate(providers, start=1):
+        marker = "implemented" if provider.implemented else "planned"
+        console.print(f"{index}. {provider.provider_id} - {provider.display_name} ({marker})")
+
+    if not yes:
+        config = Path(typer.prompt("Config path", default=str(config)))
+        env_file = Path(typer.prompt("Env file path", default=str(env_file)))
+        host = typer.prompt("HTTP host", default=host or "127.0.0.1")
+        port = int(typer.prompt("HTTP port", default=str(port or 8000)))
+        llm_provider = typer.prompt("LLM provider", default=llm_provider or default_provider)
+    else:
+        host = host or "127.0.0.1"
+        port = port or 8000
+        llm_provider = llm_provider or default_provider
+
+    descriptor = get_llm_provider(llm_provider or default_provider)
+    if not descriptor.implemented:
+        console.print(f"LLM provider is not implemented yet: {descriptor.provider_id}")
+        raise typer.Exit(code=1)
+
+    if xpoz_api_key is None and not yes:
+        xpoz_api_key = typer.prompt("XPOZ_API_KEY", hide_input=True)
+    if llm_api_key is None and not yes:
+        llm_api_key = typer.prompt(descriptor.api_key_env, hide_input=True)
+    if xpoz_api_key is None or llm_api_key is None:
+        console.print("Missing API key input. Pass --xpoz-api-key and --llm-api-key when using --yes.")
+        raise typer.Exit(code=1)
+
+    try:
+        write_default_config(config, overwrite=overwrite)
+        set_dotted_value(config, "server.host", host)
+        set_dotted_value(config, "server.port", port)
+        set_dotted_value(config, "llm.provider", descriptor.provider_id)
+        set_dotted_value(config, "llm.model", descriptor.default_model)
+        set_dotted_value(config, "llm.api_key_env", descriptor.api_key_env)
+        set_dotted_value(config, "llm.base_url", descriptor.base_url)
+    except (FileExistsError, OSError, KeyError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    env_values = read_env_file(env_file)
+    env_values["XPOZ_API_KEY"] = xpoz_api_key
+    env_values[descriptor.api_key_env] = llm_api_key
+    write_env_file(env_file, env_values)
+
+    if not yes:
+        x_user = typer.prompt("First X handle to collect (blank to skip)", default=x_user or "")
+        subreddit = typer.prompt("First subreddit to collect (blank to skip)", default=subreddit or "")
+    try:
+        if x_user:
+            add_x_user(config, x_user, enabled=True, limit=10, profile="default", overwrite=True)
+        if subreddit:
+            add_subreddit(
+                config,
+                subreddit,
+                enabled=True,
+                sort="new",
+                timeframe="day",
+                limit=10,
+                trim=True,
+                include_comments=False,
+                comments_per_post=0,
+                profile="default",
+                overwrite=True,
+            )
+    except (KeyError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"Wrote config: {config}")
+    console.print(f"Wrote env file: {env_file}")
+    console.print("Next steps:")
+    console.print(f"1. Validate setup: stock-sum setup check --config {config} --env-file {env_file}")
+    console.print(f"2. Start service: stock-sum daemon --config {config}")
+    console.print("3. Request report: POST /v1/reports/default/jobs or use the Redbot /report cog.")
+
+
+@setup_app.command("check")
+def setup_check(
+    config: Path = typer.Option(Path("config.toml"), "--config", "-c"),
+    env_file: Path = typer.Option(Path(".env"), "--env-file"),
+) -> None:
+    """Validate config, required secrets, and local runtime paths."""
+
+    issues = _setup_issues(config, env_file)
+    if issues:
+        for issue in issues:
+            console.print(f"[red]ERROR[/red] {issue}")
+        raise typer.Exit(code=1)
+    console.print("Setup check passed.")
+
+
+@setup_app.command("reset")
+def setup_reset(
+    config: Path = typer.Option(Path("config.toml"), "--config", "-c", help="Config TOML path to remove."),
+    env_file: Path = typer.Option(Path(".env"), "--env-file", help="Env file path to remove."),
+    data_dir: Path = typer.Option(Path("data"), "--data-dir", help="Local data directory to remove."),
+    yes: bool = typer.Option(False, "--yes", help="Skip interactive confirmations."),
+) -> None:
+    """Reset local stock-sum state to a clean first-run install."""
+
+    targets = [config, env_file, data_dir]
+    console.print("[red]WARNING[/red] This will delete local stock-sum setup state.")
+    console.print("Targets:")
+    for target in targets:
+        marker = "exists" if target.exists() else "not present"
+        console.print(f"- {target} ({marker})")
+
+    if not yes:
+        if not typer.confirm("Continue with reset?"):
+            console.print("Reset cancelled.")
+            raise typer.Exit(code=1)
+        confirmation = typer.prompt("Type RESET to confirm deletion")
+        if confirmation != "RESET":
+            console.print("Reset cancelled.")
+            raise typer.Exit(code=1)
+
+    removed: list[str] = []
+    for target in targets:
+        try:
+            if _remove_reset_target(target):
+                removed.append(str(target))
+        except OSError as exc:
+            console.print(f"Failed to remove {target}: {exc}")
+            raise typer.Exit(code=1) from exc
+
+    console.print_json(json.dumps({"removed": removed, "status": "reset"}))
+    console.print("Run `stock-sum setup init` to configure a fresh install.")
+
+
+@secrets_app.command("set")
+def secrets_set(
+    name: str = typer.Argument(..., help="Environment variable name."),
+    env_file: Path = typer.Option(Path(".env"), "--env-file"),
+    value: str | None = typer.Option(None, "--value", help="Secret value. Omit to prompt securely."),
+) -> None:
+    """Set one env-file secret without printing its value."""
+
+    try:
+        secret_value = value if value is not None else typer.prompt(f"Value for {name}", hide_input=True)
+        set_secret(env_file, name, secret_value)
+    except (OSError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    console.print(f"Set {name} in {env_file}")
+
+
+@secrets_app.command("list")
+def secrets_list(env_file: Path = typer.Option(Path(".env"), "--env-file")) -> None:
+    """List env-file secret names without values."""
+
+    names = sorted(read_env_file(env_file).keys())
+    console.print_json(json.dumps({"env_file": str(env_file), "secrets": names}))
+
+
+@secrets_app.command("remove")
+def secrets_remove(
+    name: str = typer.Argument(..., help="Environment variable name."),
+    env_file: Path = typer.Option(Path(".env"), "--env-file"),
+) -> None:
+    """Remove one env-file secret."""
+
+    try:
+        removed = remove_secret(env_file, name)
+    except (OSError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    console.print(f"{'Removed' if removed else 'Not present'} {name} in {env_file}")
 
 
 @payload_app.command("build")
@@ -243,6 +502,25 @@ def llm_summarize(
     }
     output.write_text(json.dumps(response_data, indent=2, ensure_ascii=False), encoding="utf-8")
     console.print(f"Wrote {output}")
+
+
+@llm_app.command("providers")
+def llm_providers() -> None:
+    """List LLM providers known to stock-sum."""
+
+    data = [
+        {
+            "provider": provider.provider_id,
+            "display_name": provider.display_name,
+            "default_model": provider.default_model,
+            "api_key_env": provider.api_key_env,
+            "implemented": provider.implemented,
+            "base_url": provider.base_url,
+            "setup_notes": provider.setup_notes,
+        }
+        for provider in list_llm_providers()
+    ]
+    console.print_json(json.dumps({"providers": data}))
 
 
 @report_app.command("render")

@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from redbot_cogs.stocksum_report.stocksum_report import (
-    StockSumConfigurationError,
     StockSumHttpClient,
     StockSumRequestError,
 )
@@ -33,7 +32,6 @@ async def test_client_sends_report_request_and_downloads_artifact() -> None:
     )
     client = StockSumHttpClient(
         base_url="http://stock-sum.local",
-        token="secret-token",
         session=session,
         poll_seconds=0,
     )
@@ -51,11 +49,11 @@ async def test_client_sends_report_request_and_downloads_artifact() -> None:
         "POST",
         "http://stock-sum.local/v1/reports/default/jobs",
         {
-            "headers": {"Authorization": "Bearer secret-token"},
+            "headers": {},
             "json": {"mode": "html", "include_capitol_trades": True},
         },
     )
-    assert session.requests[1][2]["headers"] == {"Authorization": "Bearer secret-token"}
+    assert session.requests[1][2]["headers"] == {}
 
 
 async def test_client_reports_failed_job() -> None:
@@ -63,7 +61,7 @@ async def test_client_reports_failed_job() -> None:
         post_responses=[FakeResponse(202, {"job_id": "job-2"})],
         get_responses=[FakeResponse(200, {"job_id": "job-2", "status": "failed", "error": "LLM failed"})],
     )
-    client = StockSumHttpClient(token="secret-token", session=session, poll_seconds=0)
+    client = StockSumHttpClient(session=session, poll_seconds=0)
 
     with pytest.raises(StockSumRequestError, match="LLM failed"):
         await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
@@ -75,7 +73,6 @@ async def test_client_reports_timeout() -> None:
         get_responses=[],
     )
     client = StockSumHttpClient(
-        token="secret-token",
         session=session,
         poll_seconds=0,
         timeout_seconds=0,
@@ -85,19 +82,14 @@ async def test_client_reports_timeout() -> None:
         await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
 
 
-def test_client_requires_local_http_token() -> None:
-    with pytest.raises(StockSumConfigurationError, match="STOCK_SUM_HTTP_TOKEN"):
-        StockSumHttpClient(token="")
-
-
-async def test_client_maps_auth_failure() -> None:
+async def test_client_maps_blacklist_failure() -> None:
     session = FakeSession(
-        post_responses=[FakeResponse(401, {"detail": "Invalid or missing bearer token."})],
+        post_responses=[FakeResponse(403, {"detail": "Client IP is blacklisted: 10.0.0.5"})],
         get_responses=[],
     )
-    client = StockSumHttpClient(token="bad-token", session=session)
+    client = StockSumHttpClient(session=session)
 
-    with pytest.raises(StockSumRequestError, match="rejected"):
+    with pytest.raises(StockSumRequestError, match="blacklisted"):
         await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
 
 

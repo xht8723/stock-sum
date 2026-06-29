@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
-import os
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -50,7 +49,7 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
             return {}
         return redacted_config(config)
 
-    v1 = APIRouter(prefix="/v1", dependencies=[Depends(_require_bearer_token(config))])
+    v1 = APIRouter(prefix="/v1", dependencies=[Depends(_reject_blacklisted_ip(config))])
 
     @v1.get("/config/effective")
     async def v1_effective_config() -> dict:
@@ -127,15 +126,13 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
     return router
 
 
-def _require_bearer_token(config: AppConfig | None):
-    async def dependency(authorization: str | None = Header(default=None)) -> None:
+def _reject_blacklisted_ip(config: AppConfig | None):
+    async def dependency(request: Request) -> None:
         if config is None:
-            raise HTTPException(status_code=503, detail="HTTP auth config is not loaded.")
-        expected = os.getenv(config.server.auth_token_env)
-        if not expected:
-            raise HTTPException(status_code=503, detail=f"Missing auth token env var: {config.server.auth_token_env}")
-        if authorization != f"Bearer {expected}":
-            raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+            return
+        client_ip = request.client.host if request.client is not None else None
+        if client_ip in set(config.server.blacklisted_ips):
+            raise HTTPException(status_code=403, detail=f"Client IP is blacklisted: {client_ip}")
 
     return dependency
 

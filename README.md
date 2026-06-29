@@ -69,16 +69,17 @@ On Linux hosts, install Chromium system dependencies as well:
 python -m playwright install --with-deps chromium
 ```
 
-Validate the bundled example configuration.
+Create a local config and env file with the first-run wizard.
 
 ```powershell
-stock-sum config validate stock_sum/config/example.toml
+stock-sum setup init --config config.toml --env-file .env
+stock-sum setup check --config config.toml --env-file .env
 ```
 
 Start the HTTP daemon.
 
 ```powershell
-stock-sum daemon --config stock_sum/config/example.toml --host 127.0.0.1 --port 8000
+stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
 ```
 
 Check the service.
@@ -133,6 +134,7 @@ stock-sum config subreddit delete wallstreetbets --config config.toml --profile 
 Important configuration sections:
 
 - `[service]`: service name and default timezone.
+- `[server]`: local HTTP host, port, artifact directory, and exact IP blacklist.
 - `[storage]`: SQLite database path.
 - `[models_dev]`: external model catalog URL, cache path, and refresh interval.
 - `[playwright]`: browser automation defaults for future site-specific browser
@@ -155,9 +157,20 @@ Use `.env.example` as the template for local environment variables:
 Copy-Item .env.example .env
 ```
 
-Then fill in values such as `XPOZ_API_KEY`, `DEEPSEEK_API_KEY`,
-`SMTP_USERNAME`, `SMTP_PASSWORD`, `TWILIO_ACCOUNT_SID`,
-`TWILIO_AUTH_TOKEN`, and `TWILIO_WHATSAPP_FROM` as needed.
+The easier path is to let the CLI write secret values without printing them:
+
+```powershell
+stock-sum secrets set XPOZ_API_KEY --env-file .env
+stock-sum secrets set DEEPSEEK_API_KEY --env-file .env
+stock-sum secrets list --env-file .env
+```
+
+The first-run wizard does this for required keys:
+
+```powershell
+stock-sum setup init --config config.toml --env-file .env
+stock-sum setup check --config config.toml --env-file .env
+```
 
 For a one-off PowerShell session, set API keys directly:
 
@@ -186,6 +199,12 @@ stock-sum --help
 Configuration commands:
 
 ```powershell
+stock-sum setup init --config config.toml --env-file .env
+stock-sum setup check --config config.toml --env-file .env
+stock-sum setup reset --config config.toml --env-file .env --data-dir data
+stock-sum secrets set XPOZ_API_KEY --env-file .env
+stock-sum secrets list --env-file .env
+stock-sum llm providers
 stock-sum config init config.toml
 stock-sum config validate config.toml
 stock-sum config get config.toml llm.model
@@ -213,6 +232,9 @@ stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode t
 stock-sum run-report --profile default --config config.toml
 ```
 
+`setup reset` is destructive. It prints the target config, env file, and data
+directory, then requires confirmation and typing `RESET` before deletion.
+
 The bundled example sources are disabled. To use them, either set
 `enabled = true` in TOML or add a source through the CLI, then run the generated
 collector ID directly or through a report profile. X and Reddit collection use
@@ -238,23 +260,27 @@ portable document, or `--mode text` for plain email/terminal output.
 
 ## HTTP API
 
-Start the daemon, then use these endpoints:
+Start the daemon, then use these endpoints. The local API is open to any
+non-blacklisted client; configure exact IP blocks with `[server].blacklisted_ips`.
 
 - `GET /health`: returns service health.
-- `GET /config/effective`: returns the loaded configuration. Secret values are
+- `GET /v1/config/effective`: returns the loaded configuration. Secret values are
   not stored in config; only environment variable names are present.
-- `POST /reports/{profile}/run`: accepts a manual report trigger if the profile
-  exists in the loaded config.
+- `POST /v1/reports/{profile}/jobs`: starts a full async report job.
+- `GET /v1/jobs/{job_id}`: checks job status.
+- `GET /v1/jobs/{job_id}/artifact`: downloads the rendered report artifact.
 
 Example:
 
 ```powershell
 curl http://127.0.0.1:8000/health
-curl -X POST http://127.0.0.1:8000/reports/default/run
+curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs `
+  -H "Content-Type: application/json" `
+  -d '{"mode":"html","include_capitol_trades":true}'
 ```
 
-The report trigger currently returns an accepted response from the API layer; it
-does not execute a completed summary/delivery pipeline yet.
+The response includes a `job_id` that can be polled until the report succeeds or
+fails.
 
 ## Docker quick start
 

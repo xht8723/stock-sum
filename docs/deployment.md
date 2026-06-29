@@ -115,9 +115,10 @@ server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
 
 [llm]
-provider = "openai"
-model = "gpt-4.1-mini"
-api_key_env = "OPENAI_API_KEY"
+provider = "deepseek"
+model = "deepseek-v4-flash"
+api_key_env = "DEEPSEEK_API_KEY"
+base_url = "https://api.deepseek.com"
 ```
 
 Validate the file:
@@ -146,7 +147,7 @@ Fill in only the values needed by enabled integrations:
 
 ```env
 XPOZ_API_KEY=
-OPENAI_API_KEY=
+DEEPSEEK_API_KEY=
 SMTP_USERNAME=
 SMTP_PASSWORD=
 TWILIO_ACCOUNT_SID=
@@ -154,14 +155,22 @@ TWILIO_AUTH_TOKEN=
 TWILIO_WHATSAPP_FROM=
 ```
 
-The Python process does not automatically load `.env` on bare-metal runs. Load
-the variables into the process environment before starting the daemon.
+For local setup, prefer the onboarding command:
+
+```bash
+stock-sum setup init --config config.toml --env-file .env
+stock-sum setup check --config config.toml --env-file .env
+```
+
+For systemd, write the same keys to `/etc/stock-sum/stock-sum.env` and point the
+service at that env file. The daemon remains non-interactive and fails fast if
+required secrets are missing.
 
 Windows PowerShell:
 
 ```powershell
 $env:XPOZ_API_KEY = "..."
-$env:OPENAI_API_KEY = "..."
+$env:DEEPSEEK_API_KEY = "..."
 $env:SMTP_USERNAME = "..."
 $env:SMTP_PASSWORD = "..."
 stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
@@ -236,8 +245,8 @@ pip install .
 python -m playwright install --with-deps chromium
 ```
 
-Place `config.toml` and `.env` in `/opt/stock-sum/app`, then create
-`/etc/systemd/system/stock-sum.service`:
+Place `config.toml` in `/opt/stock-sum/app` and secrets in
+`/etc/stock-sum/stock-sum.env`, then create `/etc/systemd/system/stock-sum.service`:
 
 ```ini
 [Unit]
@@ -248,7 +257,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/stock-sum/app
-EnvironmentFile=/opt/stock-sum/app/.env
+EnvironmentFile=/etc/stock-sum/stock-sum.env
 ExecStart=/opt/stock-sum/app/.venv/bin/stock-sum daemon --config /opt/stock-sum/app/config.toml --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
@@ -273,7 +282,7 @@ For development, run the daemon in an activated PowerShell session:
 ```powershell
 .\.venv\Scripts\Activate.ps1
 $env:XPOZ_API_KEY = "..."
-$env:OPENAI_API_KEY = "..."
+$env:DEEPSEEK_API_KEY = "..."
 stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
 ```
 
@@ -290,7 +299,7 @@ powershell.exe
 4. Use arguments like:
 
 ```text
--NoProfile -ExecutionPolicy Bypass -Command "$env:XPOZ_API_KEY='...'; $env:OPENAI_API_KEY='...'; & 'E:\projects\stock-sum\.venv\Scripts\stock-sum.exe' daemon --config 'E:\projects\stock-sum\config.toml' --host 0.0.0.0 --port 8000"
+-NoProfile -ExecutionPolicy Bypass -Command "$env:XPOZ_API_KEY='...'; $env:DEEPSEEK_API_KEY='...'; & 'E:\projects\stock-sum\.venv\Scripts\stock-sum.exe' daemon --config 'E:\projects\stock-sum\config.toml' --host 0.0.0.0 --port 8000"
 ```
 
 If you need many secrets, prefer setting machine/user environment variables
@@ -477,7 +486,8 @@ that installs `.[dev]` and includes `tests/`.
 ## 3. Reverse proxy notes
 
 When exposing the daemon beyond localhost, put it behind a reverse proxy or
-private network boundary. The current API has no authentication middleware.
+private network boundary. The current API has no authentication middleware, but
+you can block exact client IPs with `[server].blacklisted_ips`.
 
 Minimal Nginx location:
 

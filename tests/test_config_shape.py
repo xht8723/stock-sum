@@ -11,7 +11,7 @@ def test_example_config_is_valid() -> None:
     assert config.service.name == "stock-sum"
     assert config.server.host == "127.0.0.1"
     assert config.server.port == 8000
-    assert config.server.auth_token_env == "STOCK_SUM_HTTP_TOKEN"
+    assert config.server.blacklisted_ips == []
     assert config.server.artifact_dir == "data/http_jobs"
     assert config.playwright.channel == "chromium"
     assert config.playwright.browser == "chromium"

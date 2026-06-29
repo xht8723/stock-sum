@@ -18,61 +18,55 @@ def test_health_route() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_v1_routes_require_bearer_token(monkeypatch, tmp_path) -> None:
+def test_v1_config_returns_redacted_config_without_auth(tmp_path) -> None:
     config = _test_config(tmp_path)
-    monkeypatch.setenv("STOCK_SUM_HTTP_TOKEN", "secret")
     client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
 
     response = client.get("/v1/config/effective")
 
-    assert response.status_code == 401
-
-
-def test_v1_config_returns_redacted_config_with_auth(monkeypatch, tmp_path) -> None:
-    config = _test_config(tmp_path)
-    monkeypatch.setenv("STOCK_SUM_HTTP_TOKEN", "secret")
-    client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
-
-    response = client.get("/v1/config/effective", headers={"Authorization": "Bearer secret"})
-
     assert response.status_code == 200
-    assert response.json()["server"]["auth_token_env"] == "STOCK_SUM_HTTP_TOKEN"
+    assert response.json()["server"]["blacklisted_ips"] == []
 
 
-def test_report_job_lifecycle_and_artifact_download(monkeypatch, tmp_path) -> None:
-    config = _test_config(tmp_path)
-    monkeypatch.setenv("STOCK_SUM_HTTP_TOKEN", "secret")
+def test_v1_rejects_blacklisted_ip(tmp_path) -> None:
+    config = _test_config(tmp_path, blacklisted_ips=["testclient"])
     client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
-    headers = {"Authorization": "Bearer secret"}
+
+    response = client.get("/v1/config/effective")
+
+    assert response.status_code == 403
+    assert "blacklisted" in response.json()["detail"]
+
+
+def test_report_job_lifecycle_and_artifact_download(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
 
     create_response = client.post(
         "/v1/reports/default/jobs",
         json={"mode": "html", "include_capitol_trades": False},
-        headers=headers,
     )
 
     assert create_response.status_code == 202
     job_id = create_response.json()["job_id"]
 
-    status_response = client.get(f"/v1/jobs/{job_id}", headers=headers)
+    status_response = client.get(f"/v1/jobs/{job_id}")
     assert status_response.status_code == 200
     assert status_response.json()["status"] == "succeeded"
     assert status_response.json()["artifact_url"] == f"/v1/jobs/{job_id}/artifact"
 
-    artifact_response = client.get(f"/v1/jobs/{job_id}/artifact", headers=headers)
+    artifact_response = client.get(f"/v1/jobs/{job_id}/artifact")
     assert artifact_response.status_code == 200
     assert "fake report" in artifact_response.text
 
 
-def test_missing_profile_returns_404(monkeypatch, tmp_path) -> None:
+def test_missing_profile_returns_404(tmp_path) -> None:
     config = _test_config(tmp_path)
-    monkeypatch.setenv("STOCK_SUM_HTTP_TOKEN", "secret")
     client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
 
     response = client.post(
         "/v1/reports/missing/jobs",
         json={"mode": "html"},
-        headers={"Authorization": "Bearer secret"},
     )
 
     assert response.status_code == 404
@@ -139,11 +133,16 @@ class FakeJobManager:
         job.artifact_media_type = "application/json"
 
 
-def _test_config(tmp_path: Path):
+def _test_config(tmp_path: Path, *, blacklisted_ips: list[str] | None = None):
     config = load_config(Path("stock_sum/config/example.toml"))
     return config.model_copy(
         update={
-            "server": config.server.model_copy(update={"artifact_dir": str(tmp_path / "jobs")}),
+            "server": config.server.model_copy(
+                update={
+                    "artifact_dir": str(tmp_path / "jobs"),
+                    "blacklisted_ips": blacklisted_ips or [],
+                }
+            ),
             "storage": config.storage.model_copy(update={"sqlite_path": str(tmp_path / "stock_sum.sqlite3")}),
         }
     )

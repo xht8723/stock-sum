@@ -7,6 +7,7 @@ MODULES = [
     "stock_sum",
     "stock_sum.cli",
     "stock_sum.config.loader",
+    "stock_sum.config.secrets",
     "stock_sum.core.pipeline",
     "stock_sum.collectors.base",
     "stock_sum.llm.catalog",

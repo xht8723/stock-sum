@@ -121,15 +121,11 @@ class StockSumHttpClient:
         self,
         *,
         base_url: str = DEFAULT_BASE_URL,
-        token: str,
         session: _ClientSession | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
     ) -> None:
-        if not token:
-            raise StockSumConfigurationError("STOCK_SUM_HTTP_TOKEN is not set for the Redbot process.")
         self.base_url = base_url.rstrip("/")
-        self.token = token
         self.session = session
         self.timeout_seconds = timeout_seconds
         self.poll_seconds = poll_seconds
@@ -140,7 +136,6 @@ class StockSumHttpClient:
 
         return cls(
             base_url=os.getenv("STOCK_SUM_BASE_URL", DEFAULT_BASE_URL),
-            token=os.getenv("STOCK_SUM_HTTP_TOKEN", ""),
         )
 
     async def run_report(
@@ -260,7 +255,9 @@ class StockSumHttpClient:
     async def _raise_http_error(self, response: _ClientResponse) -> None:
         message = await _response_error_text(response)
         if response.status == 401:
-            raise StockSumRequestError("stock-sum rejected the local HTTP token.")
+            raise StockSumRequestError("stock-sum rejected the request.")
+        if response.status == 403:
+            raise StockSumRequestError("stock-sum refused this client IP because it is blacklisted.")
         if response.status == 404:
             raise StockSumRequestError(f"stock-sum could not find the requested resource: {message}")
         if response.status == 503:
@@ -268,7 +265,7 @@ class StockSumHttpClient:
         raise StockSumRequestError(f"stock-sum HTTP {response.status}: {message}")
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.token}"}
+        return {}
 
 
 class StockSumReport(commands.Cog):
