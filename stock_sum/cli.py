@@ -236,7 +236,7 @@ def daemon(
 def setup_init(
     config: Path = typer.Option(Path("config.toml"), "--config", "-c", help="Config TOML path to write."),
     env_file: Path = typer.Option(Path(".env"), "--env-file", help="Env file path for secrets."),
-    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing config file."),
+    overwrite: bool = typer.Option(True, "--overwrite/--no-overwrite", help="Replace an existing config file."),
     yes: bool = typer.Option(False, "--yes", help="Accept defaults and use provided key options."),
     host: str | None = typer.Option(None, "--host", help="HTTP server host."),
     port: int | None = typer.Option(None, "--port", help="HTTP server port."),

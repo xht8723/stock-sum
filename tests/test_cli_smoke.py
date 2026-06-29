@@ -212,6 +212,63 @@ def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
     assert "Next steps" in result.output
 
 
+def test_setup_init_overwrites_existing_config_by_default(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / ".env"
+    config_path.write_text('stale = "config"\n', encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "setup",
+            "init",
+            "--yes",
+            "--config",
+            str(config_path),
+            "--env-file",
+            str(env_file),
+            "--xpoz-api-key",
+            "xpoz-secret",
+            "--llm-api-key",
+            "deepseek-secret",
+        ],
+    )
+
+    assert result.exit_code == 0
+    config_text = config_path.read_text(encoding="utf-8")
+    assert 'stale = "config"' not in config_text
+    assert '[providers.xpoz]' in config_text
+
+
+def test_setup_init_no_overwrite_rejects_existing_config(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / ".env"
+    config_path.write_text('stale = "config"\n', encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "setup",
+            "init",
+            "--yes",
+            "--no-overwrite",
+            "--config",
+            str(config_path),
+            "--env-file",
+            str(env_file),
+            "--xpoz-api-key",
+            "xpoz-secret",
+            "--llm-api-key",
+            "deepseek-secret",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Config already exists" in result.output
+
+
 def test_setup_check_reports_missing_and_present_secrets(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     env_file = tmp_path / ".env"
