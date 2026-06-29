@@ -273,9 +273,9 @@ def setup_init(
         raise typer.Exit(code=1)
 
     if xpoz_api_key is None and not yes:
-        xpoz_api_key = typer.prompt("XPOZ_API_KEY", hide_input=True)
+        xpoz_api_key = typer.prompt("XPOZ_API_KEY")
     if llm_api_key is None and not yes:
-        llm_api_key = typer.prompt(descriptor.api_key_env, hide_input=True)
+        llm_api_key = typer.prompt(descriptor.api_key_env)
     if xpoz_api_key is None or llm_api_key is None:
         console.print("Missing API key input. Pass --xpoz-api-key and --llm-api-key when using --yes.")
         raise typer.Exit(code=1)
@@ -391,7 +391,7 @@ def secrets_set(
     """Set one env-file secret without printing its value."""
 
     try:
-        secret_value = value if value is not None else typer.prompt(f"Value for {name}", hide_input=True)
+        secret_value = value if value is not None else typer.prompt(f"Value for {name}")
         set_secret(env_file, name, secret_value)
     except (OSError, ValueError) as exc:
         console.print(str(exc))
