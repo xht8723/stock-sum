@@ -303,7 +303,7 @@ class StockSumReport(commands.Cog):
         profile: str = "default",
         format: str = "discord",
         include_capitol_trades: bool = True,
-        private: bool = True,
+        private: bool = False,
     ) -> None:
         """Slash command handler for report generation."""
 
@@ -318,21 +318,25 @@ class StockSumReport(commands.Cog):
                 include_capitol_trades=include_capitol_trades,
             )
         except StockSumCogError as exc:
-            await interaction.followup.send(_failure_message(exc), ephemeral=private)
+            await _send_report_output(interaction, _failure_message(exc), private=private)
             return
 
         if discord is None:
-            await interaction.followup.send("stock-sum report is ready, but discord.py is not available.", ephemeral=private)
+            await _send_report_output(
+                interaction,
+                "stock-sum report is ready, but discord.py is not available.",
+                private=private,
+            )
             return
 
         if format == "discord":
             report_text = artifact.content.decode("utf-8", errors="replace").strip()
             for chunk in _split_discord_markdown(report_text):
-                await interaction.followup.send(chunk, ephemeral=private)
+                await _send_report_output(interaction, chunk, private=private)
             return
 
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await interaction.followup.send("Report generated.", file=file, ephemeral=private)
+        await _send_report_output(interaction, "Report generated.", private=private, file=file)
 
 
 async def _response_error_text(response: _ClientResponse) -> str:
@@ -360,6 +364,24 @@ def _failure_message(exc: Exception) -> str:
     if len(message) <= DISCORD_FAILURE_LIMIT:
         return message
     return message[: DISCORD_FAILURE_LIMIT - 3].rstrip() + "..."
+
+
+async def _send_report_output(interaction, content: str, *, private: bool, file: Any | None = None) -> None:
+    """Send final report output without replying to the acknowledgement when public."""
+
+    if private:
+        await interaction.followup.send(content, ephemeral=True, file=file, suppress_embeds=True)
+        return
+
+    channel = getattr(interaction, "channel", None)
+    if channel is not None and hasattr(channel, "send"):
+        if file is None:
+            await channel.send(content, suppress_embeds=True)
+        else:
+            await channel.send(content, file=file, suppress_embeds=True)
+        return
+
+    await interaction.followup.send(content, ephemeral=False, file=file, suppress_embeds=True)
 
 
 def _split_discord_markdown(content: str, *, limit: int = DISCORD_INLINE_LIMIT) -> list[str]:

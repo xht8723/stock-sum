@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from stock_sum.api.jobs import HttpJobManager, ReportJobOptions
 from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
+from stock_sum.retention import RetentionSummary
 from stock_sum.storage.models import StoredXPost
 
 
@@ -93,11 +95,170 @@ async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
     assert status.warnings[0]["source_id"] == "x.missing"
 
 
+async def test_report_job_uses_recent_cache_and_rerenders_requested_mode(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    first_options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", first_options)
+    await manager.run_report_job(first_job.job_id, first_options)
+
+    second_options = ReportJobOptions(mode="discord")
+    second_job = manager.create_report_job("default", second_options)
+    await manager.run_report_job(second_job.job_id, second_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.cache_hit is True
+    assert second_status.cached_from_job_id == first_job.job_id
+    assert second_status.cache_age_seconds is not None
+    assert second_status.artifact_path is not None
+    assert second_status.artifact_path.endswith("report.md")
+    assert pipeline.calls == 1
+    assert llm.calls == 1
+
+
+async def test_report_job_cache_miss_when_content_options_change(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    first_options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", first_options)
+    await manager.run_report_job(first_job.job_id, first_options)
+
+    second_options = ReportJobOptions(mode="html", instructions="Focus on semiconductor names.")
+    second_job = manager.create_report_job("default", second_options)
+    await manager.run_report_job(second_job.job_id, second_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.cache_hit is False
+    assert second_status.cached_from_job_id is None
+    assert pipeline.calls == 2
+    assert llm.calls == 2
+
+
+async def test_report_job_cache_expires_after_ttl(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", options)
+    await manager.run_report_job(first_job.job_id, options)
+    first_status = manager.get_job(first_job.job_id)
+    assert first_status is not None
+    first_status.finished_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    manager._save(first_status)
+
+    second_job = manager.create_report_job("default", options)
+    await manager.run_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.cache_hit is False
+    assert pipeline.calls == 2
+    assert llm.calls == 2
+
+
+async def test_report_job_ignores_cache_when_cached_summary_is_missing(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", options)
+    await manager.run_report_job(first_job.job_id, options)
+    first_status = manager.get_job(first_job.job_id)
+    assert first_status is not None
+    assert first_status.summary_path is not None
+    Path(first_status.summary_path).unlink()
+
+    second_job = manager.create_report_job("default", options)
+    await manager.run_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.cache_hit is False
+    assert pipeline.calls == 2
+    assert llm.calls == 2
+
+
+async def test_report_job_does_not_use_cache_when_disabled(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    llm = FakeLLM()
+    config = _test_config(tmp_path)
+    manager = HttpJobManager(
+        config.model_copy(update={"server": config.server.model_copy(update={"report_cache_ttl_seconds": 0})}),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", options)
+    await manager.run_report_job(first_job.job_id, options)
+    second_job = manager.create_report_job("default", options)
+    await manager.run_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.cache_hit is False
+    assert pipeline.calls == 2
+    assert llm.calls == 2
+
+
+async def test_report_job_runs_retention_after_regular_and_cache_hit_jobs(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    retention = FakeRetentionService()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: FakeLLM(),
+        retention_service_factory=lambda: retention,
+    )
+    options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", options)
+    await manager.run_report_job(first_job.job_id, options)
+    second_job = manager.create_report_job("default", options)
+    await manager.run_report_job(second_job.job_id, options)
+
+    first_status = manager.get_job(first_job.job_id)
+    second_status = manager.get_job(second_job.job_id)
+    assert retention.calls == 2
+    assert first_status is not None
+    assert second_status is not None
+    assert first_status.cleanup_result is not None
+    assert second_status.cache_hit is True
+    assert second_status.cleanup_result is not None
+
+
 class FakePipeline:
     def __init__(self, result: PipelineCollectionResult) -> None:
         self.result = result
+        self.calls = 0
 
     async def run_report(self, profile: str) -> PipelineCollectionResult:
+        self.calls += 1
         return self.result
 
 
@@ -165,8 +326,27 @@ class FakeLLM:
         )
 
 
+class FakeRetentionService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def prune(self, *, protected_paths=None, dry_run: bool = False) -> RetentionSummary:
+        self.calls += 1
+        return RetentionSummary(
+            enabled=True,
+            dry_run=dry_run,
+            max_total_bytes=100,
+            bytes_before=50,
+            bytes_after=50,
+        )
+
+
 async def failed_capitol_scraper(**kwargs):
     raise RuntimeError("Capitol blocked")
+
+
+def _successful_collection_result() -> PipelineCollectionResult:
+    return PipelineCollectionResult(profile="default", runs=[], warnings=[])
 
 
 def _test_config(tmp_path):

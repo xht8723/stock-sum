@@ -488,6 +488,14 @@ that installs `.[dev]` and includes `tests/`.
 When exposing the daemon beyond localhost, put it behind a reverse proxy or
 private network boundary. The current API has no authentication middleware, but
 you can block exact client IPs with `[server].blacklisted_ips`.
+Successful report jobs are reused for `[server].report_cache_ttl_seconds`
+seconds, defaulting to `3600`; set it to `0` when every request should force a
+fresh collection and LLM run.
+Managed runtime data is also capped by `[retention].max_total_bytes`, defaulting
+to `2147483648` bytes. Cleanup runs after report/collection jobs and prunes
+oldest HTTP artifacts, downloaded media, then SQLite history. Use
+`stock-sum retention status` and `stock-sum retention prune --dry-run` to inspect
+usage before applying manual cleanup.
 
 Minimal Nginx location:
 

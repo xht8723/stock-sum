@@ -13,6 +13,7 @@ def test_example_config_is_valid() -> None:
     assert config.server.port == 8000
     assert config.server.blacklisted_ips == []
     assert config.server.artifact_dir == "data/http_jobs"
+    assert config.server.report_cache_ttl_seconds == 3600
     assert config.playwright.channel == "chromium"
     assert config.playwright.browser == "chromium"
     assert config.playwright.headless is True
@@ -20,6 +21,10 @@ def test_example_config_is_valid() -> None:
     assert config.playwright.x.max_scrolls == 12
     assert config.media.root_dir == "data/media"
     assert config.media.download_enabled is False
+    assert config.retention.enabled is True
+    assert config.retention.max_total_bytes == 2_147_483_648
+    assert config.retention.prune_after_pipeline is True
+    assert config.retention.vacuum_sqlite is True
     assert config.models_dev.refresh_interval_hours == 24
     assert config.providers.xpoz.api_key_env == "XPOZ_API_KEY"
     assert config.providers.xpoz.server_url == "https://mcp.xpoz.ai/mcp"

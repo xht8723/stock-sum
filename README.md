@@ -134,8 +134,11 @@ stock-sum config subreddit delete wallstreetbets --config config.toml --profile 
 Important configuration sections:
 
 - `[service]`: service name and default timezone.
-- `[server]`: local HTTP host, port, artifact directory, and exact IP blacklist.
+- `[server]`: local HTTP host, port, artifact directory, one-hour report cache,
+  and exact IP blacklist.
 - `[storage]`: SQLite database path.
+- `[retention]`: managed runtime data cap and cleanup behavior. Defaults to a
+  2GB total cap across HTTP job artifacts, downloaded media, and SQLite data.
 - `[models_dev]`: external model catalog URL, cache path, and refresh interval.
 - `[playwright]`: browser automation defaults for future site-specific browser
   collectors.
@@ -263,6 +266,8 @@ portable document, `--mode discord` for Discord-friendly markdown, or
 
 Start the daemon, then use these endpoints. The local API is open to any
 non-blacklisted client; configure exact IP blocks with `[server].blacklisted_ips`.
+Successful report jobs are cached for `[server].report_cache_ttl_seconds`
+seconds, defaulting to one hour. Set it to `0` to disable report reuse.
 
 - `GET /health`: returns service health.
 - `GET /v1/config/effective`: returns the loaded configuration. Secret values are
@@ -286,6 +291,23 @@ curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs/html `
 
 The response includes a `job_id` that can be polled until the report succeeds or
 fails.
+
+## Runtime Data Retention
+
+`stock-sum` prunes managed runtime data after report and collection pipeline
+runs when `[retention].enabled` and `[retention].prune_after_pipeline` are true.
+The default cap is `2147483648` bytes across `[server].artifact_dir`,
+`[media].root_dir`, and `[storage].sqlite_path`.
+
+```powershell
+stock-sum retention status --config config.toml
+stock-sum retention prune --dry-run --config config.toml
+stock-sum retention prune --apply --config config.toml
+```
+
+Cleanup deletes oldest HTTP job artifacts first, downloaded media next, and old
+SQLite collection history last. The current HTTP job artifact is protected while
+cleanup runs so API clients can still download it.
 
 ## Docker quick start
 

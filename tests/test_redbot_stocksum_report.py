@@ -214,6 +214,29 @@ async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -
     assert all(len(item) <= 1900 for item in sent_text)
 
 
+async def test_report_command_sends_public_discord_report_directly_to_channel(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    monkeypatch.setattr(
+        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        lambda: FakeStockSumClient(content=("first paragraph\n\nsecond paragraph").encode("utf-8")),
+    )
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.report(interaction, profile="default", format="discord", include_capitol_trades=True, private=False)
+
+    assert interaction.response.messages == [
+        {
+            "content": "Report is being generated, please wait a few minutes.",
+            "ephemeral": False,
+        }
+    ]
+    assert interaction.followup.messages == []
+    assert interaction.channel.messages == [
+        {"content": "first paragraph\n\nsecond paragraph", "suppress_embeds": True},
+    ]
+
+
 async def test_report_command_sends_file_for_non_discord_format(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
@@ -226,11 +249,12 @@ async def test_report_command_sends_file_for_non_discord_format(monkeypatch) -> 
     await report.report(interaction, profile="default", format="html", include_capitol_trades=True, private=False)
 
     assert interaction.response.messages[0]["content"] == "Report is being generated, please wait a few minutes."
-    assert interaction.followup.messages == [
+    assert interaction.followup.messages == []
+    assert interaction.channel.messages == [
         {
             "content": "Report generated.",
-            "ephemeral": False,
             "file": "report.html",
+            "suppress_embeds": True,
         }
     ]
 
@@ -251,6 +275,7 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
         {
             "content": "stock-sum report failed: broken",
             "ephemeral": True,
+            "suppress_embeds": True,
         }
     ]
 
@@ -338,6 +363,7 @@ class FakeInteraction:
     def __init__(self) -> None:
         self.response = FakeResponseSender()
         self.followup = FakeFollowupSender()
+        self.channel = FakeChannelSender()
 
 
 class FakeResponseSender:
@@ -352,10 +378,32 @@ class FakeFollowupSender:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
 
-    async def send(self, content: str, *, ephemeral: bool, file: Any | None = None) -> None:
+    async def send(
+        self,
+        content: str,
+        *,
+        ephemeral: bool,
+        file: Any | None = None,
+        suppress_embeds: bool = False,
+    ) -> None:
         message = {"content": content, "ephemeral": ephemeral}
         if file is not None:
             message["file"] = file.filename
+        if suppress_embeds:
+            message["suppress_embeds"] = suppress_embeds
+        self.messages.append(message)
+
+
+class FakeChannelSender:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, Any]] = []
+
+    async def send(self, content: str, file: Any | None = None, suppress_embeds: bool = False) -> None:
+        message = {"content": content}
+        if file is not None:
+            message["file"] = file.filename
+        if suppress_embeds:
+            message["suppress_embeds"] = suppress_embeds
         self.messages.append(message)
 
 

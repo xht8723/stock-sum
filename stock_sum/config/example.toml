@@ -8,6 +8,7 @@ port = 8000
 blacklisted_ips = []
 artifact_dir = "data/http_jobs"
 job_retention_hours = 24
+report_cache_ttl_seconds = 3600
 
 [storage]
 sqlite_path = "data/stock_sum.sqlite3"
@@ -18,6 +19,12 @@ root_dir = "data/media"
 max_bytes = 5000000
 timeout_seconds = 20
 allowed_content_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+[retention]
+enabled = true
+max_total_bytes = 2147483648
+prune_after_pipeline = true
+vacuum_sqlite = true
 
 [models_dev]
 api_url = "https://models.dev/api.json"

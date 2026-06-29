@@ -50,6 +50,7 @@ from stock_sum.core.pipeline import ReportPipeline
 from stock_sum.llm.catalog import load_models_dev_catalog
 from stock_sum.llm.registry import build_llm_client, get_llm_provider, list_llm_providers
 from stock_sum.media.downloader import MediaDownloader
+from stock_sum.retention import DataRetentionService, RetentionSummary
 from stock_sum.reports.presentation import PresentationRenderError, PresentationRenderer
 from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.service.daemon import build_daemon
@@ -65,12 +66,14 @@ subreddit_app = typer.Typer(help="Manage subreddit sources in TOML configuration
 payload_app = typer.Typer(help="Build LLM-ready payloads from collected data.")
 llm_app = typer.Typer(help="Run LLM summarization against payloads.")
 report_app = typer.Typer(help="Render final presentation reports.")
+retention_app = typer.Typer(help="Inspect and prune managed runtime data.")
 app.add_typer(config_app, name="config")
 app.add_typer(setup_app, name="setup")
 app.add_typer(secrets_app, name="secrets")
 app.add_typer(payload_app, name="payload")
 app.add_typer(llm_app, name="llm")
 app.add_typer(report_app, name="report")
+app.add_typer(retention_app, name="retention")
 config_app.add_typer(profile_app, name="profile")
 config_app.add_typer(x_user_app, name="x-user")
 config_app.add_typer(subreddit_app, name="subreddit")
@@ -169,6 +172,19 @@ def _remove_reset_target(path: Path) -> bool:
     return True
 
 
+def _run_retention_after_pipeline(settings) -> RetentionSummary | None:
+    if not settings.retention.prune_after_pipeline:
+        return None
+    try:
+        summary = asyncio.run(DataRetentionService(settings).prune())
+    except Exception as exc:
+        console.print_json(json.dumps({"retention": {"errors": [str(exc)]}}))
+        return None
+    if summary.bytes_deleted > 0 or summary.errors:
+        console.print_json(json.dumps({"retention": summary.to_dict()}))
+    return summary
+
+
 @app.command("run-report")
 def run_report(
     profile: str = typer.Option(..., "--profile", "-p", help="Report profile name."),
@@ -181,8 +197,10 @@ def run_report(
     pipeline = ReportPipeline(RuntimeContext(config=settings))
     try:
         result = asyncio.run(pipeline.run_report(profile))
+        _run_retention_after_pipeline(settings)
     except StockSumError as exc:
         console.print(str(exc))
+        _run_retention_after_pipeline(settings)
         raise typer.Exit(code=1) from exc
     console.print_json(json.dumps(_pipeline_result_to_jsonable(result)))
 
@@ -204,13 +222,16 @@ def collect(
     try:
         if collector:
             result = asyncio.run(pipeline.collect_collector(collector))
+            _run_retention_after_pipeline(settings)
             console.print_json(json.dumps(_collection_run_to_jsonable(result)))
             return
 
         result = asyncio.run(pipeline.run_report(profile or ""))
+        _run_retention_after_pipeline(settings)
         console.print_json(json.dumps(_pipeline_result_to_jsonable(result)))
     except StockSumError as exc:
         console.print(str(exc))
+        _run_retention_after_pipeline(settings)
         raise typer.Exit(code=1) from exc
 
 
@@ -450,12 +471,37 @@ def payload_build(
             max_images_per_post=max_images_per_post,
             max_images_total=max_images_total,
         )
+        if download_images:
+            _run_retention_after_pipeline(settings)
     except (StockSumError, ValueError) as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
 
     output.write_text(json.dumps(payload_data, indent=2, ensure_ascii=False), encoding="utf-8")
     console.print(f"Wrote {output}")
+
+
+@retention_app.command("status")
+def retention_status(
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+) -> None:
+    """Show managed runtime data usage without deleting anything."""
+
+    settings = load_config(config)
+    summary = asyncio.run(DataRetentionService(settings).status())
+    console.print_json(json.dumps(summary.to_dict()))
+
+
+@retention_app.command("prune")
+def retention_prune(
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview deletions unless --apply is used."),
+) -> None:
+    """Prune managed runtime data according to retention limits."""
+
+    settings = load_config(config)
+    summary = asyncio.run(DataRetentionService(settings).prune(dry_run=dry_run))
+    console.print_json(json.dumps(summary.to_dict()))
 
 
 @llm_app.command("summarize")

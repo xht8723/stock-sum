@@ -73,6 +73,7 @@ def test_cli_help() -> None:
     assert "payload" in result.output
     assert "llm" in result.output
     assert "report" in result.output
+    assert "retention" in result.output
     assert " reddit " not in result.output
     assert " x " not in result.output
 
@@ -108,6 +109,15 @@ def test_report_help() -> None:
 
     assert result.exit_code == 0
     assert "render" in result.output
+
+
+def test_retention_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["retention", "--help"])
+
+    assert result.exit_code == 0
+    assert "status" in result.output
+    assert "prune" in result.output
 
 
 def test_config_profile_help() -> None:

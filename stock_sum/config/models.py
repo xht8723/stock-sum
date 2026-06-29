@@ -22,6 +22,7 @@ class ServerConfig(BaseModel):
     blacklisted_ips: list[str] = Field(default_factory=list)
     artifact_dir: str = "data/http_jobs"
     job_retention_hours: int = Field(default=24, ge=1)
+    report_cache_ttl_seconds: int = Field(default=3600, ge=0)
 
 
 class StorageConfig(BaseModel):
@@ -38,6 +39,15 @@ class MediaConfig(BaseModel):
     max_bytes: int = Field(default=5_000_000, ge=1)
     timeout_seconds: int = Field(default=20, ge=1)
     allowed_content_types: list[str] = Field(default_factory=lambda: ["image/jpeg", "image/png", "image/gif", "image/webp"])
+
+
+class RetentionConfig(BaseModel):
+    """Runtime data retention and disk usage limits."""
+
+    enabled: bool = True
+    max_total_bytes: int = Field(default=2_147_483_648, ge=1)
+    prune_after_pipeline: bool = True
+    vacuum_sqlite: bool = True
 
 
 class ModelsDevConfig(BaseModel):
@@ -188,6 +198,7 @@ class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
     models_dev: ModelsDevConfig = Field(default_factory=ModelsDevConfig)
     playwright: PlaywrightConfig = Field(default_factory=PlaywrightConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
