@@ -22,6 +22,16 @@ except ModuleNotFoundError:  # pragma: no cover - lets local tests import the HT
         Cog = _FallbackCog
 
     class _FallbackAppCommands:
+        class Group:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def command(self, *_args, **_kwargs):
+                def decorator(func):
+                    return func
+
+                return decorator
+
         @staticmethod
         def command(*_args, **_kwargs):
             def decorator(func):
@@ -98,6 +108,15 @@ class _ClientSession(Protocol):
     def post(self, url: str, **kwargs: Any) -> _RequestContext:
         ...
 
+    def patch(self, url: str, **kwargs: Any) -> _RequestContext:
+        ...
+
+    def put(self, url: str, **kwargs: Any) -> _RequestContext:
+        ...
+
+    def delete(self, url: str, **kwargs: Any) -> _RequestContext:
+        ...
+
     def get(self, url: str, **kwargs: Any) -> _RequestContext:
         ...
 
@@ -170,6 +189,68 @@ class StockSumHttpClient:
                 content=content,
                 status=status_payload,
             )
+        finally:
+            if owns_session:
+                await session.close()
+
+    async def run_collect_profile(self, *, profile: str) -> dict[str, Any]:
+        """Create and poll a collection-only job for one profile."""
+
+        session, owns_session = await self._session()
+        try:
+            job = await self.post_json(f"/v1/collect/{quote(profile, safe='')}/jobs", session=session, expected_status=202)
+            job_id = _required_string(job, "job_id")
+            return await self._poll_until_done(session, job_id)
+        finally:
+            if owns_session:
+                await session.close()
+
+    async def get_json(self, path: str, *, session: _ClientSession | None = None) -> dict[str, Any]:
+        return await self._request_json("get", path, session=session, expected_status=200)
+
+    async def post_json(
+        self,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        session: _ClientSession | None = None,
+        expected_status: int = 200,
+    ) -> dict[str, Any]:
+        return await self._request_json("post", path, payload=payload, session=session, expected_status=expected_status)
+
+    async def patch_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json("patch", path, payload=payload, expected_status=200)
+
+    async def put_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request_json("put", path, payload=payload, expected_status=200)
+
+    async def delete_json(self, path: str) -> dict[str, Any]:
+        return await self._request_json("delete", path, expected_status=200)
+
+    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        session: _ClientSession | None = None,
+        expected_status: int = 200,
+    ) -> dict[str, Any]:
+        owns_session = False
+        if session is None:
+            session, owns_session = await self._session()
+        url = f"{self.base_url}{path}"
+        try:
+            request = getattr(session, method)
+            kwargs: dict[str, Any] = {"headers": self._headers()}
+            if payload is not None:
+                kwargs["json"] = payload
+            async with request(url, **kwargs) as response:
+                return await self._json_response(response, expected_status=expected_status)
+        except StockSumCogError:
+            raise
+        except Exception as exc:
+            raise StockSumRequestError(f"Could not reach stock-sum at {self.base_url}: {exc}") from exc
         finally:
             if owns_session:
                 await session.close()
@@ -278,6 +359,15 @@ class StockSumHttpClient:
 class StockSumReport(commands.Cog):
     """Request stock-sum reports from Discord."""
 
+    stocksum = app_commands.Group(name="stocksum", description="Manage stock-sum.")
+    profiles = app_commands.Group(name="profiles", description="Manage report profiles.", parent=stocksum)
+    sources = app_commands.Group(name="sources", description="Manage X and Reddit sources.", parent=stocksum)
+    llm = app_commands.Group(name="llm", description="Manage LLM settings.", parent=stocksum)
+    secrets = app_commands.Group(name="secrets", description="Manage stock-sum API keys.", parent=stocksum)
+    collect_group = app_commands.Group(name="collect", description="Run collection jobs.", parent=stocksum)
+    setup = app_commands.Group(name="setup", description="Check stock-sum setup.", parent=stocksum)
+    retention = app_commands.Group(name="retention", description="Inspect runtime data retention.", parent=stocksum)
+
     def __init__(self, bot) -> None:
         self.bot = bot
 
@@ -338,6 +428,212 @@ class StockSumReport(commands.Cog):
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
         await _send_report_output(interaction, "Report generated.", private=private, file=file)
 
+    @profiles.command(name="list", description="List stock-sum profiles.")
+    async def profiles_list(self, interaction) -> None:
+        await self._send_api_json(interaction, "/v1/profiles", title="Profiles")
+
+    @profiles.command(name="show", description="Show one stock-sum profile.")
+    async def profiles_show(self, interaction, name: str = "default") -> None:
+        await self._send_api_json(interaction, f"/v1/profiles/{quote(name, safe='')}", title=f"Profile {name}")
+
+    @profiles.command(name="add", description="Add a stock-sum profile.")
+    async def profiles_add(
+        self,
+        interaction,
+        name: str,
+        collectors: str = "",
+        schedule: str = "0 8 * * *",
+        timezone: str = "UTC",
+    ) -> None:
+        if not await self._require_owner(interaction):
+            return
+        payload = {
+            "name": name,
+            "collector_ids": _csv(collectors),
+            "delivery_ids": [],
+            "schedule": schedule,
+            "timezone": timezone,
+        }
+        await self._send_api_json(interaction, "/v1/profiles", method="post", payload=payload, title=f"Added profile {name}", private=True)
+
+    @profiles.command(name="edit", description="Edit a stock-sum profile collector list.")
+    async def profiles_edit(self, interaction, name: str, collectors: str) -> None:
+        if not await self._require_owner(interaction):
+            return
+        await self._send_api_json(
+            interaction,
+            f"/v1/profiles/{quote(name, safe='')}",
+            method="patch",
+            payload={"collector_ids": _csv(collectors)},
+            title=f"Updated profile {name}",
+            private=True,
+        )
+
+    @profiles.command(name="delete", description="Delete a stock-sum profile.")
+    async def profiles_delete(self, interaction, name: str) -> None:
+        if not await self._require_owner(interaction):
+            return
+        await self._send_api_json(interaction, f"/v1/profiles/{quote(name, safe='')}", method="delete", title=f"Deleted profile {name}", private=True)
+
+    @sources.command(name="list", description="List configured X and Reddit sources.")
+    async def sources_list(self, interaction) -> None:
+        await self._send_api_json(interaction, "/v1/sources", title="Sources")
+
+    @sources.command(name="add-x", description="Add an X user source.")
+    async def sources_add_x(self, interaction, handle: str, profile: str = "default", limit: int = 10, enabled: bool = True) -> None:
+        if not await self._require_owner(interaction):
+            return
+        payload = {"handle": handle, "profile": profile, "limit": limit, "enabled": enabled}
+        await self._send_api_json(interaction, "/v1/sources/x-users", method="post", payload=payload, title=f"Added X source {handle}", private=True)
+
+    @sources.command(name="delete-x", description="Delete an X user source.")
+    async def sources_delete_x(self, interaction, handle: str, profile: str = "default") -> None:
+        if not await self._require_owner(interaction):
+            return
+        path = f"/v1/sources/x-users/{quote(handle, safe='')}?profile={quote(profile, safe='')}"
+        await self._send_api_json(interaction, path, method="delete", title=f"Deleted X source {handle}", private=True)
+
+    @sources.command(name="add-reddit", description="Add a subreddit source.")
+    async def sources_add_reddit(
+        self,
+        interaction,
+        subreddit: str,
+        profile: str = "default",
+        limit: int = 10,
+        include_comments: bool = False,
+        comments_per_post: int = 0,
+    ) -> None:
+        if not await self._require_owner(interaction):
+            return
+        payload = {
+            "subreddit": subreddit,
+            "profile": profile,
+            "limit": limit,
+            "include_comments": include_comments,
+            "comments_per_post": comments_per_post,
+        }
+        await self._send_api_json(interaction, "/v1/sources/subreddits", method="post", payload=payload, title=f"Added subreddit {subreddit}", private=True)
+
+    @sources.command(name="delete-reddit", description="Delete a subreddit source.")
+    async def sources_delete_reddit(self, interaction, subreddit: str, profile: str = "default") -> None:
+        if not await self._require_owner(interaction):
+            return
+        path = f"/v1/sources/subreddits/{quote(subreddit, safe='')}?profile={quote(profile, safe='')}"
+        await self._send_api_json(interaction, path, method="delete", title=f"Deleted subreddit {subreddit}", private=True)
+
+    @llm.command(name="providers", description="List supported LLM providers.")
+    async def llm_providers(self, interaction) -> None:
+        await self._send_api_json(interaction, "/v1/llm/providers", title="LLM Providers")
+
+    @llm.command(name="show", description="Show current LLM config.")
+    async def llm_show(self, interaction) -> None:
+        await self._send_api_json(interaction, "/v1/llm/config", title="LLM Config")
+
+    @llm.command(name="select", description="Select the LLM provider/model.")
+    async def llm_select(self, interaction, provider: str = "deepseek", model: str = "") -> None:
+        if not await self._require_owner(interaction):
+            return
+        payload = {"provider": provider}
+        if model:
+            payload["model"] = model
+        await self._send_api_json(interaction, "/v1/llm/config", method="patch", payload=payload, title="Updated LLM config", private=True)
+
+    @secrets.command(name="list", description="List configured secret names.")
+    async def secrets_list(self, interaction) -> None:
+        if not await self._require_owner(interaction):
+            return
+        await self._send_api_json(interaction, "/v1/secrets", title="Secrets", private=True)
+
+    @secrets.command(name="set", description="Set a stock-sum secret value.")
+    async def secrets_set(self, interaction, name: str, value: str) -> None:
+        if not await self._require_owner(interaction):
+            return
+        await self._send_api_json(
+            interaction,
+            f"/v1/secrets/{quote(name, safe='')}",
+            method="put",
+            payload={"value": value},
+            title=f"Set secret {name}",
+            private=True,
+        )
+
+    @secrets.command(name="remove", description="Remove a stock-sum secret.")
+    async def secrets_remove(self, interaction, name: str) -> None:
+        if not await self._require_owner(interaction):
+            return
+        await self._send_api_json(interaction, f"/v1/secrets/{quote(name, safe='')}", method="delete", title=f"Removed secret {name}", private=True)
+
+    @collect_group.command(name="profile", description="Run collection for one profile.")
+    async def collect_profile(self, interaction, profile: str = "default") -> None:
+        await interaction.response.send_message("Collection is running, please wait.", ephemeral=True)
+        try:
+            payload = await StockSumHttpClient.from_env().run_collect_profile(profile=profile)
+        except StockSumCogError as exc:
+            await interaction.followup.send(_failure_message(exc), ephemeral=True, suppress_embeds=True)
+            return
+        await interaction.followup.send(_format_json_message("Collection complete", payload), ephemeral=True, suppress_embeds=True)
+
+    @setup.command(name="check", description="Check stock-sum setup.")
+    async def setup_check(self, interaction) -> None:
+        await self._send_api_json(interaction, "/v1/setup/check", title="Setup Check", private=True)
+
+    @retention.command(name="status", description="Show runtime data usage.")
+    async def retention_status(self, interaction) -> None:
+        await self._send_api_json(interaction, "/v1/retention/status", title="Retention Status")
+
+    @retention.command(name="prune", description="Prune runtime data.")
+    async def retention_prune(self, interaction, dry_run: bool = True) -> None:
+        if not await self._require_owner(interaction):
+            return
+        await self._send_api_json(
+            interaction,
+            "/v1/retention/prune",
+            method="post",
+            payload={"dry_run": dry_run},
+            title="Retention Prune",
+            private=True,
+        )
+
+    async def _require_owner(self, interaction) -> bool:
+        checker = getattr(self.bot, "is_owner", None)
+        allowed = False
+        if checker is not None:
+            result = checker(getattr(interaction, "user", None))
+            allowed = await result if hasattr(result, "__await__") else bool(result)
+        if allowed:
+            return True
+        await _send_command_output(interaction, "Only Redbot owners can use this stock-sum command.", private=True)
+        return False
+
+    async def _send_api_json(
+        self,
+        interaction,
+        path: str,
+        *,
+        method: str = "get",
+        payload: dict[str, Any] | None = None,
+        title: str,
+        private: bool = False,
+    ) -> None:
+        try:
+            client = StockSumHttpClient.from_env()
+            if method == "get":
+                response = await client.get_json(path)
+            elif method == "post":
+                response = await client.post_json(path, payload=payload)
+            elif method == "patch":
+                response = await client.patch_json(path, payload=payload or {})
+            elif method == "put":
+                response = await client.put_json(path, payload=payload or {})
+            elif method == "delete":
+                response = await client.delete_json(path)
+            else:
+                raise StockSumRequestError(f"Unsupported management method: {method}")
+        except StockSumCogError as exc:
+            await _send_command_output(interaction, _failure_message(exc), private=True)
+            return
+        await _send_command_output(interaction, _format_json_message(title, response), private=private)
+
 
 async def _response_error_text(response: _ClientResponse) -> str:
     try:
@@ -366,6 +662,17 @@ def _failure_message(exc: Exception) -> str:
     return message[: DISCORD_FAILURE_LIMIT - 3].rstrip() + "..."
 
 
+async def _send_command_output(interaction, content: str, *, private: bool, file: Any | None = None) -> None:
+    response = getattr(interaction, "response", None)
+    is_done = getattr(response, "is_done", None)
+    if response is not None and hasattr(response, "send_message"):
+        done = is_done() if callable(is_done) else False
+        if not done:
+            await response.send_message(content, ephemeral=private, file=file, suppress_embeds=True)
+            return
+    await _send_report_output(interaction, content, private=private, file=file)
+
+
 async def _send_report_output(interaction, content: str, *, private: bool, file: Any | None = None) -> None:
     """Send final report output without replying to the acknowledgement when public."""
 
@@ -382,6 +689,24 @@ async def _send_report_output(interaction, content: str, *, private: bool, file:
         return
 
     await interaction.followup.send(content, ephemeral=False, file=file, suppress_embeds=True)
+
+
+def _format_json_message(title: str, payload: dict[str, Any]) -> str:
+    text = json_dumps_compact(payload)
+    message = f"**{title}**\n```json\n{text}\n```"
+    if len(message) <= DISCORD_INLINE_LIMIT:
+        return message
+    return f"**{title}**\n```json\n{text[: DISCORD_INLINE_LIMIT - len(title) - 24].rstrip()}...\n```"
+
+
+def json_dumps_compact(payload: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def _csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _split_discord_markdown(content: str, *, limit: int = DISCORD_INLINE_LIMIT) -> list[str]:

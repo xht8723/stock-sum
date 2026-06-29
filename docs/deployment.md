@@ -193,11 +193,10 @@ Refresh the models.dev cache:
 stock-sum config sync --config config.toml
 ```
 
-The bundled default profile currently has no collector references. Example
-sources live under `[[sources.x_users]]` and `[[sources.subreddits]]`, but are
-disabled until you set `enabled = true` in TOML or add sources through the CLI.
-X and Reddit sources use Xpoz. Source-list entries resolve to collector IDs
-such as `x.aleabitoreddit` and `reddit.wallstreetbets`.
+The bundled default profile includes enabled starter sources for
+`x.aleabitoreddit` and `reddit.wallstreetbets`. X and Reddit sources use Xpoz.
+Source-list entries resolve to collector IDs such as `x.aleabitoreddit` and
+`reddit.wallstreetbets`. Use the config CLI to add, delete, or replace sources.
 
 ```bash
 stock-sum config x-user add aleabitoreddit --config config.toml --profile default

@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from stock_sum.api.jobs import HttpJobManager, ReportJobOptions
+from stock_sum.api.runtime_config import RuntimeConfigError, RuntimeConfigManager
 from stock_sum.config.loader import redacted_config
 from stock_sum.config.models import AppConfig
+from stock_sum.config.writer import (
+    add_profile,
+    add_subreddit,
+    add_x_user,
+    delete_profile,
+    delete_subreddit,
+    delete_x_user,
+    edit_profile,
+)
+from stock_sum.llm.registry import get_llm_provider, list_llm_providers
+from stock_sum.retention import DataRetentionService
 
 
 ReportModePath = Literal["html", "markdown", "discord", "text", "json"]
@@ -30,11 +42,97 @@ class ReportJobRequest(BaseModel):
     max_images_total: int = Field(default=20, ge=0)
 
 
-def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager | None = None) -> APIRouter:
+class ProfileRequest(BaseModel):
+    """Request body for creating a report profile."""
+
+    name: str
+    timezone: str = "UTC"
+    schedule: str = "0 8 * * *"
+    collector_ids: list[str] = Field(default_factory=list)
+    delivery_ids: list[str] = Field(default_factory=list)
+    overwrite: bool = False
+
+
+class ProfilePatchRequest(BaseModel):
+    """Request body for editing a report profile."""
+
+    timezone: str | None = None
+    schedule: str | None = None
+    collector_ids: list[str] | None = None
+    delivery_ids: list[str] | None = None
+
+
+class XUserRequest(BaseModel):
+    """Request body for adding or replacing an X user source."""
+
+    handle: str
+    enabled: bool = True
+    limit: int = Field(default=10, ge=1)
+    profile: str | None = None
+    overwrite: bool = True
+
+
+class SubredditRequest(BaseModel):
+    """Request body for adding or replacing a subreddit source."""
+
+    subreddit: str
+    enabled: bool = True
+    sort: str = "new"
+    timeframe: str = "day"
+    limit: int = Field(default=10, ge=1)
+    trim: bool = True
+    include_comments: bool = False
+    comments_per_post: int = Field(default=0, ge=0)
+    profile: str | None = None
+    overwrite: bool = True
+
+
+class LLMConfigPatchRequest(BaseModel):
+    """Request body for selecting an LLM provider/model."""
+
+    provider: str | None = None
+    model: str | None = None
+
+
+class SecretRequest(BaseModel):
+    """Write-only secret value request."""
+
+    value: str = Field(min_length=1)
+
+
+class RetentionPruneRequest(BaseModel):
+    """Request body for retention pruning."""
+
+    dry_run: bool = True
+
+
+def build_router(
+    config: AppConfig | None = None,
+    *,
+    job_manager: HttpJobManager | None = None,
+    runtime_config: RuntimeConfigManager | None = None,
+) -> APIRouter:
     """Build API routes."""
 
     router = APIRouter()
-    manager = job_manager or (HttpJobManager(config) if config is not None else None)
+    runtime = runtime_config or (RuntimeConfigManager(config) if config is not None else None)
+    manager_holder: dict[str, Any] = {
+        "version": runtime.version if runtime is not None else 0,
+        "manager": job_manager or (HttpJobManager(runtime.config) if runtime is not None else None),
+    }
+
+    def current_config() -> AppConfig | None:
+        return runtime.config if runtime is not None else config
+
+    def current_manager() -> HttpJobManager | None:
+        if job_manager is not None:
+            return job_manager
+        if runtime is None:
+            return None
+        if manager_holder["manager"] is None or manager_holder["version"] != runtime.version:
+            manager_holder["manager"] = HttpJobManager(runtime.config)
+            manager_holder["version"] = runtime.version
+        return manager_holder["manager"]
 
     @router.get("/health")
     async def health() -> dict[str, str]:
@@ -42,23 +140,27 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
 
     @router.post("/reports/{profile}/run", status_code=202)
     async def run_report(profile: str) -> dict[str, str]:
-        if config is not None and profile not in config.reports:
+        active = current_config()
+        if active is not None and profile not in active.reports:
             raise HTTPException(status_code=404, detail=f"Unknown report profile: {profile}")
         return {"status": "accepted", "profile": profile}
 
     @router.get("/config/effective")
     async def effective_config() -> dict:
-        if config is None:
+        active = current_config()
+        if active is None:
             return {}
-        return redacted_config(config)
+        return redacted_config(active)
 
-    v1 = APIRouter(prefix="/v1", dependencies=[Depends(_reject_blacklisted_ip(config))])
+    v1 = APIRouter(prefix="/v1", dependencies=[Depends(_reject_blacklisted_ip(current_config))])
+    management_dependencies = [Depends(_require_local_management(current_config))]
 
     @v1.get("/config/effective")
     async def v1_effective_config() -> dict:
-        if config is None:
+        active = current_config()
+        if active is None:
             return {}
-        return redacted_config(config)
+        return redacted_config(active)
 
     @v1.post("/reports/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)
     async def create_report_job(
@@ -66,7 +168,7 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
         background_tasks: BackgroundTasks,
         request: ReportJobRequest = ReportJobRequest(),
     ) -> dict:
-        return _create_report_job(manager, profile, request, background_tasks)
+        return _create_report_job(current_manager(), profile, request, background_tasks)
 
     @v1.post("/reports/{profile}/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
     async def create_report_job_for_mode(
@@ -75,7 +177,7 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
         background_tasks: BackgroundTasks,
         request: ReportJobRequest = ReportJobRequest(),
     ) -> dict:
-        return _create_report_job(manager, profile, request, background_tasks, mode=mode)
+        return _create_report_job(current_manager(), profile, request, background_tasks, mode=mode)
 
     def _create_report_job(
         manager: HttpJobManager | None,
@@ -100,6 +202,7 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
 
     @v1.post("/collect/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)
     async def create_collect_job(profile: str, background_tasks: BackgroundTasks) -> dict:
+        manager = current_manager()
         if manager is None:
             raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
         try:
@@ -111,6 +214,7 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
 
     @v1.get("/jobs/{job_id}")
     async def get_job(job_id: str) -> dict:
+        manager = current_manager()
         if manager is None:
             raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
         job = manager.get_job(job_id)
@@ -120,6 +224,7 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
 
     @v1.get("/jobs/{job_id}/summary")
     async def get_job_summary(job_id: str) -> dict:
+        manager = current_manager()
         if manager is None:
             raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
         job = manager.get_job(job_id)
@@ -131,6 +236,7 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
 
     @v1.get("/jobs/{job_id}/artifact")
     async def get_job_artifact(job_id: str) -> FileResponse:
+        manager = current_manager()
         if manager is None:
             raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
         job = manager.get_job(job_id)
@@ -147,12 +253,209 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
             filename=artifact_path.name,
         )
 
+    @v1.get("/profiles", dependencies=management_dependencies)
+    async def list_report_profiles() -> dict[str, Any]:
+        active = _require_config(current_config())
+        return {
+            "profiles": [
+                {"name": name, "profile": profile.model_dump(mode="json")}
+                for name, profile in sorted(active.reports.items())
+            ]
+        }
+
+    @v1.get("/profiles/{name}", dependencies=management_dependencies)
+    async def get_report_profile(name: str) -> dict[str, Any]:
+        active = _require_config(current_config())
+        try:
+            profile = active.reports[name]
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Profile does not exist: {name}") from exc
+        return {"name": name, "profile": profile.model_dump(mode="json")}
+
+    @v1.post("/profiles", dependencies=management_dependencies)
+    async def create_profile(request: ProfileRequest) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        _mutate_runtime(
+            runtime_manager,
+            lambda path: add_profile(
+                path,
+                request.name,
+                timezone=request.timezone,
+                schedule=request.schedule,
+                collector_ids=request.collector_ids,
+                delivery_ids=request.delivery_ids,
+                overwrite=request.overwrite,
+            ),
+        )
+        return {"name": request.name, "profile": runtime_manager.config.reports[request.name].model_dump(mode="json")}
+
+    @v1.patch("/profiles/{name}", dependencies=management_dependencies)
+    async def patch_profile(name: str, request: ProfilePatchRequest) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        _mutate_runtime(
+            runtime_manager,
+            lambda path: edit_profile(
+                path,
+                name,
+                timezone=request.timezone,
+                schedule=request.schedule,
+                collector_ids=request.collector_ids,
+                delivery_ids=request.delivery_ids,
+            ),
+        )
+        return {"name": name, "profile": runtime_manager.config.reports[name].model_dump(mode="json")}
+
+    @v1.delete("/profiles/{name}", dependencies=management_dependencies)
+    async def remove_profile(name: str) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        _mutate_runtime(runtime_manager, lambda path: delete_profile(path, name))
+        return {"deleted": name}
+
+    @v1.get("/sources", dependencies=management_dependencies)
+    async def list_sources() -> dict[str, Any]:
+        active = _require_config(current_config())
+        return {
+            "x_users": [source.model_dump(mode="json") for source in active.sources.x_users],
+            "subreddits": [source.model_dump(mode="json") for source in active.sources.subreddits],
+        }
+
+    @v1.get("/sources/x-users", dependencies=management_dependencies)
+    async def list_x_sources() -> dict[str, Any]:
+        active = _require_config(current_config())
+        return {"x_users": [source.model_dump(mode="json") for source in active.sources.x_users]}
+
+    @v1.post("/sources/x-users", dependencies=management_dependencies)
+    async def create_x_source(request: XUserRequest) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        collector_id = _mutate_runtime(
+            runtime_manager,
+            lambda path: add_x_user(
+                path,
+                request.handle,
+                enabled=request.enabled,
+                limit=request.limit,
+                profile=request.profile,
+                overwrite=request.overwrite,
+            ),
+        )
+        return {"collector_id": collector_id, "sources": [item.model_dump(mode="json") for item in runtime_manager.config.sources.x_users]}
+
+    @v1.delete("/sources/x-users/{handle}", dependencies=management_dependencies)
+    async def remove_x_source(handle: str, profile: str | None = None) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        collector_id = _mutate_runtime(runtime_manager, lambda path: delete_x_user(path, handle, profile=profile))
+        return {"deleted": collector_id}
+
+    @v1.get("/sources/subreddits", dependencies=management_dependencies)
+    async def list_reddit_sources() -> dict[str, Any]:
+        active = _require_config(current_config())
+        return {"subreddits": [source.model_dump(mode="json") for source in active.sources.subreddits]}
+
+    @v1.post("/sources/subreddits", dependencies=management_dependencies)
+    async def create_reddit_source(request: SubredditRequest) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        collector_id = _mutate_runtime(
+            runtime_manager,
+            lambda path: add_subreddit(
+                path,
+                request.subreddit,
+                enabled=request.enabled,
+                sort=request.sort,
+                timeframe=request.timeframe,
+                limit=request.limit,
+                trim=request.trim,
+                include_comments=request.include_comments,
+                comments_per_post=request.comments_per_post,
+                profile=request.profile,
+                overwrite=request.overwrite,
+            ),
+        )
+        return {"collector_id": collector_id, "sources": [item.model_dump(mode="json") for item in runtime_manager.config.sources.subreddits]}
+
+    @v1.delete("/sources/subreddits/{subreddit}", dependencies=management_dependencies)
+    async def remove_reddit_source(subreddit: str, profile: str | None = None) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        collector_id = _mutate_runtime(runtime_manager, lambda path: delete_subreddit(path, subreddit, profile=profile))
+        return {"deleted": collector_id}
+
+    @v1.get("/llm/providers", dependencies=management_dependencies)
+    async def llm_providers() -> dict[str, Any]:
+        return {"providers": [provider.__dict__ for provider in list_llm_providers()]}
+
+    @v1.get("/llm/config", dependencies=management_dependencies)
+    async def llm_config() -> dict[str, Any]:
+        active = _require_config(current_config())
+        return {"llm": active.llm.model_dump(mode="json")}
+
+    @v1.patch("/llm/config", dependencies=management_dependencies)
+    async def patch_llm_config(request: LLMConfigPatchRequest) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+
+        def mutate(path: Path) -> None:
+            from stock_sum.config.writer import set_dotted_value
+
+            if request.provider is not None:
+                descriptor = get_llm_provider(request.provider)
+                if not descriptor.implemented:
+                    raise ValueError(f"LLM provider is not implemented: {request.provider}")
+                set_dotted_value(path, "llm.provider", descriptor.provider_id)
+                set_dotted_value(path, "llm.model", request.model or descriptor.default_model)
+                set_dotted_value(path, "llm.api_key_env", descriptor.api_key_env)
+                set_dotted_value(path, "llm.base_url", descriptor.base_url)
+            elif request.model is not None:
+                set_dotted_value(path, "llm.model", request.model)
+
+        _mutate_runtime(runtime_manager, mutate)
+        return {"llm": runtime_manager.config.llm.model_dump(mode="json")}
+
+    @v1.get("/secrets", dependencies=management_dependencies)
+    async def list_secrets() -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        return {"env_file": str(runtime_manager.env_file), "secrets": runtime_manager.secret_names()}
+
+    @v1.put("/secrets/{name}", dependencies=management_dependencies)
+    async def put_secret(name: str, request: SecretRequest) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        try:
+            runtime_manager.set_secret_value(name, request.value)
+        except (RuntimeConfigError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        runtime_manager.reload()
+        return {"name": name, "set": True}
+
+    @v1.delete("/secrets/{name}", dependencies=management_dependencies)
+    async def delete_secret(name: str) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        try:
+            removed = runtime_manager.remove_secret_value(name)
+        except (RuntimeConfigError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        runtime_manager.reload()
+        return {"name": name, "removed": removed}
+
+    @v1.get("/setup/check", dependencies=management_dependencies)
+    async def setup_check() -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        issues = runtime_manager.setup_issues()
+        return {"status": "ok" if not issues else "issues", "issues": issues}
+
+    @v1.get("/retention/status", dependencies=management_dependencies)
+    async def retention_status() -> dict[str, Any]:
+        active = _require_config(current_config())
+        return (await DataRetentionService(active).status()).to_dict()
+
+    @v1.post("/retention/prune", dependencies=management_dependencies)
+    async def retention_prune(request: RetentionPruneRequest) -> dict[str, Any]:
+        active = _require_config(current_config())
+        return (await DataRetentionService(active).prune(dry_run=request.dry_run)).to_dict()
+
     router.include_router(v1)
     return router
 
 
-def _reject_blacklisted_ip(config: AppConfig | None):
+def _reject_blacklisted_ip(config_getter: Callable[[], AppConfig | None]):
     async def dependency(request: Request) -> None:
+        config = config_getter()
         if config is None:
             return
         client_ip = request.client.host if request.client is not None else None
@@ -160,6 +463,44 @@ def _reject_blacklisted_ip(config: AppConfig | None):
             raise HTTPException(status_code=403, detail=f"Client IP is blacklisted: {client_ip}")
 
     return dependency
+
+
+def _require_local_management(config_getter: Callable[[], AppConfig | None]):
+    async def dependency(request: Request) -> None:
+        config = config_getter()
+        if config is None or config.server.management_allow_remote:
+            return
+        client_ip = request.client.host if request.client is not None else None
+        if client_ip in {"127.0.0.1", "::1", "localhost", "testclient"}:
+            return
+        raise HTTPException(status_code=403, detail=f"Management API requires a loopback client: {client_ip}")
+
+    return dependency
+
+
+def _require_config(config: AppConfig | None) -> AppConfig:
+    if config is None:
+        raise HTTPException(status_code=503, detail="Runtime config is not configured.")
+    return config
+
+
+def _require_runtime(runtime: RuntimeConfigManager | None) -> RuntimeConfigManager:
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Runtime config manager is not configured.")
+    return runtime
+
+
+def _mutate_runtime(runtime: RuntimeConfigManager, callback):
+    try:
+        return runtime.mutate_config(callback)
+    except RuntimeConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def _job_response(data: dict) -> dict:

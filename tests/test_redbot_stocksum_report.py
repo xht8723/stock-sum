@@ -168,6 +168,31 @@ async def test_client_maps_blacklist_failure() -> None:
         await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
 
 
+async def test_client_management_json_methods_send_expected_requests() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(200, {"created": True})],
+        get_responses=[FakeResponse(200, {"profiles": []})],
+        patch_responses=[FakeResponse(200, {"updated": True})],
+        put_responses=[FakeResponse(200, {"set": True})],
+        delete_responses=[FakeResponse(200, {"deleted": "x.demo"})],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    assert await client.get_json("/v1/profiles") == {"profiles": []}
+    assert await client.post_json("/v1/profiles", payload={"name": "morning"}) == {"created": True}
+    assert await client.patch_json("/v1/llm/config", payload={"provider": "deepseek"}) == {"updated": True}
+    assert await client.put_json("/v1/secrets/DEEPSEEK_API_KEY", payload={"value": "secret"}) == {"set": True}
+    assert await client.delete_json("/v1/sources/x-users/demo") == {"deleted": "x.demo"}
+
+    assert session.requests == [
+        ("GET", "http://stock-sum.local/v1/profiles", {"headers": {}}),
+        ("POST", "http://stock-sum.local/v1/profiles", {"headers": {}, "json": {"name": "morning"}}),
+        ("PATCH", "http://stock-sum.local/v1/llm/config", {"headers": {}, "json": {"provider": "deepseek"}}),
+        ("PUT", "http://stock-sum.local/v1/secrets/DEEPSEEK_API_KEY", {"headers": {}, "json": {"value": "secret"}}),
+        ("DELETE", "http://stock-sum.local/v1/sources/x-users/demo", {"headers": {}}),
+    ]
+
+
 def test_split_discord_markdown_prefers_blank_lines() -> None:
     chunks = _split_discord_markdown("alpha\n\nbravo\n\ncharlie", limit=14)
 
@@ -280,10 +305,73 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     ]
 
 
+async def test_management_command_blocks_non_owner(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=False))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.sources_add_x(interaction, handle="aleabitoreddit")
+
+    assert client.calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "Only Redbot owners can use this stock-sum command.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_management_source_add_calls_api_for_owner(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=True))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.sources_add_x(interaction, handle="@aleabitoreddit", profile="default", limit=15, enabled=True)
+
+    assert client.calls == [
+        (
+            "post",
+            "/v1/sources/x-users",
+            {"handle": "@aleabitoreddit", "profile": "default", "limit": 15, "enabled": True},
+        )
+    ]
+    assert interaction.response.messages[0]["ephemeral"] is True
+    assert "Added X source @aleabitoreddit" in interaction.response.messages[0]["content"]
+
+
+async def test_secret_set_command_is_ephemeral_and_redacted(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=True))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.secrets_set(interaction, name="DEEPSEEK_API_KEY", value="sk-real-secret")
+
+    assert client.calls == [
+        ("put", "/v1/secrets/DEEPSEEK_API_KEY", {"value": "sk-real-secret"}),
+    ]
+    assert interaction.response.messages[0]["ephemeral"] is True
+    assert "sk-real-secret" not in interaction.response.messages[0]["content"]
+
+
 class FakeSession:
-    def __init__(self, *, post_responses: list[FakeResponse], get_responses: list[FakeResponse | Exception]) -> None:
+    def __init__(
+        self,
+        *,
+        post_responses: list[FakeResponse],
+        get_responses: list[FakeResponse | Exception],
+        patch_responses: list[FakeResponse] | None = None,
+        put_responses: list[FakeResponse] | None = None,
+        delete_responses: list[FakeResponse] | None = None,
+    ) -> None:
         self.post_responses = post_responses
         self.get_responses = get_responses
+        self.patch_responses = patch_responses or []
+        self.put_responses = put_responses or []
+        self.delete_responses = delete_responses or []
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
         self.closed = False
 
@@ -297,6 +385,18 @@ class FakeSession:
         if isinstance(response, Exception):
             raise response
         return FakeContext(response)
+
+    def patch(self, url: str, **kwargs: Any) -> "FakeContext":
+        self.requests.append(("PATCH", url, kwargs))
+        return FakeContext(self.patch_responses.pop(0))
+
+    def put(self, url: str, **kwargs: Any) -> "FakeContext":
+        self.requests.append(("PUT", url, kwargs))
+        return FakeContext(self.put_responses.pop(0))
+
+    def delete(self, url: str, **kwargs: Any) -> "FakeContext":
+        self.requests.append(("DELETE", url, kwargs))
+        return FakeContext(self.delete_responses.pop(0))
 
     async def close(self) -> None:
         self.closed = True
@@ -364,14 +464,30 @@ class FakeInteraction:
         self.response = FakeResponseSender()
         self.followup = FakeFollowupSender()
         self.channel = FakeChannelSender()
+        self.user = object()
 
 
 class FakeResponseSender:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
 
-    async def send_message(self, content: str, *, ephemeral: bool) -> None:
-        self.messages.append({"content": content, "ephemeral": ephemeral})
+    def is_done(self) -> bool:
+        return bool(self.messages)
+
+    async def send_message(
+        self,
+        content: str,
+        *,
+        ephemeral: bool,
+        file: Any | None = None,
+        suppress_embeds: bool = False,
+    ) -> None:
+        message = {"content": content, "ephemeral": ephemeral}
+        if file is not None:
+            message["file"] = file.filename
+        if suppress_embeds:
+            message["suppress_embeds"] = suppress_embeds
+        self.messages.append(message)
 
 
 class FakeFollowupSender:
@@ -412,3 +528,36 @@ class FakeDiscord:
         def __init__(self, fp: Any, *, filename: str) -> None:
             self.fp = fp
             self.filename = filename
+
+
+class FakeBot:
+    def __init__(self, *, owner: bool) -> None:
+        self.owner = owner
+
+    async def is_owner(self, _user: object) -> bool:
+        return self.owner
+
+
+class FakeManagementClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    async def get_json(self, path: str) -> dict[str, Any]:
+        self.calls.append(("get", path, None))
+        return {"ok": True}
+
+    async def post_json(self, path: str, *, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.calls.append(("post", path, payload))
+        return {"ok": True}
+
+    async def patch_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(("patch", path, payload))
+        return {"ok": True}
+
+    async def put_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(("put", path, payload))
+        return {"name": path.rsplit("/", 1)[-1], "set": True}
+
+    async def delete_json(self, path: str) -> dict[str, Any]:
+        self.calls.append(("delete", path, None))
+        return {"ok": True}

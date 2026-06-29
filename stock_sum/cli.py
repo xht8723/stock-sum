@@ -143,7 +143,7 @@ def _setup_issues(config_path: Path, env_file: Path) -> list[str]:
     return issues
 
 
-def _validate_runtime_setup(settings) -> None:
+def _validate_runtime_setup(settings, *, env_file: Path = Path(".env")) -> None:
     """Fail daemon startup with actionable setup guidance."""
 
     missing = missing_secret_names(
@@ -151,7 +151,7 @@ def _validate_runtime_setup(settings) -> None:
             xpoz_api_key_env=settings.providers.xpoz.api_key_env,
             llm_api_key_env=settings.llm.api_key_env,
         ),
-        env_file=Path(".env"),
+        env_file=env_file,
     )
     if missing:
         raise ConfigurationError(
@@ -238,19 +238,24 @@ def collect(
 @app.command()
 def daemon(
     config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    env_file: Path = typer.Option(Path(".env"), "--env-file", help="Env file path for runtime secret updates."),
     host: str | None = typer.Option(None, "--host"),
     port: int | None = typer.Option(None, "--port"),
 ) -> None:
     """Run the HTTP service and scheduler host."""
 
-    _load_env_file()
+    _load_env_file(env_file)
     settings = load_config(config)
     try:
-        _validate_runtime_setup(settings)
+        _validate_runtime_setup(settings, env_file=env_file)
     except ConfigurationError as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
-    uvicorn.run(build_daemon(settings), host=host or settings.server.host, port=port or settings.server.port)
+    uvicorn.run(
+        build_daemon(settings, config_path=str(config), env_file=str(env_file)),
+        host=host or settings.server.host,
+        port=port or settings.server.port,
+    )
 
 
 @setup_app.command("init")

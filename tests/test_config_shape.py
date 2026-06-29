@@ -35,10 +35,10 @@ def test_example_config_is_valid() -> None:
     assert config.llm.max_tokens == 5000
     assert config.llm.thinking_enabled is False
     assert "default" in config.reports
-    assert config.reports["default"].collector_ids == []
+    assert config.reports["default"].collector_ids == ["x.aleabitoreddit", "reddit.wallstreetbets"]
     assert config.sources.x_users[0].handle == "aleabitoreddit"
-    assert config.sources.x_users[0].enabled is False
+    assert config.sources.x_users[0].enabled is True
     assert config.sources.subreddits[0].subreddit == "wallstreetbets"
-    assert config.sources.subreddits[0].enabled is False
+    assert config.sources.subreddits[0].enabled is True
     assert config.collectors == {}
     assert config.delivery.email["primary"].password_env == "SMTP_PASSWORD"

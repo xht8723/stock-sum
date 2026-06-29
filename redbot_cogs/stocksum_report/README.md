@@ -32,3 +32,26 @@ Then sync slash commands with Red's slash-command management command and run:
 The default format is Discord-specific markdown and is sent inline when it fits
 in one Discord message. Choose `html`, `markdown`, `text`, or `json` to receive
 the report as a file attachment instead.
+
+## Management Commands
+
+The cog also exposes a `/stocksum` command group that calls the local management
+API:
+
+```text
+/stocksum profiles list
+/stocksum sources list
+/stocksum sources add-x handle:aleabitoreddit
+/stocksum sources add-reddit subreddit:wallstreetbets
+/stocksum llm providers
+/stocksum llm select provider:deepseek
+/stocksum secrets list
+/stocksum secrets set name:XPOZ_API_KEY value:...
+/stocksum collect profile profile:default
+/stocksum setup check
+/stocksum retention status
+```
+
+Read-only commands can be used by normal Discord users. Commands that mutate
+config, write secrets, or prune data are restricted to Redbot owners and respond
+privately.

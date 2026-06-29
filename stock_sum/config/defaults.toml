@@ -6,6 +6,7 @@ timezone = "UTC"
 host = "127.0.0.1"
 port = 8000
 blacklisted_ips = []
+management_allow_remote = false
 artifact_dir = "data/http_jobs"
 job_retention_hours = 24
 report_cache_ttl_seconds = 3600
@@ -63,16 +64,16 @@ thinking_enabled = false
 [reports.default]
 timezone = "UTC"
 schedule = "0 8 * * *"
-collector_ids = []
+collector_ids = ["x.aleabitoreddit", "reddit.wallstreetbets"]
 delivery_ids = ["email.default"]
 
 [[sources.x_users]]
-enabled = false
+enabled = true
 handle = "aleabitoreddit"
 limit = 10
 
 [[sources.subreddits]]
-enabled = false
+enabled = true
 subreddit = "wallstreetbets"
 sort = "new"
 timeframe = "day"

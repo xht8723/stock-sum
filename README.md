@@ -220,6 +220,10 @@ stock-sum config x-user add aleabitoreddit --config config.toml --profile defaul
 stock-sum config subreddit add wallstreetbets --config config.toml --profile default
 ```
 
+Fresh configs already enable `x.aleabitoreddit` and
+`reddit.wallstreetbets` in the `default` profile; use the source commands above
+to customize or replace them.
+
 Daemon and report commands:
 
 ```powershell
