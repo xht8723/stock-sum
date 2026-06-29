@@ -26,5 +26,9 @@ From Red:
 Then sync slash commands with Red's slash-command management command and run:
 
 ```text
-/report profile:default format:html
+/report profile:default
 ```
+
+The default format is Discord-specific markdown and is sent inline when it fits
+in one Discord message. Choose `html`, `markdown`, `text`, or `json` to receive
+the report as a file attachment instead.

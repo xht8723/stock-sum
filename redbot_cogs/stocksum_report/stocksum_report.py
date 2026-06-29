@@ -55,7 +55,8 @@ except ModuleNotFoundError:  # pragma: no cover - lets local tests import the HT
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_POLL_SECONDS = 5.0
 DEFAULT_TIMEOUT_SECONDS = 14 * 60
-SUPPORTED_FORMATS = {"html", "markdown", "text", "json"}
+DISCORD_INLINE_LIMIT = 1900
+SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
 
 
 class StockSumCogError(Exception):
@@ -189,9 +190,8 @@ class StockSumHttpClient:
         output_format: str,
         include_capitol_trades: bool,
     ) -> dict[str, Any]:
-        url = f"{self.base_url}/v1/reports/{quote(profile, safe='')}/jobs"
+        url = f"{self.base_url}/v1/reports/{quote(profile, safe='')}/jobs/{quote(output_format, safe='')}"
         payload = {
-            "mode": output_format,
             "include_capitol_trades": include_capitol_trades,
         }
         try:
@@ -283,6 +283,7 @@ class StockSumReport(commands.Cog):
     )
     @app_commands.choices(
         format=[
+            app_commands.Choice(name="Discord Markdown", value="discord"),
             app_commands.Choice(name="HTML", value="html"),
             app_commands.Choice(name="Markdown", value="markdown"),
             app_commands.Choice(name="Text", value="text"),
@@ -293,7 +294,7 @@ class StockSumReport(commands.Cog):
         self,
         interaction,
         profile: str = "default",
-        format: str = "html",
+        format: str = "discord",
         include_capitol_trades: bool = True,
         private: bool = True,
     ) -> None:
@@ -320,6 +321,14 @@ class StockSumReport(commands.Cog):
             f"format: `{format}`\n"
             f"job: `{artifact.job_id}`"
         )
+        if format == "discord":
+            report_text = artifact.content.decode("utf-8", errors="replace").strip()
+            inline_message = f"{message}\n\n{report_text}" if report_text else message
+            if len(inline_message) <= DISCORD_INLINE_LIMIT:
+                await interaction.followup.send(inline_message, ephemeral=private)
+                return
+            message += "\nReport was too long for one Discord message, so it is attached."
+
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
         await interaction.followup.send(message, file=file, ephemeral=private)
 
@@ -362,5 +371,5 @@ def _filename_from_response(headers: Any) -> str | None:
 
 
 def _default_filename(job_id: str, output_format: str) -> str:
-    extension = {"html": "html", "markdown": "md", "text": "txt", "json": "json"}.get(output_format, "bin")
+    extension = {"discord": "md", "html": "html", "markdown": "md", "text": "txt", "json": "json"}.get(output_format, "bin")
     return f"stock-sum-report-{job_id}.{extension}"

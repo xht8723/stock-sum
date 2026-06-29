@@ -256,7 +256,8 @@ media IDs, URLs, or local paths rather than uploaded as image bytes.
 
 `report render` turns the LLM response JSON into final presentation artifacts.
 Use `--mode html` for a standalone visual report, `--mode markdown` for a
-portable document, or `--mode text` for plain email/terminal output.
+portable document, `--mode discord` for Discord-friendly markdown, or
+`--mode text` for plain email/terminal output.
 
 ## HTTP API
 
@@ -266,7 +267,11 @@ non-blacklisted client; configure exact IP blocks with `[server].blacklisted_ips
 - `GET /health`: returns service health.
 - `GET /v1/config/effective`: returns the loaded configuration. Secret values are
   not stored in config; only environment variable names are present.
-- `POST /v1/reports/{profile}/jobs`: starts a full async report job.
+- `POST /v1/reports/{profile}/jobs`: starts a full async report job using a
+  body `mode` field.
+- `POST /v1/reports/{profile}/jobs/{mode}`: starts a full async report job for
+  a specific output mode. Supported modes are `html`, `markdown`, `discord`,
+  `text`, and `json`.
 - `GET /v1/jobs/{job_id}`: checks job status.
 - `GET /v1/jobs/{job_id}/artifact`: downloads the rendered report artifact.
 
@@ -274,9 +279,9 @@ Example:
 
 ```powershell
 curl http://127.0.0.1:8000/health
-curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs `
+curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs/html `
   -H "Content-Type: application/json" `
-  -d '{"mode":"html","include_capitol_trades":true}'
+  -d '{"include_capitol_trades":true}'
 ```
 
 The response includes a `job_id` that can be polled until the report succeeds or

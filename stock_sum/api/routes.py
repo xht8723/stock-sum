@@ -14,10 +14,13 @@ from stock_sum.config.loader import redacted_config
 from stock_sum.config.models import AppConfig
 
 
+ReportModePath = Literal["html", "markdown", "discord", "text", "json"]
+
+
 class ReportJobRequest(BaseModel):
     """HTTP request body for a full report job."""
 
-    mode: Literal["html", "markdown", "text", "json"] = "html"
+    mode: ReportModePath = "html"
     download_images: bool = False
     include_capitol_trades: bool = False
     capitol_trades_limit: int = Field(default=12, ge=1)
@@ -60,13 +63,35 @@ def build_router(config: AppConfig | None = None, *, job_manager: HttpJobManager
     @v1.post("/reports/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)
     async def create_report_job(
         profile: str,
+        background_tasks: BackgroundTasks,
+        request: ReportJobRequest = ReportJobRequest(),
+    ) -> dict:
+        return _create_report_job(manager, profile, request, background_tasks)
+
+    @v1.post("/reports/{profile}/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
+    async def create_report_job_for_mode(
+        profile: str,
+        mode: ReportModePath,
+        background_tasks: BackgroundTasks,
+        request: ReportJobRequest = ReportJobRequest(),
+    ) -> dict:
+        return _create_report_job(manager, profile, request, background_tasks, mode=mode)
+
+    def _create_report_job(
+        manager: HttpJobManager | None,
+        profile: str,
         request: ReportJobRequest,
         background_tasks: BackgroundTasks,
+        *,
+        mode: ReportModePath | None = None,
     ) -> dict:
         if manager is None:
             raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
         try:
-            options = ReportJobOptions(**request.model_dump())
+            data = request.model_dump()
+            if mode is not None:
+                data["mode"] = mode
+            options = ReportJobOptions(**data)
             job = manager.create_report_job(profile, options)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -172,6 +172,21 @@ def test_markdown_renderer_preserves_refs_and_urls() -> None:
     assert "Risks And Uncertainties" not in rendered
 
 
+def test_discord_markdown_renderer_is_compact_and_clickable() -> None:
+    rendered = PresentationRenderer().render(_grouped_response(), mode="discord")
+
+    assert rendered.startswith("**Market Social Digest**")
+    assert "**Social Media Sentiment**" in rendered
+    assert "__Medium Importance__" in rendered
+    assert "**NBIS growth post**" in rendered
+    assert "[Read source](https://x.com/aleabitoreddit/status/1)" in rendered
+    assert "[Image 1](https://cdn.example/x-chart.jpg)" in rendered
+    assert "**Politician Trading Info**" in rendered
+    assert "| Politician |" not in rendered
+    assert "x1" not in rendered
+    assert "m1" not in rendered
+
+
 def test_text_renderer_preserves_refs_and_urls() -> None:
     rendered = PresentationRenderer().render(_response(), mode="text")
 

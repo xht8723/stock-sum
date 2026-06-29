@@ -527,7 +527,7 @@ def llm_providers() -> None:
 def report_render(
     input_path: Path = typer.Option(..., "--input", "-i", help="LLM summarize response JSON file."),
     output: Path = typer.Option(..., "--output", "-o", help="Rendered report output file."),
-    mode: str = typer.Option("html", "--mode", help="Presentation mode: html, markdown, or text."),
+    mode: str = typer.Option("html", "--mode", help="Presentation mode: html, markdown, discord, or text."),
     title: str = typer.Option("Market Social Digest", "--title", help="Report title."),
     include_capitol_trades: bool = typer.Option(
         False,

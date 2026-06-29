@@ -40,7 +40,8 @@ def test_v1_rejects_blacklisted_ip(tmp_path) -> None:
 
 def test_report_job_lifecycle_and_artifact_download(tmp_path) -> None:
     config = _test_config(tmp_path)
-    client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
 
     create_response = client.post(
         "/v1/reports/default/jobs",
@@ -48,6 +49,7 @@ def test_report_job_lifecycle_and_artifact_download(tmp_path) -> None:
     )
 
     assert create_response.status_code == 202
+    assert manager.last_report_mode == "html"
     job_id = create_response.json()["job_id"]
 
     status_response = client.get(f"/v1/jobs/{job_id}")
@@ -58,6 +60,31 @@ def test_report_job_lifecycle_and_artifact_download(tmp_path) -> None:
     artifact_response = client.get(f"/v1/jobs/{job_id}/artifact")
     assert artifact_response.status_code == 200
     assert "fake report" in artifact_response.text
+
+
+def test_report_job_format_endpoint_sets_mode(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    create_response = client.post(
+        "/v1/reports/default/jobs/discord",
+        json={"include_capitol_trades": True},
+    )
+
+    assert create_response.status_code == 202
+    assert manager.last_report_mode == "discord"
+
+
+def test_report_job_format_endpoint_allows_empty_body(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    create_response = client.post("/v1/reports/default/jobs/text")
+
+    assert create_response.status_code == 202
+    assert manager.last_report_mode == "text"
 
 
 def test_missing_profile_returns_404(tmp_path) -> None:
@@ -93,10 +120,12 @@ class FakeJobManager:
     def __init__(self, tmp_path: Path) -> None:
         self.tmp_path = tmp_path
         self.jobs: dict[str, FakeJob] = {}
+        self.last_report_mode: str | None = None
 
     def create_report_job(self, profile: str, options) -> FakeJob:
         if profile != "default":
             raise KeyError(f"Unknown report profile: {profile}")
+        self.last_report_mode = options.mode
         job = FakeJob(job_id="job-1", kind="report", profile=profile)
         self.jobs[job.job_id] = job
         return job

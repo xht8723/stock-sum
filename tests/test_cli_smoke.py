@@ -555,7 +555,12 @@ def test_report_render_writes_all_modes(tmp_path) -> None:
     )
     runner = CliRunner()
 
-    for mode, expected in [("html", "<!doctype html>"), ("markdown", "# Market Social Digest"), ("text", "MARKET SOCIAL DIGEST")]:
+    for mode, expected in [
+        ("html", "<!doctype html>"),
+        ("markdown", "# Market Social Digest"),
+        ("discord", "**Market Social Digest**"),
+        ("text", "MARKET SOCIAL DIGEST"),
+    ]:
         output = tmp_path / f"report.{mode}"
         result = runner.invoke(
             app,

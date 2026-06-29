@@ -47,13 +47,44 @@ async def test_client_sends_report_request_and_downloads_artifact() -> None:
     assert artifact.content == b"<html>ok</html>"
     assert session.requests[0] == (
         "POST",
-        "http://stock-sum.local/v1/reports/default/jobs",
+        "http://stock-sum.local/v1/reports/default/jobs/html",
         {
             "headers": {},
-            "json": {"mode": "html", "include_capitol_trades": True},
+            "json": {"include_capitol_trades": True},
         },
     )
     assert session.requests[1][2]["headers"] == {}
+
+
+async def test_client_uses_discord_format_endpoint() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "job-discord"})],
+        get_responses=[
+            FakeResponse(200, {"job_id": "job-discord", "status": "succeeded"}),
+            FakeResponse(
+                200,
+                body=b"**Market Social Digest**",
+                headers={"content-type": "text/markdown; charset=utf-8"},
+            ),
+        ],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    artifact = await client.run_report(
+        profile="default",
+        output_format="discord",
+        include_capitol_trades=False,
+    )
+
+    assert artifact.filename == "stock-sum-report-job-discord.md"
+    assert session.requests[0] == (
+        "POST",
+        "http://stock-sum.local/v1/reports/default/jobs/discord",
+        {
+            "headers": {},
+            "json": {"include_capitol_trades": False},
+        },
+    )
 
 
 async def test_client_reports_failed_job() -> None:

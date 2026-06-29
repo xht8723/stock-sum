@@ -22,7 +22,7 @@ from stock_sum.storage.sqlite import SQLiteStorageRepository
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 JobKind = Literal["report", "collect"]
-ReportMode = Literal["html", "markdown", "text", "json"]
+ReportMode = Literal["html", "markdown", "discord", "text", "json"]
 
 
 @dataclass(frozen=True)
@@ -259,10 +259,11 @@ class HttpJobManager:
             artifact_path = self._job_dir(job_id) / "summary.json"
             return artifact_path, "application/json"
 
-        extension = {"html": "html", "markdown": "md", "text": "txt"}[options.mode]
+        extension = {"html": "html", "markdown": "md", "discord": "md", "text": "txt"}[options.mode]
         media_type = {
             "html": "text/html; charset=utf-8",
             "markdown": "text/markdown; charset=utf-8",
+            "discord": "text/markdown; charset=utf-8",
             "text": "text/plain; charset=utf-8",
         }[options.mode]
         rendered = self._renderer_factory(options.title).render(response_data, mode=options.mode)

@@ -7,7 +7,7 @@ from html import escape
 from typing import Any, Literal
 import json
 
-PresentationMode = Literal["html", "markdown", "text"]
+PresentationMode = Literal["html", "markdown", "discord", "text"]
 
 SECTION_TITLES = {
     "executive_summary": "Executive Summary",
@@ -31,7 +31,7 @@ class PresentationRenderer:
     title: str = "Market Social Digest"
 
     def render(self, response: dict[str, Any], *, mode: str) -> str:
-        """Render a response in html, markdown, or text mode."""
+        """Render a response in html, markdown, discord, or text mode."""
 
         mode = mode.lower()
         summary = _summary_from_response(response)
@@ -39,6 +39,8 @@ class PresentationRenderer:
             return self._render_html(response, summary)
         if mode == "markdown":
             return self._render_markdown(response, summary)
+        if mode in {"discord", "discord_markdown"}:
+            return self._render_discord_markdown(response, summary)
         if mode == "text":
             return self._render_text(response, summary)
         raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
@@ -80,6 +82,16 @@ class PresentationRenderer:
             _markdown_capitol_trades(response.get("capitol_trades")),
         ]
         return "\n".join(line for line in lines if line is not None).strip() + "\n"
+
+    def _render_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        media_by_ref = _media_by_source_ref(response, summary)
+        lines = [
+            f"**{self.title}**",
+            "",
+            _discord_social_sentiment(summary, media_by_ref),
+            _discord_capitol_trades(response.get("capitol_trades")),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
 
     def _render_text(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
@@ -204,6 +216,55 @@ def _markdown_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dic
     lines.extend(_markdown_linked_media(source_ref, media_by_ref))
     lines.append("")
     return lines
+
+
+def _discord_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
+    buckets = _social_items_by_importance(summary)
+    lines = ["**Social Media Sentiment**"]
+    if not any(buckets.values()):
+        return "\n".join([*lines, "_No social signals._"])
+    for bucket, title in _importance_titles():
+        items = buckets.get(bucket, [])
+        if not items:
+            continue
+        lines.extend(["", f"__{title}__"])
+        for item in items:
+            lines.extend(_discord_social_item(item, media_by_ref))
+    return "\n".join(lines)
+
+
+def _discord_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> list[str]:
+    source_ref = str(item.get("source_ref") or "")
+    title = _post_title(item, reddit=item.get("source_kind") == "reddit")
+    labels = " / ".join(str(value) for value in (item.get("source_label"), item.get("sentiment"), item.get("confidence")) if value)
+    prefix = f"- **{title}**"
+    if labels:
+        prefix += f" _{labels}_"
+    lines = [prefix]
+    if item.get("post_summary") or item.get("claim") or item.get("summary"):
+        lines.append(f"  Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
+    if item.get("comments_sentiment"):
+        lines.append(f"  Comments: {_stringify_item(item['comments_sentiment'])}")
+    if item.get("interpretation") or item.get("reason"):
+        lines.append(f"  Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
+    source_links = []
+    for index, url in enumerate(_as_list(item.get("urls") or item.get("url")), start=1):
+        source_links.append(f"[{_source_link_label(index)}]({url})")
+    media_links = _discord_linked_media(source_ref, media_by_ref)
+    links = [*source_links, *media_links]
+    if links:
+        lines.append("  Links: " + " | ".join(links))
+    return lines
+
+
+def _discord_linked_media(source_ref: str, media_by_ref: dict[str, list[dict[str, Any]]]) -> list[str]:
+    links = []
+    for index, media in enumerate(media_by_ref.get(source_ref, []), start=1):
+        url = _media_url(media)
+        if url:
+            label = "Image" if _is_image_media(media) else "Media"
+            links.append(f"[{label} {index}]({url})")
+    return links
 
 
 def _text_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
@@ -825,6 +886,30 @@ def _markdown_capitol_trades(value: Any) -> str:
     if snapshot.get("source_url"):
         lines.extend(["", f"Source: [Read source]({snapshot['source_url']})"])
     lines.append("")
+    return "\n".join(lines)
+
+
+def _discord_capitol_trades(value: Any) -> str:
+    snapshot = value if isinstance(value, dict) else {}
+    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
+    lines = ["**Politician Trading Info**"]
+    if not trades:
+        return "\n".join([*lines, "_No politician trading data attached._"])
+    for trade in trades:
+        action = trade.get("transaction_type") or "TRADE"
+        issuer = _issuer_label(trade)
+        parts = [
+            f"- **{_politician_label(trade)}** {action} **{issuer}**",
+            f"size {trade.get('size') or 'unknown'}",
+            f"traded {trade.get('traded') or 'unknown'}",
+            f"published {trade.get('published') or 'unknown'}",
+        ]
+        price = trade.get("price")
+        if price:
+            parts.append(f"price {price}")
+        lines.append("; ".join(parts) + ".")
+    if snapshot.get("source_url"):
+        lines.append(f"[Read Capitol Trades]({snapshot['source_url']})")
     return "\n".join(lines)
 
 
