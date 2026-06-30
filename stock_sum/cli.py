@@ -352,8 +352,8 @@ def setup_init(
                 limit=100,
                 lookback_hours=24,
                 trim=True,
-                include_comments=False,
-                comments_per_post=0,
+                include_comments=True,
+                comments_per_post=10,
                 profile="default",
                 overwrite=True,
             )
@@ -932,8 +932,8 @@ def subreddit_add(
     lookback_hours: int = typer.Option(24, "--lookback-hours", min=1, help="Only keep posts from this many recent hours."),
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether this source can be collected."),
     trim: bool = typer.Option(True, "--trim/--no-trim", help="Request trimmed provider responses."),
-    include_comments: bool = typer.Option(False, "--include-comments/--no-comments", help="Collect comments too."),
-    comments_per_post: int = typer.Option(0, "--comments-per-post", min=0, help="Maximum comments per post."),
+    include_comments: bool = typer.Option(True, "--include-comments/--no-comments", help="Collect comments too."),
+    comments_per_post: int = typer.Option(10, "--comments-per-post", min=0, help="Maximum comments per post."),
     profile: str | None = typer.Option(None, "--profile", help="Also add reddit.<subreddit> to this report profile."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing source."),
 ) -> None:

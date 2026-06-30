@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -119,6 +120,7 @@ class XpozClient:
         self.transport = transport
         self._session_id: str | None = None
         self._initialized = False
+        self._init_lock = asyncio.Lock()
         self.provider_responses: list[ProviderApiResponse] = []
 
     @classmethod
@@ -259,22 +261,25 @@ class XpozClient:
     async def _ensure_initialized(self) -> None:
         if self._initialized:
             return
-        response = await self._post(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-03-26",
-                    "capabilities": {},
-                    "clientInfo": {"name": "stock-sum", "version": "0.1.0"},
-                },
-            }
-        )
-        if isinstance(response, dict) and response.get("error"):
-            raise XpozResponseError(f"Xpoz initialize failed: {response['error']}")
-        await self._post({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
-        self._initialized = True
+        async with self._init_lock:
+            if self._initialized:
+                return
+            response = await self._post(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "stock-sum", "version": "0.1.0"},
+                    },
+                }
+            )
+            if isinstance(response, dict) and response.get("error"):
+                raise XpozResponseError(f"Xpoz initialize failed: {response['error']}")
+            await self._post({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+            self._initialized = True
 
     async def _post(self, payload: Mapping[str, Any]) -> Any:
         api_key = os.getenv(self.api_key_env)
@@ -449,25 +454,51 @@ class XpozRedditSubredditCollector:
                 )
             )
             items: list[RawItem] = []
+            comment_semaphore = asyncio.Semaphore(self.provider_config.max_concurrent_requests)
+            comment_tasks: list[tuple[RawItem, asyncio.Task[list[RawItem]]]] = []
             for post in posts:
                 post_item = _raw_reddit_post_item(post, subreddit)
                 if post_item is None:
                     continue
                 items.append(post_item)
                 if self.collector_config.include_comments and self.collector_config.comments_per_post > 0:
-                    items.extend(await self._collect_comments(post_item))
+                    comment_tasks.append(
+                        (
+                            post_item,
+                            asyncio.create_task(self._collect_comments(post_item, semaphore=comment_semaphore)),
+                        )
+                    )
+            if comment_tasks:
+                comments_by_post = await asyncio.gather(*(task for _, task in comment_tasks))
+                items_with_comments: list[RawItem] = []
+                comments_iter = iter(comments_by_post)
+                for item in items:
+                    items_with_comments.append(item)
+                    if item.metadata.get("entity_type") == "reddit_post":
+                        try:
+                            items_with_comments.extend(next(comments_iter))
+                        except StopIteration:
+                            pass
+                items = items_with_comments
             return items
         finally:
             self.api_responses = _take_provider_responses(self.client)
 
-    async def _collect_comments(self, post_item: RawItem) -> list[RawItem]:
-        payload = await self.client.reddit_post_with_comments(
-            post_id=post_item.source_id,
-            limit=self.collector_config.comments_per_post,
-            comment_fields=REDDIT_COMMENT_FIELDS,
-            post_fields=REDDIT_POST_FIELDS,
-            force_latest=True,
-        )
+    async def _collect_comments(self, post_item: RawItem, *, semaphore: asyncio.Semaphore | None = None) -> list[RawItem]:
+        async def fetch() -> dict[str, list[dict[str, Any]]]:
+            return await self.client.reddit_post_with_comments(
+                post_id=post_item.source_id,
+                limit=self.collector_config.comments_per_post,
+                comment_fields=REDDIT_COMMENT_FIELDS,
+                post_fields=REDDIT_POST_FIELDS,
+                force_latest=True,
+            )
+
+        if semaphore is None:
+            payload = await fetch()
+        else:
+            async with semaphore:
+                payload = await fetch()
         items: list[RawItem] = []
         for comment in payload["comments"][: self.collector_config.comments_per_post]:
             item = _raw_reddit_comment_item(comment, post_item)

@@ -99,6 +99,7 @@ Edit `config.toml` for the deployment. The most common values to change are:
 ```toml
 [service]
 timezone = "America/Vancouver"
+collector_concurrency = 3
 
 [storage]
 sqlite_path = "data/stock_sum.sqlite3"
@@ -113,12 +114,14 @@ timeout_seconds = 30
 api_key_env = "XPOZ_API_KEY"
 server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
+max_concurrent_requests = 2
 
 [llm]
 provider = "deepseek"
 model = "deepseek-v4-flash"
 api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
+analysis_max_concurrency = 5
 ```
 
 Validate the file:

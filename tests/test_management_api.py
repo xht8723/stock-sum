@@ -38,6 +38,13 @@ def test_profile_and_source_management_hot_reloads_config(tmp_path) -> None:
         for source in config.sources.x_users
     )
 
+    add_reddit = client.post("/v1/sources/subreddits", json={"subreddit": "stocks", "profile": "tech"})
+    assert add_reddit.status_code == 200
+    config = load_config(config_path)
+    reddit_source = next(source for source in config.sources.subreddits if source.subreddit == "stocks")
+    assert reddit_source.include_comments is True
+    assert reddit_source.comments_per_post == 10
+
 
 def test_reddit_source_delete_updates_profile(tmp_path) -> None:
     client, config_path, _env_file = _management_client(tmp_path)

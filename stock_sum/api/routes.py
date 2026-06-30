@@ -81,8 +81,8 @@ class SubredditRequest(BaseModel):
     limit: int = Field(default=100, ge=1)
     lookback_hours: int = Field(default=24, ge=1)
     trim: bool = True
-    include_comments: bool = False
-    comments_per_post: int = Field(default=0, ge=0)
+    include_comments: bool = True
+    comments_per_post: int = Field(default=10, ge=0)
     profile: str | None = None
     overwrite: bool = True
 

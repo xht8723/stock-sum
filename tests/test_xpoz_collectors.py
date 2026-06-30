@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE, XpozRedditSubredditCollector, XpozXUserTimelineCollector
@@ -165,3 +166,81 @@ async def test_collector_warns_when_fetch_cap_may_truncate_lookback_window() -> 
 
     assert collector.warnings
     assert "fetch cap" in collector.warnings[0].message
+
+
+async def test_reddit_comment_fetches_are_bounded_concurrent() -> None:
+    class SlowCommentClient(FakeXpozClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active_comments = 0
+            self.max_active_comments = 0
+
+        async def reddit_subreddit_posts(self, *, subreddit: str, limit: int, fields: list[str] | None = None, force_latest: bool = True):
+            return [
+                {
+                    "id": f"post-{index}",
+                    "title": f"post {index}",
+                    "createdAt": _iso(1),
+                    "subredditName": subreddit,
+                    "postUrl": f"https://reddit.com/r/test/comments/post-{index}/",
+                    "commentsCount": "1",
+                }
+                for index in range(3)
+            ]
+
+        async def reddit_post_with_comments(
+            self,
+            *,
+            post_id: str,
+            limit: int,
+            post_fields: list[str] | None = None,
+            comment_fields: list[str] | None = None,
+            force_latest: bool = True,
+        ):
+            self.active_comments += 1
+            self.max_active_comments = max(self.max_active_comments, self.active_comments)
+            try:
+                await asyncio.sleep(0.01)
+                self.comment_calls.append(post_id)
+                return {
+                    "posts": [],
+                    "comments": [
+                        {
+                            "id": f"comment-{post_id}",
+                            "body": "comment",
+                            "authorUsername": "user",
+                            "parentId": post_id,
+                            "score": "3",
+                            "createdAt": _iso(1),
+                        }
+                    ],
+                }
+            finally:
+                self.active_comments -= 1
+
+    fake = SlowCommentClient()
+    collector = XpozRedditSubredditCollector(
+        collector_id="reddit.test",
+        collector_config=CollectorConfig(
+            kind=REDDIT_SOURCE_TYPE,
+            subreddit="test",
+            limit=3,
+            include_comments=True,
+            comments_per_post=1,
+        ),
+        provider_config=XpozProviderConfig(max_concurrent_requests=2),
+        client=fake,
+    )
+
+    items = await collector.collect(RuntimeContext(config=None))
+
+    assert fake.max_active_comments == 2
+    assert fake.comment_calls == ["post-2", "post-1", "post-0"]
+    assert [item.source_id for item in items] == [
+        "post-2",
+        "post-2:comment-post-2",
+        "post-1",
+        "post-1:comment-post-1",
+        "post-0",
+        "post-0:comment-post-0",
+    ]

@@ -1,6 +1,8 @@
 """Collection pipeline persistence tests."""
 
-from stock_sum.config.models import AppConfig, CollectorConfig, LLMConfig, ReportProfileConfig, StorageConfig
+import asyncio
+
+from stock_sum.config.models import AppConfig, CollectorConfig, LLMConfig, ReportProfileConfig, ServiceConfig, StorageConfig
 from stock_sum.core.context import RuntimeContext
 from stock_sum.core.errors import ConfigurationError
 from stock_sum.core.models import PipelineSectionWarning, ProviderApiResponse, RawItem, RawItemSaveResult
@@ -58,6 +60,31 @@ class WarningCollector(FakeCollector):
                 message="fetch cap may have hidden more posts",
             )
         ]
+
+
+class SlowCollector:
+    active = 0
+    max_active = 0
+
+    def __init__(self, collector_id: str) -> None:
+        self.collector_id = collector_id
+
+    async def collect(self, context):
+        type(self).active += 1
+        type(self).max_active = max(type(self).max_active, type(self).active)
+        try:
+            await asyncio.sleep(0.01)
+            return [
+                RawItem(
+                    source_id=self.collector_id,
+                    source_type="test_source",
+                    url=f"https://example.com/items/{self.collector_id}",
+                    text="hello",
+                    metadata={"source": "test"},
+                )
+            ]
+        finally:
+            type(self).active -= 1
 
 
 class FakeRepository:
@@ -118,6 +145,22 @@ def _multi_config(tmp_path) -> AppConfig:
     )
 
 
+def _slow_config(tmp_path) -> AppConfig:
+    return AppConfig(
+        service=ServiceConfig(collector_concurrency=2),
+        storage=StorageConfig(sqlite_path=str(tmp_path / "test.sqlite3")),
+        llm=LLMConfig(provider="deepseek", model="deepseek-v4-flash", api_key_env="DEEPSEEK_API_KEY"),
+        collectors={
+            "api": {
+                "one": CollectorConfig(kind="test_source"),
+                "two": CollectorConfig(kind="test_source"),
+                "three": CollectorConfig(kind="test_source"),
+            }
+        },
+        reports={"default": ReportProfileConfig(schedule="0 8 * * *", collector_ids=["api.one", "api.two", "api.three"])},
+    )
+
+
 async def test_pipeline_collects_and_persists_with_fake_collector(tmp_path) -> None:
     repository = FakeRepository()
     pipeline = ReportPipeline(
@@ -168,6 +211,23 @@ async def test_pipeline_profile_continues_after_one_collector_fails(tmp_path) ->
     assert repository.saved_provider_responses[0]["responses"][0].tool_name == "getPartialRows"
     assert repository.finished[0]["status"] == "failed"
     assert repository.finished[1]["status"] == "succeeded"
+
+
+async def test_pipeline_runs_profile_collectors_with_bounded_concurrency(tmp_path) -> None:
+    repository = FakeRepository()
+    SlowCollector.active = 0
+    SlowCollector.max_active = 0
+    pipeline = ReportPipeline(
+        RuntimeContext(config=_slow_config(tmp_path)),
+        repository=repository,
+        collector_factory=lambda collector_id: SlowCollector(collector_id),
+    )
+
+    result = await pipeline.run_report("default")
+
+    assert [run.collector_id for run in result.runs] == ["api.one", "api.two", "api.three"]
+    assert result.collected_count == 3
+    assert SlowCollector.max_active == 2
 
 
 async def test_pipeline_profile_records_all_failed_collectors(tmp_path) -> None:

@@ -33,6 +33,8 @@ The default format is Discord-specific markdown and is sent inline when it fits
 in one Discord message. Choose `html`, `markdown`, `text`, or `json` to receive
 the report as a file attachment instead.
 
+The cog polls stock-sum job status once per minute while a report is running.
+
 ## Management Commands
 
 The cog also exposes a `/stocksum` command group that calls the local management

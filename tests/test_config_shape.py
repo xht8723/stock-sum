@@ -9,6 +9,7 @@ def test_example_config_is_valid() -> None:
     config = load_config(Path("stock_sum/config/example.toml"))
 
     assert config.service.name == "stock-sum"
+    assert config.service.collector_concurrency == 3
     assert config.server.host == "127.0.0.1"
     assert config.server.port == 8000
     assert config.server.blacklisted_ips == []
@@ -27,6 +28,7 @@ def test_example_config_is_valid() -> None:
     assert config.models_dev.refresh_interval_hours == 24
     assert config.providers.xpoz.api_key_env == "XPOZ_API_KEY"
     assert config.providers.xpoz.server_url == "https://mcp.xpoz.ai/mcp"
+    assert config.providers.xpoz.max_concurrent_requests == 2
     assert config.llm.provider == "deepseek"
     assert config.llm.model == "deepseek-v4-flash"
     assert config.llm.api_key_env == "DEEPSEEK_API_KEY"
@@ -35,6 +37,7 @@ def test_example_config_is_valid() -> None:
     assert config.llm.thinking_enabled is False
     assert config.llm.analysis_x_posts_per_chunk == 10
     assert config.llm.analysis_max_chars_per_chunk == 12000
+    assert config.llm.analysis_max_concurrency == 5
     assert "default" in config.reports
     assert config.reports["default"].collector_ids == ["x.aleabitoreddit", "reddit.wallstreetbets"]
     assert config.sources.x_users[0].handle == "aleabitoreddit"
@@ -45,5 +48,7 @@ def test_example_config_is_valid() -> None:
     assert config.sources.subreddits[0].enabled is True
     assert config.sources.subreddits[0].limit == 100
     assert config.sources.subreddits[0].lookback_hours == 24
+    assert config.sources.subreddits[0].include_comments is True
+    assert config.sources.subreddits[0].comments_per_post == 10
     assert config.collectors == {}
     assert config.delivery.email["primary"].password_env == "SMTP_PASSWORD"

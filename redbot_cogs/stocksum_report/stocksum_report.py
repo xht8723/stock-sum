@@ -63,8 +63,8 @@ except ModuleNotFoundError:  # pragma: no cover - lets local tests import the HT
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
-DEFAULT_POLL_SECONDS = 5.0
-DEFAULT_TIMEOUT_SECONDS = 14 * 60
+DEFAULT_POLL_SECONDS = 60.0
+DEFAULT_TIMEOUT_SECONDS = 30 * 60
 DISCORD_INLINE_LIMIT = 1900
 DISCORD_FAILURE_LIMIT = 1900
 SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
@@ -500,8 +500,8 @@ class StockSumReport(commands.Cog):
         profile: str = "default",
         limit: int = 100,
         lookback_hours: int = 24,
-        include_comments: bool = False,
-        comments_per_post: int = 0,
+        include_comments: bool = True,
+        comments_per_post: int = 10,
     ) -> None:
         if not await self._require_owner(interaction):
             return

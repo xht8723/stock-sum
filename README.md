@@ -136,7 +136,7 @@ posts inside `--lookback-hours`, defaulting to the last 24 hours.
 
 Important configuration sections:
 
-- `[service]`: service name and default timezone.
+- `[service]`: service name, default timezone, and collector concurrency.
 - `[server]`: local HTTP host, port, artifact directory, one-hour report cache,
   and exact IP blacklist.
 - `[storage]`: SQLite database path.
@@ -146,10 +146,10 @@ Important configuration sections:
 - `[models_dev]`: external model catalog URL, cache path, and refresh interval.
 - `[playwright]`: browser automation defaults for future site-specific browser
   collectors.
-- `[providers.xpoz]`: Xpoz MCP-over-HTTP server URL, timeout, and API key
-  environment-variable name for X and Reddit collection.
+- `[providers.xpoz]`: Xpoz MCP-over-HTTP server URL, timeout, concurrency cap,
+  and API key environment-variable name for X and Reddit collection.
 - `[llm]`: DeepSeek provider settings, model, timeout, temperature, token cap,
-  and API key environment-variable name.
+  analysis concurrency, and API key environment-variable name.
 - `[reports.*]`: named report profiles and cron schedules.
 - `[[sources.x_users]]`: long-list X user sources. Each one resolves to
   collector ID `x.<handle>`.
@@ -193,7 +193,11 @@ The TOML config stores only the variable name:
 api_key_env = "XPOZ_API_KEY"
 server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
+max_concurrent_requests = 2
 ```
+
+Xpoz collection always requests fresh provider data because market reports are
+time-sensitive.
 
 ## CLI
 

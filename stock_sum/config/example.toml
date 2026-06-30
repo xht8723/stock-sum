@@ -1,6 +1,7 @@
 [service]
 name = "stock-sum"
 timezone = "America/Vancouver"
+collector_concurrency = 3
 
 [server]
 host = "127.0.0.1"
@@ -49,6 +50,7 @@ scroll_pause_ms = 1200
 api_key_env = "XPOZ_API_KEY"
 server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
+max_concurrent_requests = 2
 
 [llm]
 provider = "deepseek"
@@ -61,6 +63,7 @@ max_tokens = 5000
 thinking_enabled = false
 analysis_x_posts_per_chunk = 10
 analysis_max_chars_per_chunk = 12000
+analysis_max_concurrency = 5
 
 [reports.default]
 timezone = "America/Vancouver"
@@ -82,8 +85,8 @@ timeframe = "day"
 limit = 100
 lookback_hours = 24
 trim = true
-include_comments = false
-comments_per_post = 0
+include_comments = true
+comments_per_post = 10
 
 [delivery.email.primary]
 kind = "email"

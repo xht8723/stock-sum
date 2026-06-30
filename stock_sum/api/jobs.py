@@ -421,6 +421,7 @@ class HttpJobManager:
                 "analysis_prompt_version": PROMPT_VERSION,
                 "analysis_x_posts_per_chunk": self.config.llm.analysis_x_posts_per_chunk,
                 "analysis_max_chars_per_chunk": self.config.llm.analysis_max_chars_per_chunk,
+                "analysis_max_concurrency": self.config.llm.analysis_max_concurrency,
             },
             "options": {
                 "download_images": options.download_images,

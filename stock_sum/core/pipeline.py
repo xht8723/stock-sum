@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from uuid import uuid4
 
@@ -136,15 +137,20 @@ class ReportPipeline:
 
         runs: list[CollectionRunResult] = []
         warnings: list[PipelineSectionWarning] = []
-        for collector_id in profile_config.collector_ids:
-            run = await self.collect_collector(collector_id, profile=profile, raise_on_error=False)
-            runs.append(run)
+        semaphore = asyncio.Semaphore(self.context.config.service.collector_concurrency)
+
+        async def run_collector(collector_id: str) -> CollectionRunResult:
+            async with semaphore:
+                return await self.collect_collector(collector_id, profile=profile, raise_on_error=False)
+
+        runs = await asyncio.gather(*(run_collector(collector_id) for collector_id in profile_config.collector_ids))
+        for run in runs:
             warnings.extend(run.warnings)
             if run.status == "failed":
                 warnings.append(
                     PipelineSectionWarning(
                         section="collector",
-                        source_id=collector_id,
+                        source_id=run.collector_id,
                         phase="collecting",
                         message=run.error or "Collector failed.",
                     )

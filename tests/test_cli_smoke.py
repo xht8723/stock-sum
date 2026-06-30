@@ -264,6 +264,8 @@ def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
     assert 'provider = "deepseek"' in config_text
     assert '"x.aleabitoreddit"' in config_text
     assert '"reddit.wallstreetbets"' in config_text
+    assert "include_comments = true" in config_text
+    assert "comments_per_post = 10" in config_text
     assert "XPOZ_API_KEY=xpoz-secret" in env_text
     assert "DEEPSEEK_API_KEY=deepseek-secret" in env_text
     assert "deepseek-secret" not in result.output
@@ -573,6 +575,22 @@ def test_config_subreddit_add_list_delete_updates_profile(tmp_path) -> None:
     assert '"reddit.stocks"' in profile_result.output
     assert delete_result.exit_code == 0
     assert '"reddit.stocks"' not in profile_after_delete.output
+
+
+def test_config_subreddit_add_defaults_to_comments_enabled(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    add_result = runner.invoke(app, ["config", "subreddit", "add", "r/stocks", "--config", str(config_path)])
+    list_result = runner.invoke(app, ["config", "subreddit", "list", "--config", str(config_path)])
+
+    assert init_result.exit_code == 0
+    assert add_result.exit_code == 0
+    assert list_result.exit_code == 0
+    assert '"subreddit": "stocks"' in list_result.output
+    assert '"include_comments": true' in list_result.output
+    assert '"comments_per_post": 10' in list_result.output
 
 
 def test_collect_collector_uses_pipeline(monkeypatch) -> None:

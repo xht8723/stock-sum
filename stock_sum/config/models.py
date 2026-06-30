@@ -12,6 +12,7 @@ class ServiceConfig(BaseModel):
 
     name: str = "stock-sum"
     timezone: str = "UTC"
+    collector_concurrency: int = Field(default=3, ge=1)
 
 
 class ServerConfig(BaseModel):
@@ -85,6 +86,7 @@ class XpozProviderConfig(BaseModel):
     api_key_env: str = "XPOZ_API_KEY"
     server_url: str = "https://mcp.xpoz.ai/mcp"
     timeout_seconds: int = Field(default=60, ge=1)
+    max_concurrent_requests: int = Field(default=2, ge=1)
 
 
 class ProvidersConfig(BaseModel):
@@ -106,6 +108,7 @@ class LLMConfig(BaseModel):
     thinking_enabled: bool = False
     analysis_x_posts_per_chunk: int = Field(default=10, ge=1)
     analysis_max_chars_per_chunk: int = Field(default=12000, ge=1000)
+    analysis_max_concurrency: int = Field(default=5, ge=1)
 
 
 class ReportProfileConfig(BaseModel):
@@ -130,8 +133,8 @@ class CollectorConfig(BaseModel):
     limit: int = Field(default=100, ge=1)
     lookback_hours: int = Field(default=24, ge=1)
     trim: bool = True
-    include_comments: bool = False
-    comments_per_post: int = Field(default=0, ge=0)
+    include_comments: bool = True
+    comments_per_post: int = Field(default=10, ge=0)
 
 
 class XUserSourceConfig(BaseModel):
@@ -153,8 +156,8 @@ class RedditSubredditSourceConfig(BaseModel):
     limit: int = Field(default=100, ge=1)
     lookback_hours: int = Field(default=24, ge=1)
     trim: bool = True
-    include_comments: bool = False
-    comments_per_post: int = Field(default=0, ge=0)
+    include_comments: bool = True
+    comments_per_post: int = Field(default=10, ge=0)
 
 
 class SourcesConfig(BaseModel):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -90,12 +91,22 @@ class LLMAnalysisService:
         succeeded_count = 0
         failed_count = 0
         fatal_error: str | None = None
-        for chunk in chunks:
-            try:
-                summary = await self.llm_client.complete_json(
-                    build_analysis_chunk_messages(chunk.payload, instructions=instructions)
-                )
-                parsed = _parsed_summary(summary)
+
+        semaphore = asyncio.Semaphore(self.config.llm.analysis_max_concurrency)
+
+        async def analyze_chunk(chunk: AnalysisChunk) -> tuple[AnalysisChunk, dict[str, Any] | None, Summary | None, Exception | None]:
+            async with semaphore:
+                try:
+                    summary = await self.llm_client.complete_json(
+                        build_analysis_chunk_messages(chunk.payload, instructions=instructions)
+                    )
+                    return chunk, _parsed_summary(summary), summary, None
+                except Exception as exc:
+                    return chunk, None, None, exc
+
+        results = await asyncio.gather(*(analyze_chunk(chunk) for chunk in chunks))
+        for chunk, parsed, summary, error in results:
+            if error is None and parsed is not None and summary is not None:
                 await self._persist_chunk(
                     analysis_run_id=analysis_run_id,
                     profile=summary_input.profile,
@@ -104,17 +115,17 @@ class LLMAnalysisService:
                     summary=summary,
                 )
                 succeeded_count += 1
-            except Exception as exc:
-                failed_count += 1
-                fatal_error = str(exc)
-                warnings.append(
-                    PipelineSectionWarning(
-                        section="llm_analysis",
-                        source_id=chunk.key,
-                        phase="analyzing",
-                        message=str(exc),
-                    )
+                continue
+            failed_count += 1
+            fatal_error = str(error)
+            warnings.append(
+                PipelineSectionWarning(
+                    section="llm_analysis",
+                    source_id=chunk.key,
+                    phase="analyzing",
+                    message=str(error),
                 )
+            )
 
         status = "succeeded" if succeeded_count else "failed"
         await self.repository.finish_llm_analysis_run(

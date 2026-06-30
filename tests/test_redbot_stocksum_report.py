@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from redbot_cogs.stocksum_report.stocksum_report import (
+    DEFAULT_TIMEOUT_SECONDS,
     StockSumArtifact,
     StockSumReport,
     StockSumHttpClient,
@@ -14,6 +15,10 @@ from redbot_cogs.stocksum_report.stocksum_report import (
     _failure_message,
     _split_discord_markdown,
 )
+
+
+def test_default_report_timeout_is_30_minutes() -> None:
+    assert DEFAULT_TIMEOUT_SECONDS == 30 * 60
 
 
 async def test_client_sends_report_request_and_downloads_artifact() -> None:
@@ -345,6 +350,32 @@ async def test_management_source_add_calls_api_for_owner(monkeypatch) -> None:
     ]
     assert interaction.response.messages[0]["ephemeral"] is True
     assert "Added X source @aleabitoreddit" in interaction.response.messages[0]["content"]
+
+
+async def test_management_reddit_source_add_defaults_to_comments(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=True))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.sources_add_reddit(interaction, subreddit="wallstreetbets")
+
+    assert client.calls == [
+        (
+            "post",
+            "/v1/sources/subreddits",
+            {
+                "subreddit": "wallstreetbets",
+                "profile": "default",
+                "limit": 100,
+                "lookback_hours": 24,
+                "include_comments": True,
+                "comments_per_post": 10,
+            },
+        )
+    ]
+    assert interaction.response.messages[0]["ephemeral"] is True
+    assert "Added subreddit wallstreetbets" in interaction.response.messages[0]["content"]
 
 
 async def test_secret_set_command_is_ephemeral_and_redacted(monkeypatch) -> None:
