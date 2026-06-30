@@ -14,7 +14,8 @@ def test_example_config_is_valid() -> None:
     assert config.server.port == 8000
     assert config.server.blacklisted_ips == []
     assert config.server.artifact_dir == "data/http_jobs"
-    assert config.server.report_cache_ttl_seconds == 3600
+    assert config.server.report_cache_ttl_seconds == 21600
+    assert config.server.coalesce_inflight_reports is True
     assert config.playwright.channel == "chromium"
     assert config.playwright.browser == "chromium"
     assert config.playwright.headless is True

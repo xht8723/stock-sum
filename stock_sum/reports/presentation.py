@@ -208,16 +208,15 @@ def _html_social_card(item: dict[str, Any], media_by_ref: dict[str, list[dict[st
         f"<h4>{escape(title)}</h4>",
         _html_paragraph("Summary", item.get("post_summary") or item.get("claim") or item.get("summary")),
     ]
-    if item.get("comments_sentiment"):
-        lines.append(_html_paragraph("Comments", item.get("comments_sentiment")))
-    if item.get("comment_sentiment_counts"):
-        lines.append(_html_paragraph("Comment Stats", _comment_stats_text(item.get("comment_sentiment_counts"))))
-    if item.get("tags"):
-        lines.append(_html_paragraph("Tags", _tags_text(item.get("tags"))))
+    comments = _comments_text(item)
+    if comments:
+        lines.append(_html_paragraph("Comments", comments))
     lines.extend(
         [
             _html_paragraph("Sentiment", item.get("sentiment")),
             _html_paragraph("Takeaway", item.get("interpretation") or item.get("reason")),
+            _html_paragraph("Stats", _plain_sentiment_stats_text(item.get("comment_sentiment_counts"))),
+            _html_paragraph("Tags", _tags_text(item.get("tags"))),
             _html_links(item.get("urls") or item.get("url")),
             _html_linked_media(source_ref, media_by_ref),
             "</article>",
@@ -264,14 +263,15 @@ def _markdown_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dic
         lines.append(f"- **{labels}**")
     if item.get("post_summary") or item.get("claim") or item.get("summary"):
         lines.append(f"- Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
-    if item.get("comments_sentiment"):
-        lines.append(f"- Comments: {_stringify_item(item['comments_sentiment'])}")
-    if item.get("comment_sentiment_counts"):
-        lines.append(f"- Comment stats: {_comment_stats_text(item.get('comment_sentiment_counts'))}")
-    if item.get("tags"):
-        lines.append(f"- Tags: {_tags_text(item.get('tags'))}")
+    comments = _comments_text(item)
+    if comments:
+        lines.append(f"- Comments: {comments}")
     if item.get("interpretation") or item.get("reason"):
         lines.append(f"- Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
+    if item.get("comment_sentiment_counts"):
+        lines.append(f"- Stats: {_plain_sentiment_stats_text(item.get('comment_sentiment_counts'))}")
+    if item.get("tags"):
+        lines.append(f"- Tags: {_tags_text(item.get('tags'))}")
     for index, url in enumerate(_as_list(item.get("urls") or item.get("url")), start=1):
         lines.append(f"- Source: [{_source_link_label(index)}]({url})")
     lines.extend(_markdown_linked_media(source_ref, media_by_ref))
@@ -301,24 +301,25 @@ def _discord_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict
     prefix = f"- **{title}**"
     if labels:
         prefix += f" _{labels}_"
-    lines = [prefix]
+    lines = ["---", prefix]
     if item.get("post_summary") or item.get("claim") or item.get("summary"):
-        lines.append(f"  Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
-    if item.get("comments_sentiment"):
-        lines.append(f"  Comments: {_stringify_item(item['comments_sentiment'])}")
-    if item.get("comment_sentiment_counts"):
-        lines.append(f"  Comment stats: {_comment_stats_text(item.get('comment_sentiment_counts'))}")
-    if item.get("tags"):
-        lines.append(f"  Tags: {_tags_text(item.get('tags'))}")
+        lines.append(f"> **Summary:** {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
+    comments = _comments_text(item)
+    if comments:
+        lines.append(f"**Comments:** {comments}")
     if item.get("interpretation") or item.get("reason"):
-        lines.append(f"  Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
+        lines.append(f"**Takeaway:** _{_stringify_item(item.get('interpretation') or item.get('reason'))}_")
+    if item.get("comment_sentiment_counts"):
+        lines.append(f"**Stats:** {_discord_sentiment_stats_text(item.get('comment_sentiment_counts'))}")
+    if item.get("tags"):
+        lines.append(f"**Tags:** {_discord_tags_text(item.get('tags'))}")
     source_links = []
     for index, url in enumerate(_as_list(item.get("urls") or item.get("url")), start=1):
         source_links.append(f"[{_source_link_label(index)}]({url})")
     media_links = _discord_linked_media(source_ref, media_by_ref)
     links = [*source_links, *media_links]
     if links:
-        lines.append("  Links: " + " | ".join(links))
+        lines.append("**Links:** " + " | ".join(links))
     return lines
 
 
@@ -354,14 +355,15 @@ def _text_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict[st
     lines = [f"- {title}" + (f" [{labels}]" if labels else "")]
     if item.get("post_summary") or item.get("claim") or item.get("summary"):
         lines.append(f"  Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
-    if item.get("comments_sentiment"):
-        lines.append(f"  Comments: {_stringify_item(item['comments_sentiment'])}")
-    if item.get("comment_sentiment_counts"):
-        lines.append(f"  Comment stats: {_comment_stats_text(item.get('comment_sentiment_counts'))}")
-    if item.get("tags"):
-        lines.append(f"  Tags: {_tags_text(item.get('tags'))}")
+    comments = _comments_text(item)
+    if comments:
+        lines.append(f"  Comments: {comments}")
     if item.get("interpretation") or item.get("reason"):
         lines.append(f"  Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
+    if item.get("comment_sentiment_counts"):
+        lines.append(f"  Stats: {_plain_sentiment_stats_text(item.get('comment_sentiment_counts'))}")
+    if item.get("tags"):
+        lines.append(f"  Tags: {_tags_text(item.get('tags'))}")
     for url in _as_list(item.get("urls") or item.get("url")):
         lines.append(f"  Source: {url}")
     lines.extend(_text_linked_media(source_ref, media_by_ref))
@@ -469,14 +471,15 @@ def _html_grouped_post(post: dict[str, Any], media_by_ref: dict[str, list[dict[s
         f"<h4>{escape(_post_title(post, reddit=reddit))}</h4>",
         _html_paragraph("Post Summary", post.get("post_summary") or post.get("claim") or post.get("summary")),
     ]
-    if reddit:
-        lines.append(_html_paragraph("Comments Sentiment", post.get("comments_sentiment")))
-        lines.append(_html_paragraph("Comment Stats", _comment_stats_text(post.get("comment_sentiment_counts"))))
+    comments = _comments_text(post) if reddit else ""
+    if comments:
+        lines.append(_html_paragraph("Comments Sentiment", comments))
     lines.extend(
         [
             _html_paragraph("Sentiment", post.get("sentiment")),
-            _html_paragraph("Tags", _tags_text(post.get("tags"))),
             _html_paragraph("Interpretation", post.get("interpretation")),
+            _html_paragraph("Stats", _plain_sentiment_stats_text(post.get("comment_sentiment_counts"))),
+            _html_paragraph("Tags", _tags_text(post.get("tags"))),
             _html_links(post.get("urls") or post.get("url")),
             _html_linked_media(source_ref, media_by_ref),
             _html_extra_fields(
@@ -783,16 +786,17 @@ def _markdown_grouped_post(
         lines.append(f"- **confidence**: {post['confidence']}")
     if post.get("post_summary") or post.get("claim") or post.get("summary"):
         lines.append(f"- **post_summary**: {_stringify_item(post.get('post_summary') or post.get('claim') or post.get('summary'))}")
-    if reddit and post.get("comments_sentiment"):
-        lines.append(f"- **comments_sentiment**: {_stringify_item(post['comments_sentiment'])}")
-    if reddit and post.get("comment_sentiment_counts"):
-        lines.append(f"- **comment_stats**: {_comment_stats_text(post.get('comment_sentiment_counts'))}")
+    comments = _comments_text(post) if reddit else ""
+    if comments:
+        lines.append(f"- **comments_sentiment**: {comments}")
     if post.get("sentiment"):
         lines.append(f"- **sentiment**: {_stringify_item(post['sentiment'])}")
-    if post.get("tags"):
-        lines.append(f"- **tags**: {_tags_text(post.get('tags'))}")
     if post.get("interpretation"):
         lines.append(f"- **interpretation**: {_stringify_item(post['interpretation'])}")
+    if reddit and post.get("comment_sentiment_counts"):
+        lines.append(f"- **stats**: {_plain_sentiment_stats_text(post.get('comment_sentiment_counts'))}")
+    if post.get("tags"):
+        lines.append(f"- **tags**: {_tags_text(post.get('tags'))}")
     for index, url in enumerate(_as_list(post.get("urls") or post.get("url")), start=1):
         lines.append(f"- **source**: [{_source_link_label(index)}]({url})")
     lines.extend(_markdown_linked_media(source_ref, media_by_ref))
@@ -947,16 +951,17 @@ def _text_grouped_post(
         lines.append(f"- confidence: {post['confidence']}")
     if post.get("post_summary") or post.get("claim") or post.get("summary"):
         lines.append(f"- post_summary: {_stringify_item(post.get('post_summary') or post.get('claim') or post.get('summary'))}")
-    if reddit and post.get("comments_sentiment"):
-        lines.append(f"- comments_sentiment: {_stringify_item(post['comments_sentiment'])}")
-    if reddit and post.get("comment_sentiment_counts"):
-        lines.append(f"- comment_stats: {_comment_stats_text(post.get('comment_sentiment_counts'))}")
+    comments = _comments_text(post) if reddit else ""
+    if comments:
+        lines.append(f"- comments_sentiment: {comments}")
     if post.get("sentiment"):
         lines.append(f"- sentiment: {_stringify_item(post['sentiment'])}")
-    if post.get("tags"):
-        lines.append(f"- tags: {_tags_text(post.get('tags'))}")
     if post.get("interpretation"):
         lines.append(f"- interpretation: {_stringify_item(post['interpretation'])}")
+    if reddit and post.get("comment_sentiment_counts"):
+        lines.append(f"- stats: {_plain_sentiment_stats_text(post.get('comment_sentiment_counts'))}")
+    if post.get("tags"):
+        lines.append(f"- tags: {_tags_text(post.get('tags'))}")
     for url in _as_list(post.get("urls") or post.get("url")):
         lines.append(f"- source: {url}")
     lines.extend(_text_linked_media(source_ref, media_by_ref))
@@ -1156,15 +1161,37 @@ def _tags_text(value: Any) -> str:
     return ", ".join(tags)
 
 
-def _comment_stats_text(value: Any) -> str:
+def _discord_tags_text(value: Any) -> str:
+    tags = [str(item).strip() for item in _as_list(value) if str(item).strip()]
+    return " ".join(f"`{tag}`" for tag in tags)
+
+
+def _discord_sentiment_stats_text(value: Any) -> str:
     if not isinstance(value, dict):
         return ""
     parts = []
     for sentiment in ("bullish", "bearish", "mixed", "neutral", "unclear"):
         count = value.get(sentiment, 0)
-        if count:
-            parts.append(f"{sentiment}: {count}")
-    return ", ".join(parts) or "no analyzed comments"
+        parts.append(f"`{sentiment} {count}`")
+    return " · ".join(parts)
+
+
+def _plain_sentiment_stats_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    return ", ".join(f"{sentiment}: {value.get(sentiment, 0)}" for sentiment in ("bullish", "bearish", "mixed", "neutral", "unclear"))
+
+
+def _comments_text(item: dict[str, Any]) -> str:
+    comments = _stringify_item(item["comments_sentiment"]) if item.get("comments_sentiment") else ""
+    stats = _plain_sentiment_stats_text(item.get("comment_sentiment_counts"))
+    if comments and _normalized_text(comments) != _normalized_text(stats):
+        return comments
+    return ""
+
+
+def _normalized_text(value: str) -> str:
+    return "".join(str(value).lower().split())
 
 
 def _strip_json_fence(content: str) -> str:

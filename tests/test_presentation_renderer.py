@@ -160,8 +160,11 @@ def test_discord_markdown_renderer_is_compact_and_clickable() -> None:
     assert rendered.startswith("**Market Social Digest**")
     assert "**Social Media Sentiment**" in rendered
     assert "__Medium Importance__" in rendered
+    assert "\n---\n- **NBIS growth post**" in rendered
     assert "**NBIS growth post**" in rendered
-    assert "Tags: nbis, growth, cloud, revenue, risk" in rendered
+    assert "> **Summary:** Compares NBIS to HOOD growth." in rendered
+    assert "**Takeaway:** _High-conviction but speculative._" in rendered
+    assert "**Tags:** `nbis` `growth` `cloud` `revenue` `risk`" in rendered
     assert "[Read source](https://x.com/aleabitoreddit/status/1)" in rendered
     assert "[Image 1](https://cdn.example/x-chart.jpg)" in rendered
     assert "| Politician |" not in rendered
@@ -213,14 +216,42 @@ def test_grouped_markdown_renderer_uses_requested_heading_layout() -> None:
     assert "#### NBIS growth post" in rendered
     assert "#### MSTR thread" in rendered
     assert "Comments:" in rendered
-    assert "Comment stats:" in rendered
+    assert "Comment stats:" not in rendered
+    assert "- Stats: bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0" in rendered
     assert "Tags:" in rendered
+    assert rendered.index("- Stats: bullish: 1") < rendered.index("- Tags: mstr")
+    assert rendered.index("- Tags: mstr") < rendered.index("- Source: [Read source](https://www.reddit.com/r/test/comments/1/)")
     assert "![Post image](https://cdn.example/x-chart.jpg)" in rendered
     assert "x1" not in rendered
     assert "r1" not in rendered
     assert "m1" not in rendered
     assert "## Media Observations" not in rendered
     assert "## Metadata" not in rendered
+
+
+def test_discord_reddit_details_are_not_indented_or_duplicated() -> None:
+    rendered = PresentationRenderer().render(_grouped_response(), mode="discord")
+
+    assert "\n**Comments:** Comments mostly agree with jokes." in rendered
+    assert "\n**Stats:** `bullish 1` · `bearish 2` · `mixed 0` · `neutral 1` · `unclear 0`" in rendered
+    assert "\n**Tags:** `mstr` `bitcoin` `leverage` `risk` `sentiment`" in rendered
+    assert "\n**Takeaway:**" in rendered
+    assert "\n**Links:** [Read source](https://www.reddit.com/r/test/comments/1/)" in rendered
+    assert "Comment stats:" not in rendered
+    assert rendered.index("**Stats:**") < rendered.index("**Tags:** `mstr`")
+    assert rendered.index("**Tags:** `mstr`") < rendered.index("**Links:** [Read source](https://www.reddit.com/r/test/comments/1/)")
+    assert "\n  Comments:" not in rendered
+    assert "\n  Tags:" not in rendered
+
+
+def test_discord_count_only_comments_are_not_duplicated() -> None:
+    response = _grouped_response()
+    response["summary"]["reddit_report"]["posts"][0]["comments_sentiment"] = "bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0"
+
+    rendered = PresentationRenderer().render(response, mode="discord")
+
+    assert "\n**Comments:** bullish: 1" not in rendered
+    assert "\n**Stats:** `bullish 1` · `bearish 2` · `mixed 0` · `neutral 1` · `unclear 0`" in rendered
 
 
 def test_grouped_html_renderer_uses_user_and_post_sections() -> None:
@@ -232,7 +263,9 @@ def test_grouped_html_renderer_uses_user_and_post_sections() -> None:
     assert "NBIS growth post" in rendered
     assert "Comments" in rendered
     assert "nbis, growth, cloud, revenue, risk" in rendered
-    assert "bearish: 2" in rendered
+    assert "Comments mostly agree with jokes." in rendered
+    assert "<strong>Stats:</strong> bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0" in rendered
+    assert "Comment Stats" not in rendered
     assert 'src="https://cdn.example/x-chart.jpg"' in rendered
     assert "Trading Info" not in rendered
     assert "Media Observations" not in rendered
@@ -245,6 +278,25 @@ def test_grouped_text_renderer_is_social_only() -> None:
     assert "TRADING INFO" not in rendered
     assert "NBIS growth post" in rendered
     assert "MSTR thread" in rendered
+    assert "  Stats: bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0" in rendered
+    assert rendered.index("  Stats: bullish: 1") < rendered.index("  Tags: mstr")
+    assert rendered.index("  Tags: mstr") < rendered.index("  Source: https://www.reddit.com/r/test/comments/1/")
+
+
+def test_count_only_comments_are_not_duplicated_in_all_non_discord_modes() -> None:
+    response = _grouped_response()
+    response["summary"]["reddit_report"]["posts"][0]["comments_sentiment"] = "bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0"
+
+    markdown = PresentationRenderer().render(response, mode="markdown")
+    html = PresentationRenderer().render(response, mode="html")
+    text = PresentationRenderer().render(response, mode="text")
+
+    assert "- **comments_sentiment**: bullish: 1" not in markdown
+    assert "Comments Sentiment" not in html
+    assert "- comments_sentiment: bullish: 1" not in text
+    assert "- Stats: bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0" in markdown
+    assert "<strong>Stats:</strong> bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0" in html
+    assert "  Stats: bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0" in text
 
 
 def test_renderer_outputs_pipeline_warnings_in_all_modes() -> None:

@@ -10,7 +10,8 @@ blacklisted_ips = []
 management_allow_remote = false
 artifact_dir = "data/http_jobs"
 job_retention_hours = 24
-report_cache_ttl_seconds = 3600
+report_cache_ttl_seconds = 21600
+coalesce_inflight_reports = true
 
 [storage]
 sqlite_path = "data/stock_sum.sqlite3"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -162,7 +163,7 @@ async def test_report_job_cache_expires_after_ttl(tmp_path) -> None:
     await manager.run_report_job(first_job.job_id, options)
     first_status = manager.get_job(first_job.job_id)
     assert first_status is not None
-    first_status.finished_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    first_status.finished_at = (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat()
     manager._save(first_status)
 
     second_job = manager.create_report_job("default", options)
@@ -251,13 +252,163 @@ async def test_report_job_runs_retention_after_regular_and_cache_hit_jobs(tmp_pa
     assert second_status.cleanup_result is not None
 
 
+async def test_identical_concurrent_report_jobs_coalesce_to_one_pipeline_run(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result(), delay_seconds=0.05)
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    first_options = ReportJobOptions(mode="html")
+    second_options = ReportJobOptions(mode="discord")
+    first_job = manager.create_report_job("default", first_options)
+    first_task = asyncio.create_task(manager.run_report_job(first_job.job_id, first_options))
+    await asyncio.sleep(0.01)
+    second_job = manager.create_report_job("default", second_options)
+    second_task = asyncio.create_task(manager.run_report_job(second_job.job_id, second_options))
+
+    await asyncio.gather(first_task, second_task)
+
+    first_status = manager.get_job(first_job.job_id)
+    second_status = manager.get_job(second_job.job_id)
+    assert first_status is not None
+    assert second_status is not None
+    assert first_status.status == "succeeded"
+    assert second_status.status == "succeeded"
+    assert second_status.coalesced_from_job_id == first_job.job_id
+    assert second_status.coalesced_wait_seconds is not None
+    assert second_status.artifact_path is not None
+    assert second_status.artifact_path.endswith("report.md")
+    assert second_status.cache_hit is False
+    assert pipeline.calls == 1
+    assert llm.calls == 1
+
+
+async def test_concurrent_report_jobs_do_not_coalesce_when_content_options_change(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result(), delay_seconds=0.05)
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    first_options = ReportJobOptions(mode="html")
+    second_options = ReportJobOptions(mode="html", instructions="Focus on semiconductor names.")
+    first_job = manager.create_report_job("default", first_options)
+    second_job = manager.create_report_job("default", second_options)
+
+    await asyncio.gather(
+        manager.run_report_job(first_job.job_id, first_options),
+        manager.run_report_job(second_job.job_id, second_options),
+    )
+
+    first_status = manager.get_job(first_job.job_id)
+    second_status = manager.get_job(second_job.job_id)
+    assert first_status is not None
+    assert second_status is not None
+    assert first_status.status == "succeeded"
+    assert second_status.status == "succeeded"
+    assert second_status.coalesced_from_job_id is None
+    assert pipeline.calls == 2
+    assert llm.calls == 2
+
+
+async def test_coalesced_report_job_fails_when_leader_fails(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result(), delay_seconds=0.05, fail=True)
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: FakeLLM(),
+    )
+    options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", options)
+    first_task = asyncio.create_task(manager.run_report_job(first_job.job_id, options))
+    await asyncio.sleep(0.01)
+    second_job = manager.create_report_job("default", options)
+    second_task = asyncio.create_task(manager.run_report_job(second_job.job_id, options))
+
+    await asyncio.gather(first_task, second_task)
+
+    first_status = manager.get_job(first_job.job_id)
+    second_status = manager.get_job(second_job.job_id)
+    assert first_status is not None
+    assert second_status is not None
+    assert first_status.status == "failed"
+    assert second_status.status == "failed"
+    assert second_status.coalesced_from_job_id == first_job.job_id
+    assert f"Coalesced report leader {first_job.job_id} failed" in str(second_status.error)
+    assert pipeline.calls == 1
+
+
+async def test_inflight_report_coalescing_can_be_disabled(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result(), delay_seconds=0.05)
+    config = _test_config(tmp_path)
+    manager = HttpJobManager(
+        config.model_copy(update={"server": config.server.model_copy(update={"coalesce_inflight_reports": False})}),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: FakeLLM(),
+    )
+    options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", options)
+    second_job = manager.create_report_job("default", options)
+
+    await asyncio.gather(
+        manager.run_report_job(first_job.job_id, options),
+        manager.run_report_job(second_job.job_id, options),
+    )
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.coalesced_from_job_id is None
+    assert second_status.cache_hit is False
+    assert pipeline.calls == 2
+
+
+async def test_coalesced_report_job_runs_retention_after_writing_artifact(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result(), delay_seconds=0.05)
+    retention = FakeRetentionService()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: FakeLLM(),
+        retention_service_factory=lambda: retention,
+    )
+    options = ReportJobOptions(mode="html")
+    first_job = manager.create_report_job("default", options)
+    first_task = asyncio.create_task(manager.run_report_job(first_job.job_id, options))
+    await asyncio.sleep(0.01)
+    second_job = manager.create_report_job("default", options)
+    second_task = asyncio.create_task(manager.run_report_job(second_job.job_id, options))
+
+    await asyncio.gather(first_task, second_task)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.coalesced_from_job_id == first_job.job_id
+    assert second_status.cleanup_result is not None
+    assert retention.calls == 2
+
+
 class FakePipeline:
-    def __init__(self, result: PipelineCollectionResult) -> None:
+    def __init__(self, result: PipelineCollectionResult, *, delay_seconds: float = 0, fail: bool = False) -> None:
         self.result = result
+        self.delay_seconds = delay_seconds
+        self.fail = fail
         self.calls = 0
 
     async def run_report(self, profile: str) -> PipelineCollectionResult:
         self.calls += 1
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
+        if self.fail:
+            raise RuntimeError("pipeline failed")
         return self.result
 
 

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
+import asyncio
 import hashlib
 import json
 
@@ -63,12 +64,24 @@ class HttpJobRecord:
     cache_hit: bool = False
     cached_from_job_id: str | None = None
     cache_age_seconds: int | None = None
+    coalesced_from_job_id: str | None = None
+    coalesced_wait_seconds: int | None = None
     cleanup_result: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe representation."""
 
         return asdict(self)
+
+
+@dataclass
+class _InFlightReport:
+    """A report job currently producing a summary for a cache key."""
+
+    cache_key: str
+    leader_job_id: str
+    started_at: datetime
+    done: asyncio.Event
 
 
 class HttpJobManager:
@@ -87,6 +100,8 @@ class HttpJobManager:
         self.config = config
         self.artifact_dir = Path(config.server.artifact_dir)
         self._jobs: dict[str, HttpJobRecord] = {}
+        self._inflight_reports: dict[str, _InFlightReport] = {}
+        self._inflight_lock = asyncio.Lock()
         self._pipeline_factory = pipeline_factory or (
             lambda: ReportPipeline(RuntimeContext(config=config), repository=self._repository_factory())
         )
@@ -132,6 +147,8 @@ class HttpJobManager:
     async def run_report_job(self, job_id: str, options: ReportJobOptions) -> None:
         """Run collection, payload assembly, LLM summarization, and rendering."""
 
+        is_inflight_leader = False
+        cache_key: str | None = None
         try:
             self._mark_running(job_id, phase="cache_lookup")
             job = self._require_job(job_id)
@@ -140,6 +157,11 @@ class HttpJobManager:
             cache_hit = self._find_report_cache_hit(job_id, cache_key)
             if cache_hit is not None:
                 self._write_cached_report_artifacts(job_id, cache_hit, options)
+                return
+
+            is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
+            if not is_inflight_leader:
+                await self._wait_for_coalesced_report(job_id, inflight_report, options)
                 return
 
             self._update(job_id, phase="collecting")
@@ -205,6 +227,8 @@ class HttpJobManager:
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
+            if is_inflight_leader and cache_key is not None:
+                await self._release_inflight_report(cache_key, job_id)
             await self._run_retention(job_id)
 
     async def run_collect_job(self, job_id: str) -> None:
@@ -272,6 +296,8 @@ class HttpJobManager:
         cache_hit: bool = False,
         cached_from_job_id: str | None = None,
         cache_age_seconds: int | None = None,
+        coalesced_from_job_id: str | None = None,
+        coalesced_wait_seconds: int | None = None,
     ) -> None:
         changes: dict[str, Any] = {
             "status": "succeeded",
@@ -285,6 +311,8 @@ class HttpJobManager:
             "cache_hit": cache_hit,
             "cached_from_job_id": cached_from_job_id,
             "cache_age_seconds": cache_age_seconds,
+            "coalesced_from_job_id": coalesced_from_job_id,
+            "coalesced_wait_seconds": coalesced_wait_seconds,
         }
         if warnings is not None:
             changes["warnings"] = warnings
@@ -373,6 +401,99 @@ class HttpJobManager:
             cache_hit=True,
             cached_from_job_id=cache_hit.job_id,
             cache_age_seconds=cache_hit.cache_age_seconds,
+        )
+
+    async def _join_or_register_inflight_report(
+        self,
+        job_id: str,
+        cache_key: str | None,
+    ) -> tuple[bool, _InFlightReport | None]:
+        if not self.config.server.coalesce_inflight_reports or not cache_key:
+            return True, None
+
+        async with self._inflight_lock:
+            existing = self._inflight_reports.get(cache_key)
+            if existing is not None and existing.leader_job_id != job_id:
+                return False, existing
+
+            report = _InFlightReport(
+                cache_key=cache_key,
+                leader_job_id=job_id,
+                started_at=datetime.now(timezone.utc),
+                done=asyncio.Event(),
+            )
+            self._inflight_reports[cache_key] = report
+            return True, report
+
+    async def _release_inflight_report(self, cache_key: str, job_id: str) -> None:
+        async with self._inflight_lock:
+            report = self._inflight_reports.get(cache_key)
+            if report is None or report.leader_job_id != job_id:
+                return
+            report.done.set()
+            del self._inflight_reports[cache_key]
+
+    async def _wait_for_coalesced_report(
+        self,
+        job_id: str,
+        report: _InFlightReport | None,
+        options: ReportJobOptions,
+    ) -> None:
+        if report is None:
+            raise RuntimeError("No in-flight report was available to coalesce.")
+
+        wait_started = datetime.now(timezone.utc)
+        self._update(job_id, phase="waiting_for_inflight", coalesced_from_job_id=report.leader_job_id)
+        await report.done.wait()
+        wait_seconds = max(0, int((datetime.now(timezone.utc) - wait_started).total_seconds()))
+        self._update(job_id, coalesced_wait_seconds=wait_seconds)
+
+        leader = self.get_job(report.leader_job_id)
+        if leader is None:
+            raise RuntimeError(f"Coalesced report leader disappeared: {report.leader_job_id}")
+        if leader.status != "succeeded":
+            detail = f": {leader.error}" if leader.error else "."
+            raise RuntimeError(f"Coalesced report leader {leader.job_id} failed{detail}")
+        if not leader.summary_path or not Path(leader.summary_path).exists():
+            raise RuntimeError(f"Coalesced report leader {leader.job_id} did not produce a summary.")
+
+        self._write_coalesced_report_artifacts(
+            job_id=job_id,
+            leader=leader,
+            options=options,
+            wait_seconds=wait_seconds,
+        )
+
+    def _write_coalesced_report_artifacts(
+        self,
+        *,
+        job_id: str,
+        leader: HttpJobRecord,
+        options: ReportJobOptions,
+        wait_seconds: int,
+    ) -> None:
+        response_data = self._read_json(Path(leader.summary_path or ""))
+        warning_data = _safe_warning_list(response_data.get("pipeline_warnings") or response_data.get("failed_sections"))
+        current_summary_path = self._job_dir(job_id) / "summary.json"
+        self._write_json(current_summary_path, response_data)
+        self._update(
+            job_id,
+            phase="rendering",
+            summary_path=str(current_summary_path),
+            warnings=warning_data,
+            coalesced_from_job_id=leader.job_id,
+            coalesced_wait_seconds=wait_seconds,
+        )
+        artifact_path, media_type = self._write_artifact(job_id, response_data, options)
+        self._mark_succeeded(
+            job_id,
+            artifact_path=str(artifact_path),
+            artifact_media_type=media_type,
+            summary_path=str(current_summary_path),
+            warnings=warning_data,
+            cache_key=leader.cache_key,
+            coalesced_from_job_id=leader.job_id,
+            coalesced_wait_seconds=wait_seconds,
         )
 
     def _find_report_cache_hit(self, current_job_id: str, cache_key: str | None) -> HttpJobRecord | None:

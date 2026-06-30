@@ -24,7 +24,8 @@ class ServerConfig(BaseModel):
     management_allow_remote: bool = False
     artifact_dir: str = "data/http_jobs"
     job_retention_hours: int = Field(default=24, ge=1)
-    report_cache_ttl_seconds: int = Field(default=3600, ge=0)
+    report_cache_ttl_seconds: int = Field(default=21600, ge=0)
+    coalesce_inflight_reports: bool = True
 
 
 class StorageConfig(BaseModel):
