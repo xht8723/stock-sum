@@ -136,6 +136,7 @@ def _compact_payload(
         "subreddits": summary_input.metadata.get("subreddits"),
         "download_images": summary_input.metadata.get("download_images"),
         "download_errors": summary_input.metadata.get("download_errors"),
+        "source_windows": summary_input.metadata.get("source_windows"),
         "collection_run_count": len(summary_input.collection_runs),
     }
     return {

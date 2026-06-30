@@ -90,11 +90,15 @@ class DeepSeekClient:
     async def summarize(self, payload: SummaryPayload, instructions: str | None = None) -> Summary:
         """Summarize a compact source payload."""
 
+        return await self.complete_json(build_trading_summary_messages(payload, instructions=instructions))
+
+    async def complete_json(self, messages: list[dict[str, str]]) -> Summary:
+        """Run a structured JSON chat completion."""
+
         api_key = os.getenv(self.api_key_env)
         if not api_key:
             raise DeepSeekAuthError(f"Missing DeepSeek API key. Set environment variable {self.api_key_env}.")
 
-        messages = build_trading_summary_messages(payload, instructions=instructions)
         request_body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,

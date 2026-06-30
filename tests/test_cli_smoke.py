@@ -457,6 +457,8 @@ def test_config_x_user_add_list_delete_updates_profile(tmp_path) -> None:
             str(config_path),
             "--limit",
             "20",
+            "--lookback-hours",
+            "12",
             "--profile",
             "default",
         ],
@@ -473,6 +475,7 @@ def test_config_x_user_add_list_delete_updates_profile(tmp_path) -> None:
     assert add_result.exit_code == 0
     assert list_result.exit_code == 0
     assert '"handle": "newhandle"' in list_result.output
+    assert '"lookback_hours": 12' in list_result.output
     assert '"x.newhandle"' in profile_result.output
     assert delete_result.exit_code == 0
     assert '"x.newhandle"' not in profile_after_delete.output
@@ -499,6 +502,8 @@ def test_config_subreddit_add_list_delete_updates_profile(tmp_path) -> None:
             "--include-comments",
             "--comments-per-post",
             "3",
+            "--lookback-hours",
+            "6",
             "--profile",
             "default",
         ],
@@ -516,6 +521,7 @@ def test_config_subreddit_add_list_delete_updates_profile(tmp_path) -> None:
     assert list_result.exit_code == 0
     assert '"subreddit": "stocks"' in list_result.output
     assert '"include_comments": true' in list_result.output
+    assert '"lookback_hours": 6' in list_result.output
     assert '"reddit.stocks"' in profile_result.output
     assert delete_result.exit_code == 0
     assert '"reddit.stocks"' not in profile_after_delete.output
@@ -600,6 +606,14 @@ def test_llm_summarize_writes_json_from_payload(monkeypatch, tmp_path) -> None:
     assert '"https://cdn.example/1.jpg"' in text
 
 
+def test_llm_analyze_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["llm", "analyze", "--help"])
+
+    assert result.exit_code == 0
+    assert "Run chunked LLM analysis" in result.output
+
+
 def test_report_render_writes_all_modes(tmp_path) -> None:
     response = tmp_path / "response.json"
     response.write_text(
@@ -636,63 +650,6 @@ def test_report_render_writes_all_modes(tmp_path) -> None:
         assert result.exit_code == 0
         assert output.exists()
         assert expected in output.read_text(encoding="utf-8")
-
-
-def test_report_render_can_include_capitol_trades(monkeypatch, tmp_path) -> None:
-    response = tmp_path / "response.json"
-    response.write_text('{"summary":{"x_reports":[],"reddit_report":{"posts":[]}}}', encoding="utf-8")
-    output = tmp_path / "report.html"
-
-    class FakeSnapshot:
-        def to_dict(self):
-            return {
-                "source_url": "https://www.capitoltrades.com/trades?page=1",
-                "cards": [{"label": "TRADES", "value": "36,776"}],
-                "trades": [
-                    {
-                        "politician": "Nancy Pelosi",
-                        "party": "Democrat",
-                        "chamber": "House",
-                        "state": "CA",
-                        "issuer": "Intel Corp",
-                        "ticker": "INTC:US",
-                        "published": "24 Jun 2026",
-                        "traded": "28 May 2026",
-                        "filed_after": "25 days",
-                        "owner": "Spouse",
-                        "transaction_type": "BUY*",
-                        "size": "1M-5M",
-                        "price": "N/A",
-                    }
-                ],
-            }
-
-    async def fake_scrape(**kwargs):
-        return FakeSnapshot()
-
-    monkeypatch.setattr("stock_sum.cli.scrape_capitol_trades", fake_scrape)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        app,
-        [
-            "report",
-            "render",
-            "--input",
-            str(response),
-            "--output",
-            str(output),
-            "--mode",
-            "html",
-            "--include-capitol-trades",
-        ],
-    )
-
-    assert result.exit_code == 0
-    rendered = output.read_text(encoding="utf-8")
-    assert "Politician Trading Info" in rendered
-    assert "Nancy Pelosi" in rendered
-    assert "BUY*" in rendered
 
 
 def test_report_render_rejects_invalid_mode(tmp_path) -> None:

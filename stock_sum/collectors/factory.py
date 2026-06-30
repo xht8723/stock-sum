@@ -83,6 +83,7 @@ def _x_source_to_collector_config(source: XUserSourceConfig) -> CollectorConfig:
         enabled=source.enabled,
         handle=source.handle.lstrip("@"),
         limit=source.limit,
+        lookback_hours=source.lookback_hours,
     )
 
 
@@ -94,6 +95,7 @@ def _reddit_source_to_collector_config(source: RedditSubredditSourceConfig) -> C
         sort=source.sort,
         timeframe=source.timeframe,
         limit=source.limit,
+        lookback_hours=source.lookback_hours,
         trim=source.trim,
         include_comments=source.include_comments,
         comments_per_post=source.comments_per_post,

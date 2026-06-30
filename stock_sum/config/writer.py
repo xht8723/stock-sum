@@ -149,6 +149,7 @@ def add_x_user(
     *,
     enabled: bool,
     limit: int,
+    lookback_hours: int,
     profile: str | None = None,
     overwrite: bool = False,
 ) -> str:
@@ -166,6 +167,7 @@ def add_x_user(
     source["handle"] = normalized
     source["enabled"] = enabled
     source["limit"] = limit
+    source["lookback_hours"] = lookback_hours
     if existing is None:
         x_users.append(source)
     else:
@@ -204,6 +206,7 @@ def add_subreddit(
     sort: str,
     timeframe: str,
     limit: int,
+    lookback_hours: int,
     trim: bool,
     include_comments: bool,
     comments_per_post: int,
@@ -226,6 +229,7 @@ def add_subreddit(
     source["sort"] = sort
     source["timeframe"] = timeframe
     source["limit"] = limit
+    source["lookback_hours"] = lookback_hours
     source["trim"] = trim
     source["include_comments"] = include_comments
     source["comments_per_post"] = comments_per_post

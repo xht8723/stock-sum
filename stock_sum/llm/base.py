@@ -19,3 +19,6 @@ class LLMClient(Protocol):
 
     async def summarize(self, payload: SummaryPayload, instructions: str | None = None) -> Summary:
         """Summarize an LLM-ready payload."""
+
+    async def complete_json(self, messages: list[dict[str, str]]) -> Summary:
+        """Return a structured JSON completion for explicit chat messages."""

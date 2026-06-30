@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 import hashlib
 import json
 from typing import Any
 
 import aiosqlite
 
-from stock_sum.core.models import RawItem, RawItemSaveResult
+from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 from stock_sum.storage.models import (
     StoredCollectionRun,
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS raw_x_posts (
     view_count INTEGER,
     raw_json TEXT NOT NULL,
     collected_at TEXT NOT NULL,
+    posted_at_utc TEXT,
     PRIMARY KEY (handle, status_id)
 );
 
@@ -93,6 +95,7 @@ CREATE TABLE IF NOT EXISTS raw_reddit_posts (
     created_at_text TEXT,
     raw_json TEXT NOT NULL,
     collected_at TEXT NOT NULL,
+    created_at_utc TEXT,
     PRIMARY KEY (subreddit, post_id)
 );
 
@@ -109,6 +112,7 @@ CREATE TABLE IF NOT EXISTS raw_reddit_comments (
     depth INTEGER,
     raw_json TEXT NOT NULL,
     collected_at TEXT NOT NULL,
+    created_at_utc TEXT,
     PRIMARY KEY (post_id, comment_id)
 );
 
@@ -130,6 +134,101 @@ CREATE TABLE IF NOT EXISTS downloaded_media (
     sha256 TEXT NOT NULL,
     downloaded_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS raw_provider_api_responses (
+    response_id TEXT PRIMARY KEY,
+    collection_run_id TEXT NOT NULL,
+    collector_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    request_arguments_json TEXT NOT NULL,
+    raw_response_text TEXT NOT NULL,
+    parsed_rows_json TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_api_responses_run
+ON raw_provider_api_responses (collection_run_id);
+
+CREATE TABLE IF NOT EXISTS llm_analysis_runs (
+    analysis_run_id TEXT PRIMARY KEY,
+    profile TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    succeeded_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    instructions TEXT,
+    error_text TEXT
+);
+
+CREATE TABLE IF NOT EXISTS llm_x_post_analyses (
+    analysis_run_id TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    handle TEXT NOT NULL,
+    status_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    url TEXT,
+    posted_at_text TEXT,
+    sentiment TEXT NOT NULL,
+    tags_json TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    interpretation TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    raw_response_json TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    PRIMARY KEY (analysis_run_id, status_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_reddit_post_analyses (
+    analysis_run_id TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    subreddit TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT,
+    created_at_text TEXT,
+    sentiment TEXT NOT NULL,
+    tags_json TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    interpretation TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    comment_sentiment_counts_json TEXT NOT NULL,
+    raw_response_json TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    PRIMARY KEY (analysis_run_id, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_reddit_comment_analyses (
+    analysis_run_id TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    subreddit TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    comment_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    parent_id TEXT,
+    sentiment TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    raw_response_json TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    PRIMARY KEY (analysis_run_id, post_id, comment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_analysis_runs_profile
+ON llm_analysis_runs (profile, finished_at);
+
+CREATE INDEX IF NOT EXISTS idx_llm_x_post_analyses_profile
+ON llm_x_post_analyses (profile, handle);
+
+CREATE INDEX IF NOT EXISTS idx_llm_reddit_post_analyses_profile
+ON llm_reddit_post_analyses (profile, subreddit);
 """
 
 
@@ -230,6 +329,210 @@ class SQLiteStorageRepository:
             updated_count=updated,
         )
 
+    async def save_provider_api_responses(
+        self,
+        *,
+        collection_run_id: str,
+        collector_id: str,
+        responses: list[ProviderApiResponse],
+    ) -> None:
+        """Persist raw provider API/tool responses for one collection run."""
+
+        await self.initialize()
+        if not responses:
+            return
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            for response in responses:
+                await db.execute(
+                    """
+                    INSERT INTO raw_provider_api_responses (
+                        response_id, collection_run_id, collector_id, provider, tool_name,
+                        request_arguments_json, raw_response_text, parsed_rows_json,
+                        row_count, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        uuid4().hex,
+                        collection_run_id,
+                        collector_id,
+                        response.provider,
+                        response.tool_name,
+                        json.dumps(response.request_arguments, ensure_ascii=False, sort_keys=True, default=str),
+                        response.raw_response_text,
+                        json.dumps(response.parsed_rows, ensure_ascii=False, sort_keys=True, default=str),
+                        response.row_count,
+                        response.fetched_at.isoformat(),
+                    ),
+                )
+            await db.commit()
+
+    async def start_llm_analysis_run(
+        self,
+        *,
+        analysis_run_id: str,
+        profile: str,
+        provider: str,
+        model: str,
+        prompt_version: str,
+        instructions: str | None = None,
+    ) -> None:
+        """Insert an in-progress LLM analysis run."""
+
+        await self.initialize()
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            await db.execute(
+                """
+                INSERT INTO llm_analysis_runs (
+                    analysis_run_id, profile, provider, model, prompt_version,
+                    status, started_at, instructions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (analysis_run_id, profile, provider, model, prompt_version, "running", _utc_now(), instructions),
+            )
+            await db.commit()
+
+    async def finish_llm_analysis_run(
+        self,
+        *,
+        analysis_run_id: str,
+        status: str,
+        chunk_count: int = 0,
+        succeeded_count: int = 0,
+        failed_count: int = 0,
+        error_text: str | None = None,
+    ) -> None:
+        """Mark a chunked LLM analysis run complete or failed."""
+
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            await db.execute(
+                """
+                UPDATE llm_analysis_runs
+                SET status = ?,
+                    finished_at = ?,
+                    chunk_count = ?,
+                    succeeded_count = ?,
+                    failed_count = ?,
+                    error_text = ?
+                WHERE analysis_run_id = ?
+                """,
+                (status, _utc_now(), chunk_count, succeeded_count, failed_count, error_text, analysis_run_id),
+            )
+            await db.commit()
+
+    async def save_llm_x_post_analyses(self, rows: list[dict]) -> None:
+        """Persist X post analysis rows."""
+
+        await self.initialize()
+        if not rows:
+            return
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            for row in rows:
+                await db.execute(
+                    """
+                    INSERT INTO llm_x_post_analyses (
+                        analysis_run_id, profile, handle, status_id, source_ref, url,
+                        posted_at_text, sentiment, tags_json, summary, interpretation,
+                        confidence, raw_response_json, analyzed_at
+                    ) VALUES (
+                        :analysis_run_id, :profile, :handle, :status_id, :source_ref, :url,
+                        :posted_at_text, :sentiment, :tags_json, :summary, :interpretation,
+                        :confidence, :raw_response_json, :analyzed_at
+                    )
+                    ON CONFLICT (analysis_run_id, status_id) DO UPDATE SET
+                        source_ref = excluded.source_ref,
+                        url = excluded.url,
+                        posted_at_text = excluded.posted_at_text,
+                        sentiment = excluded.sentiment,
+                        tags_json = excluded.tags_json,
+                        summary = excluded.summary,
+                        interpretation = excluded.interpretation,
+                        confidence = excluded.confidence,
+                        raw_response_json = excluded.raw_response_json,
+                        analyzed_at = excluded.analyzed_at
+                    """,
+                    row,
+                )
+            await db.commit()
+
+    async def save_llm_reddit_post_analyses(self, rows: list[dict]) -> None:
+        """Persist Reddit post analysis rows."""
+
+        await self.initialize()
+        if not rows:
+            return
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            for row in rows:
+                await db.execute(
+                    """
+                    INSERT INTO llm_reddit_post_analyses (
+                        analysis_run_id, profile, subreddit, post_id, source_ref, title,
+                        url, created_at_text, sentiment, tags_json, summary, interpretation,
+                        confidence, comment_sentiment_counts_json, raw_response_json, analyzed_at
+                    ) VALUES (
+                        :analysis_run_id, :profile, :subreddit, :post_id, :source_ref, :title,
+                        :url, :created_at_text, :sentiment, :tags_json, :summary, :interpretation,
+                        :confidence, :comment_sentiment_counts_json, :raw_response_json, :analyzed_at
+                    )
+                    ON CONFLICT (analysis_run_id, post_id) DO UPDATE SET
+                        source_ref = excluded.source_ref,
+                        title = excluded.title,
+                        url = excluded.url,
+                        created_at_text = excluded.created_at_text,
+                        sentiment = excluded.sentiment,
+                        tags_json = excluded.tags_json,
+                        summary = excluded.summary,
+                        interpretation = excluded.interpretation,
+                        confidence = excluded.confidence,
+                        comment_sentiment_counts_json = excluded.comment_sentiment_counts_json,
+                        raw_response_json = excluded.raw_response_json,
+                        analyzed_at = excluded.analyzed_at
+                    """,
+                    row,
+                )
+            await db.commit()
+
+    async def save_llm_reddit_comment_analyses(self, rows: list[dict]) -> None:
+        """Persist Reddit comment analysis rows."""
+
+        await self.initialize()
+        if not rows:
+            return
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            for row in rows:
+                await db.execute(
+                    """
+                    INSERT INTO llm_reddit_comment_analyses (
+                        analysis_run_id, profile, subreddit, post_id, comment_id, source_ref,
+                        parent_id, sentiment, summary, confidence, raw_response_json, analyzed_at
+                    ) VALUES (
+                        :analysis_run_id, :profile, :subreddit, :post_id, :comment_id, :source_ref,
+                        :parent_id, :sentiment, :summary, :confidence, :raw_response_json, :analyzed_at
+                    )
+                    ON CONFLICT (analysis_run_id, post_id, comment_id) DO UPDATE SET
+                        source_ref = excluded.source_ref,
+                        parent_id = excluded.parent_id,
+                        sentiment = excluded.sentiment,
+                        summary = excluded.summary,
+                        confidence = excluded.confidence,
+                        raw_response_json = excluded.raw_response_json,
+                        analyzed_at = excluded.analyzed_at
+                    """,
+                    row,
+                )
+            await db.commit()
+
+    async def read_llm_analysis_report(self, *, profile: str, analysis_run_id: str | None = None) -> dict:
+        """Read stored analysis rows as renderer-ready summary data."""
+
+        await self.initialize()
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            run_id = analysis_run_id or await _latest_analysis_run_id(db, profile)
+            if run_id is None:
+                return {"x_reports": [], "reddit_report": {"overall_summary": [], "posts": []}}
+            x_reports = await _read_analysis_x_reports(db, profile, run_id)
+            reddit_report = await _read_analysis_reddit_report(db, profile, run_id)
+        return {"x_reports": x_reports, "reddit_report": reddit_report}
+
     async def list_collection_runs(
         self,
         *,
@@ -277,7 +580,13 @@ class SQLiteStorageRepository:
             for row in rows
         ]
 
-    async def read_x_posts(self, *, handles: list[str] | None = None, limit: int | None = None) -> list[StoredXPost]:
+    async def read_x_posts(
+        self,
+        *,
+        handles: list[str] | None = None,
+        since_posted_at: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[StoredXPost]:
         """Read stored X posts with media."""
 
         await self.initialize()
@@ -288,15 +597,20 @@ class SQLiteStorageRepository:
             FROM raw_x_posts
         """
         params: list[Any] = []
+        conditions: list[str] = []
         if handles:
             placeholders = ",".join("?" for _ in handles)
-            query += f" WHERE handle IN ({placeholders})"
+            conditions.append(f"handle IN ({placeholders})")
             params.extend(handles)
-        query += " ORDER BY CAST(status_id AS INTEGER) DESC, posted_at_text DESC, collected_at DESC"
+        if since_posted_at is not None:
+            conditions.append("posted_at_utc >= ?")
+            params.append(_utc_datetime(since_posted_at).isoformat())
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY posted_at_utc DESC, CAST(status_id AS INTEGER) DESC, collected_at DESC"
         if limit is not None:
             query += " LIMIT ?"
             params.append(limit)
-
         async with aiosqlite.connect(self.sqlite_path) as db:
             cursor = await db.execute(query, params)
             try:
@@ -331,6 +645,7 @@ class SQLiteStorageRepository:
         self,
         *,
         subreddits: list[str] | None = None,
+        since_posted_at: datetime | None = None,
         limit: int | None = None,
     ) -> list[StoredRedditPost]:
         """Read stored Reddit posts with media and comments."""
@@ -343,15 +658,20 @@ class SQLiteStorageRepository:
             FROM raw_reddit_posts
         """
         params: list[Any] = []
+        conditions: list[str] = []
         if subreddits:
             placeholders = ",".join("?" for _ in subreddits)
-            query += f" WHERE subreddit IN ({placeholders})"
+            conditions.append(f"subreddit IN ({placeholders})")
             params.extend(subreddits)
-        query += " ORDER BY collected_at DESC, created_at_text DESC"
+        if since_posted_at is not None:
+            conditions.append("created_at_utc >= ?")
+            params.append(_utc_datetime(since_posted_at).isoformat())
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY created_at_utc DESC, collected_at DESC"
         if limit is not None:
             query += " LIMIT ?"
             params.append(limit)
-
         async with aiosqlite.connect(self.sqlite_path) as db:
             cursor = await db.execute(query, params)
             try:
@@ -416,6 +736,12 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _content_hash(item: RawItem) -> str:
     payload = json.dumps(
         {
@@ -441,6 +767,138 @@ def _json_obj(value: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: str | None) -> list[Any]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+async def _latest_analysis_run_id(db: aiosqlite.Connection, profile: str) -> str | None:
+    cursor = await db.execute(
+        """
+        SELECT analysis_run_id
+        FROM llm_analysis_runs
+        WHERE profile = ? AND status = 'succeeded'
+        ORDER BY finished_at DESC, started_at DESC
+        LIMIT 1
+        """,
+        (profile,),
+    )
+    try:
+        row = await cursor.fetchone()
+    finally:
+        await cursor.close()
+    return row[0] if row else None
+
+
+async def _read_analysis_x_reports(db: aiosqlite.Connection, profile: str, analysis_run_id: str) -> list[dict[str, Any]]:
+    cursor = await db.execute(
+        """
+        SELECT handle, status_id, source_ref, url, posted_at_text, sentiment, tags_json,
+               summary, interpretation, confidence
+        FROM llm_x_post_analyses
+        WHERE profile = ? AND analysis_run_id = ?
+        ORDER BY handle, posted_at_text DESC, status_id DESC
+        """,
+        (profile, analysis_run_id),
+    )
+    try:
+        rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(
+            {
+                "source_ref": row[2],
+                "source_id": row[1],
+                "title": _analysis_title(row[7]),
+                "post_summary": row[7],
+                "sentiment": row[5],
+                "tags": _json_list(row[6]),
+                "interpretation": row[8],
+                "confidence": row[9],
+                "urls": [row[3]] if row[3] else [],
+            }
+        )
+    return [
+        {
+            "handle": handle,
+            "overall_summary": [f"{len(posts)} analyzed X post{'s' if len(posts) != 1 else ''}."],
+            "posts": posts,
+        }
+        for handle, posts in grouped.items()
+    ]
+
+
+async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, analysis_run_id: str) -> dict[str, Any]:
+    cursor = await db.execute(
+        """
+        SELECT subreddit, post_id, source_ref, title, url, created_at_text, sentiment, tags_json,
+               summary, interpretation, confidence, comment_sentiment_counts_json
+        FROM llm_reddit_post_analyses
+        WHERE profile = ? AND analysis_run_id = ?
+        ORDER BY created_at_text DESC, post_id DESC
+        """,
+        (profile, analysis_run_id),
+    )
+    try:
+        rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+
+    posts = []
+    total_comments = 0
+    totals = {"bullish": 0, "bearish": 0, "mixed": 0, "neutral": 0, "unclear": 0}
+    for row in rows:
+        counts = _json_obj(row[11])
+        for sentiment in totals:
+            value = counts.get(sentiment)
+            if isinstance(value, int):
+                totals[sentiment] += value
+                total_comments += value
+        posts.append(
+            {
+                "source_ref": row[2],
+                "source_id": row[1],
+                "subreddit": row[0],
+                "title": row[3],
+                "post_summary": row[8],
+                "comments_sentiment": _comment_counts_text(counts),
+                "comment_sentiment_counts": counts,
+                "sentiment": row[6],
+                "tags": _json_list(row[7]),
+                "interpretation": row[9],
+                "confidence": row[10],
+                "urls": [row[4]] if row[4] else [],
+            }
+        )
+    return {
+        "overall_summary": [
+            f"{len(posts)} analyzed Reddit post{'s' if len(posts) != 1 else ''} with {total_comments} analyzed comments."
+        ],
+        "comment_sentiment_counts": totals,
+        "posts": posts,
+    }
+
+
+def _analysis_title(summary: str | None) -> str:
+    text = (summary or "Signal").strip()
+    if len(text) <= 80:
+        return text or "Signal"
+    return text[:77].rstrip() + "..."
+
+
+def _comment_counts_text(counts: dict[str, Any]) -> str:
+    parts = [f"{key}: {counts.get(key, 0)}" for key in ("bullish", "bearish", "mixed", "neutral", "unclear")]
+    return ", ".join(parts)
 
 
 async def _read_x_media(db: aiosqlite.Connection, status_id: str) -> list[StoredMediaAsset]:
@@ -618,10 +1076,12 @@ async def _upsert_x_post(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
         """
         INSERT INTO raw_x_posts (
             status_id, handle, author_handle, author_name, posted_at_text, url, text,
-            reply_count, repost_count, like_count, quote_count, view_count, raw_json, collected_at
+            reply_count, repost_count, like_count, quote_count, view_count, raw_json, collected_at,
+            posted_at_utc
         ) VALUES (
             :status_id, :handle, :author_handle, :author_name, :posted_at_text, :url, :text,
-            :reply_count, :repost_count, :like_count, :quote_count, :view_count, :raw_json, :collected_at
+            :reply_count, :repost_count, :like_count, :quote_count, :view_count, :raw_json, :collected_at,
+            :posted_at_utc
         )
         ON CONFLICT (handle, status_id) DO UPDATE SET
             author_handle = excluded.author_handle,
@@ -635,7 +1095,8 @@ async def _upsert_x_post(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
             quote_count = excluded.quote_count,
             view_count = excluded.view_count,
             raw_json = excluded.raw_json,
-            collected_at = excluded.collected_at
+            collected_at = excluded.collected_at,
+            posted_at_utc = excluded.posted_at_utc
         """,
         row,
     )
@@ -665,11 +1126,11 @@ async def _upsert_reddit_post(db: aiosqlite.Connection, row: dict[str, Any]) -> 
         INSERT INTO raw_reddit_posts (
             post_id, subreddit, fullname, title, author, url, permalink, selftext,
             score, ups, upvote_ratio, num_comments, thumbnail_url, created_at_text,
-            raw_json, collected_at
+            raw_json, collected_at, created_at_utc
         ) VALUES (
             :post_id, :subreddit, :fullname, :title, :author, :url, :permalink, :selftext,
             :score, :ups, :upvote_ratio, :num_comments, :thumbnail_url, :created_at_text,
-            :raw_json, :collected_at
+            :raw_json, :collected_at, :created_at_utc
         )
         ON CONFLICT (subreddit, post_id) DO UPDATE SET
             fullname = excluded.fullname,
@@ -685,7 +1146,8 @@ async def _upsert_reddit_post(db: aiosqlite.Connection, row: dict[str, Any]) -> 
             thumbnail_url = excluded.thumbnail_url,
             created_at_text = excluded.created_at_text,
             raw_json = excluded.raw_json,
-            collected_at = excluded.collected_at
+            collected_at = excluded.collected_at,
+            created_at_utc = excluded.created_at_utc
         """,
         row,
     )
@@ -696,10 +1158,10 @@ async def _upsert_reddit_comment(db: aiosqlite.Connection, row: dict[str, Any]) 
         """
         INSERT INTO raw_reddit_comments (
             comment_id, post_id, parent_id, author, body, score, ups, url,
-            created_at_text, depth, raw_json, collected_at
+            created_at_text, depth, raw_json, collected_at, created_at_utc
         ) VALUES (
             :comment_id, :post_id, :parent_id, :author, :body, :score, :ups, :url,
-            :created_at_text, :depth, :raw_json, :collected_at
+            :created_at_text, :depth, :raw_json, :collected_at, :created_at_utc
         )
         ON CONFLICT (post_id, comment_id) DO UPDATE SET
             parent_id = excluded.parent_id,
@@ -711,7 +1173,8 @@ async def _upsert_reddit_comment(db: aiosqlite.Connection, row: dict[str, Any]) 
             created_at_text = excluded.created_at_text,
             depth = excluded.depth,
             raw_json = excluded.raw_json,
-            collected_at = excluded.collected_at
+            collected_at = excluded.collected_at,
+            created_at_utc = excluded.created_at_utc
         """,
         row,
     )

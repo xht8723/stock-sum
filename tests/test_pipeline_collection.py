@@ -3,12 +3,22 @@
 from stock_sum.config.models import AppConfig, CollectorConfig, LLMConfig, ReportProfileConfig, StorageConfig
 from stock_sum.core.context import RuntimeContext
 from stock_sum.core.errors import ConfigurationError
-from stock_sum.core.models import RawItem, RawItemSaveResult
+from stock_sum.core.models import PipelineSectionWarning, ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.core.pipeline import ReportPipeline
 
 
 class FakeCollector:
     collector_id = "api.test"
+    api_responses = [
+        ProviderApiResponse(
+            provider="xpoz",
+            tool_name="getExampleRows",
+            request_arguments={"limit": 1},
+            raw_response_text="status: success",
+            parsed_rows=[{"id": "123"}],
+            row_count=1,
+        )
+    ]
 
     async def collect(self, context):
         return [
@@ -23,8 +33,31 @@ class FakeCollector:
 
 
 class FailingCollector:
+    api_responses = [
+        ProviderApiResponse(
+            provider="xpoz",
+            tool_name="getPartialRows",
+            request_arguments={"limit": 1},
+            raw_response_text="status: success",
+            parsed_rows=[{"id": "partial"}],
+            row_count=1,
+        )
+    ]
+
     async def collect(self, context):
         raise RuntimeError("collector unavailable")
+
+
+class WarningCollector(FakeCollector):
+    def __init__(self):
+        self.warnings = [
+            PipelineSectionWarning(
+                section="collector",
+                source_id="api.test",
+                phase="collecting",
+                message="fetch cap may have hidden more posts",
+            )
+        ]
 
 
 class FakeRepository:
@@ -32,6 +65,7 @@ class FakeRepository:
         self.started = []
         self.finished = []
         self.saved = []
+        self.saved_provider_responses = []
 
     async def initialize(self):
         return None
@@ -50,6 +84,9 @@ class FakeRepository:
             inserted_count=len(items),
             updated_count=0,
         )
+
+    async def save_provider_api_responses(self, **kwargs):
+        self.saved_provider_responses.append(kwargs)
 
     async def save_summaries(self, summaries):
         raise NotImplementedError
@@ -96,7 +133,22 @@ async def test_pipeline_collects_and_persists_with_fake_collector(tmp_path) -> N
     assert result.inserted_count == 1
     assert len(repository.started) == 1
     assert len(repository.saved[0]) == 1
+    assert repository.saved_provider_responses[0]["responses"][0].tool_name == "getExampleRows"
     assert repository.finished[0]["status"] == "succeeded"
+
+
+async def test_pipeline_propagates_successful_collector_warnings(tmp_path) -> None:
+    repository = FakeRepository()
+    pipeline = ReportPipeline(
+        RuntimeContext(config=_config(tmp_path)),
+        repository=repository,
+        collector_factory=lambda collector_id: WarningCollector(),
+    )
+
+    result = await pipeline.run_report("default")
+
+    assert result.runs[0].warnings[0].message == "fetch cap may have hidden more posts"
+    assert result.warnings[0].source_id == "api.test"
 
 
 async def test_pipeline_profile_continues_after_one_collector_fails(tmp_path) -> None:
@@ -113,6 +165,7 @@ async def test_pipeline_profile_continues_after_one_collector_fails(tmp_path) ->
     assert result.collected_count == 1
     assert result.warnings[0].source_id == "api.bad"
     assert result.warnings[0].phase == "collecting"
+    assert repository.saved_provider_responses[0]["responses"][0].tool_name == "getPartialRows"
     assert repository.finished[0]["status"] == "failed"
     assert repository.finished[1]["status"] == "succeeded"
 

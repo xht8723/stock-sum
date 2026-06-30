@@ -21,6 +21,19 @@ class RawItem:
 
 
 @dataclass(frozen=True)
+class ProviderApiResponse:
+    """Captured raw provider API/tool response for storage and debugging."""
+
+    provider: str
+    tool_name: str
+    request_arguments: dict[str, Any]
+    raw_response_text: str
+    parsed_rows: list[dict[str, Any]]
+    row_count: int
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass(frozen=True)
 class Summary:
     """LLM-generated summary payload."""
 
@@ -71,6 +84,7 @@ class CollectionRunResult:
     updated_count: int
     sqlite_path: str
     error: str | None = None
+    warnings: list[PipelineSectionWarning] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -24,7 +24,6 @@ def test_example_config_is_valid() -> None:
     assert config.retention.enabled is True
     assert config.retention.max_total_bytes == 2_147_483_648
     assert config.retention.prune_after_pipeline is True
-    assert config.retention.vacuum_sqlite is True
     assert config.models_dev.refresh_interval_hours == 24
     assert config.providers.xpoz.api_key_env == "XPOZ_API_KEY"
     assert config.providers.xpoz.server_url == "https://mcp.xpoz.ai/mcp"
@@ -34,11 +33,17 @@ def test_example_config_is_valid() -> None:
     assert config.llm.base_url == "https://api.deepseek.com"
     assert config.llm.max_tokens == 5000
     assert config.llm.thinking_enabled is False
+    assert config.llm.analysis_x_posts_per_chunk == 10
+    assert config.llm.analysis_max_chars_per_chunk == 12000
     assert "default" in config.reports
     assert config.reports["default"].collector_ids == ["x.aleabitoreddit", "reddit.wallstreetbets"]
     assert config.sources.x_users[0].handle == "aleabitoreddit"
     assert config.sources.x_users[0].enabled is True
+    assert config.sources.x_users[0].limit == 100
+    assert config.sources.x_users[0].lookback_hours == 24
     assert config.sources.subreddits[0].subreddit == "wallstreetbets"
     assert config.sources.subreddits[0].enabled is True
+    assert config.sources.subreddits[0].limit == 100
+    assert config.sources.subreddits[0].lookback_hours == 24
     assert config.collectors == {}
     assert config.delivery.email["primary"].password_env == "SMTP_PASSWORD"

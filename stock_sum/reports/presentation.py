@@ -50,7 +50,6 @@ class PresentationRenderer:
         sections = [
             _html_pipeline_warnings(response.get("pipeline_warnings")),
             _html_social_sentiment(summary, media_by_ref),
-            _html_capitol_trades(response.get("capitol_trades")),
         ]
         return "\n".join(
             [
@@ -81,7 +80,6 @@ class PresentationRenderer:
             "",
             _markdown_pipeline_warnings(response.get("pipeline_warnings")),
             _markdown_social_sentiment(summary, media_by_ref),
-            _markdown_capitol_trades(response.get("capitol_trades")),
         ]
         return "\n".join(line for line in lines if line is not None).strip() + "\n"
 
@@ -92,7 +90,6 @@ class PresentationRenderer:
             "",
             _discord_pipeline_warnings(response.get("pipeline_warnings")),
             _discord_social_sentiment(summary, media_by_ref),
-            _discord_capitol_trades(response.get("capitol_trades")),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
@@ -103,7 +100,6 @@ class PresentationRenderer:
             "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_social_sentiment(summary, media_by_ref),
-            _text_capitol_trades(response.get("capitol_trades")),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
@@ -214,6 +210,10 @@ def _html_social_card(item: dict[str, Any], media_by_ref: dict[str, list[dict[st
     ]
     if item.get("comments_sentiment"):
         lines.append(_html_paragraph("Comments", item.get("comments_sentiment")))
+    if item.get("comment_sentiment_counts"):
+        lines.append(_html_paragraph("Comment Stats", _comment_stats_text(item.get("comment_sentiment_counts"))))
+    if item.get("tags"):
+        lines.append(_html_paragraph("Tags", _tags_text(item.get("tags"))))
     lines.extend(
         [
             _html_paragraph("Sentiment", item.get("sentiment")),
@@ -266,6 +266,10 @@ def _markdown_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dic
         lines.append(f"- Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
     if item.get("comments_sentiment"):
         lines.append(f"- Comments: {_stringify_item(item['comments_sentiment'])}")
+    if item.get("comment_sentiment_counts"):
+        lines.append(f"- Comment stats: {_comment_stats_text(item.get('comment_sentiment_counts'))}")
+    if item.get("tags"):
+        lines.append(f"- Tags: {_tags_text(item.get('tags'))}")
     if item.get("interpretation") or item.get("reason"):
         lines.append(f"- Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
     for index, url in enumerate(_as_list(item.get("urls") or item.get("url")), start=1):
@@ -302,6 +306,10 @@ def _discord_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict
         lines.append(f"  Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
     if item.get("comments_sentiment"):
         lines.append(f"  Comments: {_stringify_item(item['comments_sentiment'])}")
+    if item.get("comment_sentiment_counts"):
+        lines.append(f"  Comment stats: {_comment_stats_text(item.get('comment_sentiment_counts'))}")
+    if item.get("tags"):
+        lines.append(f"  Tags: {_tags_text(item.get('tags'))}")
     if item.get("interpretation") or item.get("reason"):
         lines.append(f"  Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
     source_links = []
@@ -348,6 +356,10 @@ def _text_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict[st
         lines.append(f"  Summary: {_stringify_item(item.get('post_summary') or item.get('claim') or item.get('summary'))}")
     if item.get("comments_sentiment"):
         lines.append(f"  Comments: {_stringify_item(item['comments_sentiment'])}")
+    if item.get("comment_sentiment_counts"):
+        lines.append(f"  Comment stats: {_comment_stats_text(item.get('comment_sentiment_counts'))}")
+    if item.get("tags"):
+        lines.append(f"  Tags: {_tags_text(item.get('tags'))}")
     if item.get("interpretation") or item.get("reason"):
         lines.append(f"  Takeaway: {_stringify_item(item.get('interpretation') or item.get('reason'))}")
     for url in _as_list(item.get("urls") or item.get("url")):
@@ -459,9 +471,11 @@ def _html_grouped_post(post: dict[str, Any], media_by_ref: dict[str, list[dict[s
     ]
     if reddit:
         lines.append(_html_paragraph("Comments Sentiment", post.get("comments_sentiment")))
+        lines.append(_html_paragraph("Comment Stats", _comment_stats_text(post.get("comment_sentiment_counts"))))
     lines.extend(
         [
             _html_paragraph("Sentiment", post.get("sentiment")),
+            _html_paragraph("Tags", _tags_text(post.get("tags"))),
             _html_paragraph("Interpretation", post.get("interpretation")),
             _html_links(post.get("urls") or post.get("url")),
             _html_linked_media(source_ref, media_by_ref),
@@ -474,7 +488,9 @@ def _html_grouped_post(post: dict[str, Any], media_by_ref: dict[str, list[dict[s
                     "claim",
                     "summary",
                     "comments_sentiment",
+                    "comment_sentiment_counts",
                     "sentiment",
+                    "tags",
                     "interpretation",
                     "confidence",
                     "urls",
@@ -567,67 +583,6 @@ def _html_media(value: Any) -> str:
         else:
             cards.append(f'<article class="card"><p>{escape(str(item))}</p></article>')
     return _html_section("Media Observations", "\n".join(cards) or '<p class="empty">No media observations.</p>')
-
-
-def _html_capitol_trades(value: Any) -> str:
-    snapshot = value if isinstance(value, dict) else {}
-    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
-    if not trades:
-        return _html_section("Politician Trading Info", '<p class="empty">No politician trading data attached.</p>')
-    rows = []
-    for trade in trades:
-        tx_type = str(trade.get("transaction_type") or "")
-        action_class = "buy" if tx_type.startswith("BUY") else "sell" if tx_type.startswith("SELL") else "other"
-        politician_bits = [
-            str(trade.get("politician") or "Unknown"),
-            " | ".join(
-                str(part)
-                for part in (trade.get("party"), trade.get("chamber"), trade.get("state"))
-                if part
-            ),
-        ]
-        politician = "<br>".join(escape(part) for part in politician_bits if part)
-        issuer = escape(str(trade.get("issuer") or "Unknown"))
-        ticker = trade.get("ticker")
-        if ticker:
-            issuer += f"<br><span>{escape(str(ticker))}</span>"
-        rows.append(
-            "\n".join(
-                [
-                    "<tr>",
-                    f"<td>{politician}</td>",
-                    f"<td>{issuer}</td>",
-                    f'<td><span class="tx {action_class}">{escape(tx_type)}</span></td>',
-                    f"<td>{escape(str(trade.get('size') or ''))}</td>",
-                    f"<td>{escape(str(trade.get('price') or ''))}</td>",
-                    f"<td>{escape(str(trade.get('traded') or ''))}</td>",
-                    f"<td>{escape(str(trade.get('published') or ''))}</td>",
-                    "</tr>",
-                ]
-            )
-        )
-    source = snapshot.get("source_url")
-    source_link = _html_links(source) if source else ""
-    table = "\n".join(
-        [
-            '<div class="table-wrap"><table class="trades-table">',
-            "<thead><tr><th>Politician</th><th>Issuer</th><th>Type</th><th>Size</th><th>Price</th><th>Traded</th><th>Published</th></tr></thead>",
-            f"<tbody>{''.join(rows)}</tbody>",
-            "</table></div>",
-            source_link,
-        ]
-    )
-    return _html_section("Politician Trading Info", table)
-
-
-def _html_capitol_cards(value: Any) -> str:
-    cards = [card for card in _as_list(value) if isinstance(card, dict)]
-    if not cards:
-        return ""
-    return '<div class="stat-grid">' + "".join(
-        f'<div class="stat"><strong>{escape(str(card.get("value") or ""))}</strong><span>{escape(str(card.get("label") or ""))}</span></div>'
-        for card in cards
-    ) + "</div>"
 
 
 def _html_simple_list(title: str, value: Any) -> str:
@@ -771,18 +726,6 @@ h3 { font-size: 16px; margin: 8px 0; }
 .media-card img { width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: #fff; }
 .media-card p { margin: 6px 0 0; font-size: 13px; color: #465563; }
 .media-title { font-size: 12px; font-weight: 700; color: #566575; margin-bottom: 6px; }
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px; }
-.stat { background: #f8fafc; border: 1px solid #e4ebf1; border-radius: 8px; padding: 10px; }
-.stat strong { display: block; font-size: 18px; color: #1d3d5c; }
-.stat span { display: block; margin-top: 2px; color: #64717f; font-size: 12px; text-transform: uppercase; }
-.table-wrap { overflow-x: auto; border: 1px solid #dde4eb; border-radius: 8px; background: #fff; }
-.trades-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.trades-table th, .trades-table td { padding: 8px 9px; border-bottom: 1px solid #edf1f5; text-align: left; vertical-align: top; }
-.trades-table th { color: #566575; background: #f8fafc; font-size: 11px; text-transform: uppercase; }
-.trades-table td span { color: #64717f; }
-.tx { font-weight: 800; }
-.tx.buy { color: #008a78; }
-.tx.sell { color: #b87800; }
 a { color: #0b66c3; overflow-wrap: anywhere; }
 ul { margin: 0; padding-left: 22px; }
 li { margin: 7px 0; }
@@ -842,8 +785,12 @@ def _markdown_grouped_post(
         lines.append(f"- **post_summary**: {_stringify_item(post.get('post_summary') or post.get('claim') or post.get('summary'))}")
     if reddit and post.get("comments_sentiment"):
         lines.append(f"- **comments_sentiment**: {_stringify_item(post['comments_sentiment'])}")
+    if reddit and post.get("comment_sentiment_counts"):
+        lines.append(f"- **comment_stats**: {_comment_stats_text(post.get('comment_sentiment_counts'))}")
     if post.get("sentiment"):
         lines.append(f"- **sentiment**: {_stringify_item(post['sentiment'])}")
+    if post.get("tags"):
+        lines.append(f"- **tags**: {_tags_text(post.get('tags'))}")
     if post.get("interpretation"):
         lines.append(f"- **interpretation**: {_stringify_item(post['interpretation'])}")
     for index, url in enumerate(_as_list(post.get("urls") or post.get("url")), start=1):
@@ -906,67 +853,6 @@ def _markdown_media(value: Any) -> str:
         else:
             lines.append(f"- {_stringify_item(item)}")
     lines.append("")
-    return "\n".join(lines)
-
-
-def _markdown_capitol_trades(value: Any) -> str:
-    snapshot = value if isinstance(value, dict) else {}
-    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
-    lines = ["## Politician Trading Info", ""]
-    if not trades:
-        return "\n".join([*lines, "_No politician trading data attached._", ""])
-    lines.extend(
-        [
-            "| Politician | Issuer | Type | Size | Price | Traded | Published |",
-            "|---|---|---|---|---|---|---|",
-        ]
-    )
-    for trade in trades:
-        politician = _politician_label(trade)
-        issuer = _issuer_label(trade)
-        lines.append(
-            "| "
-            + " | ".join(
-                _markdown_table_cell(value)
-                for value in (
-                    politician,
-                    issuer,
-                    trade.get("transaction_type"),
-                    trade.get("size"),
-                    trade.get("price"),
-                    trade.get("traded"),
-                    trade.get("published"),
-                )
-            )
-            + " |"
-        )
-    if snapshot.get("source_url"):
-        lines.extend(["", f"Source: [Read source]({snapshot['source_url']})"])
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _discord_capitol_trades(value: Any) -> str:
-    snapshot = value if isinstance(value, dict) else {}
-    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
-    lines = ["**Politician Trading Info**"]
-    if not trades:
-        return "\n".join([*lines, "_No politician trading data attached._"])
-    for trade in trades:
-        action = trade.get("transaction_type") or "TRADE"
-        issuer = _issuer_label(trade)
-        parts = [
-            f"- **{_politician_label(trade)}** {action} **{issuer}**",
-            f"size {trade.get('size') or 'unknown'}",
-            f"traded {trade.get('traded') or 'unknown'}",
-            f"published {trade.get('published') or 'unknown'}",
-        ]
-        price = trade.get("price")
-        if price:
-            parts.append(f"price {price}")
-        lines.append("; ".join(parts) + ".")
-    if snapshot.get("source_url"):
-        lines.append(f"[Read Capitol Trades]({snapshot['source_url']})")
     return "\n".join(lines)
 
 
@@ -1063,8 +949,12 @@ def _text_grouped_post(
         lines.append(f"- post_summary: {_stringify_item(post.get('post_summary') or post.get('claim') or post.get('summary'))}")
     if reddit and post.get("comments_sentiment"):
         lines.append(f"- comments_sentiment: {_stringify_item(post['comments_sentiment'])}")
+    if reddit and post.get("comment_sentiment_counts"):
+        lines.append(f"- comment_stats: {_comment_stats_text(post.get('comment_sentiment_counts'))}")
     if post.get("sentiment"):
         lines.append(f"- sentiment: {_stringify_item(post['sentiment'])}")
+    if post.get("tags"):
+        lines.append(f"- tags: {_tags_text(post.get('tags'))}")
     if post.get("interpretation"):
         lines.append(f"- interpretation: {_stringify_item(post['interpretation'])}")
     for url in _as_list(post.get("urls") or post.get("url")):
@@ -1115,27 +1005,6 @@ def _text_media(value: Any) -> str:
             lines.append(f"- {label or 'media'}: {_stringify_item(item.get('observation') or item)}")
         else:
             lines.append(f"- {_stringify_item(item)}")
-    return "\n".join(lines)
-
-
-def _text_capitol_trades(value: Any) -> str:
-    snapshot = value if isinstance(value, dict) else {}
-    trades = [trade for trade in _as_list(snapshot.get("trades")) if isinstance(trade, dict)]
-    lines = ["POLITICIAN TRADING INFO"]
-    if not trades:
-        return "\n".join([*lines, "  No politician trading data attached."])
-    for trade in trades:
-        lines.append(
-            "- "
-            + f"{_politician_label(trade)} {trade.get('transaction_type') or ''} "
-            + f"{trade.get('issuer') or 'Unknown issuer'}"
-            + (f" ({trade.get('ticker')})" if trade.get("ticker") else "")
-            + f"; size {trade.get('size') or 'unknown'}; "
-            + f"price {trade.get('price') or 'unknown'}; traded {trade.get('traded') or 'unknown'}; "
-            + f"published {trade.get('published') or 'unknown'}."
-        )
-    if snapshot.get("source_url"):
-        lines.append(f"Source: {snapshot['source_url']}")
     return "\n".join(lines)
 
 
@@ -1282,20 +1151,20 @@ def _stringify_item(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _politician_label(trade: dict[str, Any]) -> str:
-    meta = " | ".join(str(part) for part in (trade.get("party"), trade.get("chamber"), trade.get("state")) if part)
-    name = str(trade.get("politician") or "Unknown")
-    return f"{name} ({meta})" if meta else name
+def _tags_text(value: Any) -> str:
+    tags = [str(item) for item in _as_list(value) if str(item).strip()]
+    return ", ".join(tags)
 
 
-def _issuer_label(trade: dict[str, Any]) -> str:
-    issuer = str(trade.get("issuer") or "Unknown")
-    ticker = trade.get("ticker")
-    return f"{issuer} ({ticker})" if ticker else issuer
-
-
-def _markdown_table_cell(value: Any) -> str:
-    return _stringify_item(value or "").replace("|", "\\|").replace("\n", " ")
+def _comment_stats_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    parts = []
+    for sentiment in ("bullish", "bearish", "mixed", "neutral", "unclear"):
+        count = value.get(sentiment, 0)
+        if count:
+            parts.append(f"{sentiment}: {count}")
+    return ", ".join(parts) or "no analyzed comments"
 
 
 def _strip_json_fence(content: str) -> str:

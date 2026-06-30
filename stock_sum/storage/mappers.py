@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 import json
 
@@ -78,6 +79,7 @@ def _map_x_post(item: RawItem) -> MappedRawItem:
             "view_count": item.metadata.get("view_count"),
             "raw_json": raw_json(item.metadata.get("raw", item.metadata)),
             "collected_at": item.collected_at.isoformat(),
+            "posted_at_utc": _normalized_timestamp(item.metadata.get("posted_at_text")),
         },
         media_rows=media_rows,
     )
@@ -115,6 +117,7 @@ def _map_reddit_post(item: RawItem) -> MappedRawItem:
             "created_at_text": item.metadata.get("created_at_text"),
             "raw_json": raw_json(item.metadata.get("raw", item.metadata)),
             "collected_at": item.collected_at.isoformat(),
+            "created_at_utc": _normalized_timestamp(item.metadata.get("created_at_text")),
         },
         media_rows=media_rows,
     )
@@ -137,5 +140,28 @@ def _map_reddit_comment(item: RawItem) -> MappedRawItem:
             "depth": item.metadata.get("depth"),
             "raw_json": raw_json(item.metadata.get("raw", item.metadata)),
             "collected_at": item.collected_at.isoformat(),
+            "created_at_utc": _normalized_timestamp(item.metadata.get("created_at_text")),
         },
     )
+
+
+def _normalized_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.fromtimestamp(float(normalized), timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+    return parsed.isoformat()

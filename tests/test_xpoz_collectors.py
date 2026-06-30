@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE, XpozRedditSubredditCollector, XpozXUserTimelineCollector
 from stock_sum.config.models import CollectorConfig, XpozProviderConfig
 from stock_sum.core.context import RuntimeContext
+
+
+def _iso(hours_ago: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat().replace("+00:00", "Z")
+
+
+def _snowflake_id(hours_ago: int) -> str:
+    timestamp = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    milliseconds = int(timestamp.timestamp() * 1000)
+    return str((milliseconds - 1288834974657) << 22)
 
 
 class FakeXpozClient:
@@ -14,8 +26,8 @@ class FakeXpozClient:
 
     async def twitter_posts_by_author(self, *, username: str, limit: int, fields: list[str] | None = None, force_latest: bool = True):
         return [
-            {"id": "2070796064698044849", "text": "older", "authorUsername": username, "createdAt": "2026-06-27T09:07:10.000Z"},
-            {"id": "2071074680253911267", "text": "newest", "authorUsername": username, "createdAt": "2026-06-28T03:34:17.000Z"},
+            {"id": "2070796064698044849", "text": "older", "authorUsername": username, "createdAt": _iso(30)},
+            {"id": "2071074680253911267", "text": "newest", "authorUsername": username, "createdAt": _iso(1)},
         ]
 
     async def twitter_posts_by_ids(self, *, post_ids: list[str], fields: list[str] | None = None, force_latest: bool = True):
@@ -25,7 +37,7 @@ class FakeXpozClient:
                 "id": "2071074680253911267",
                 "text": "newest enriched",
                 "authorUsername": "aleabitoreddit",
-                "createdAt": "2026-06-28T03:34:17.000Z",
+                "createdAt": _iso(1),
                 "mediaUrls": ["https://pbs.twimg.com/media/new.jpg"],
                 "likeCount": "10",
                 "impressionCount": "100",
@@ -34,17 +46,17 @@ class FakeXpozClient:
                 "id": "2070796064698044849",
                 "text": "older enriched",
                 "authorUsername": "aleabitoreddit",
-                "createdAt": "2026-06-27T09:07:10.000Z",
+                "createdAt": _iso(30),
             },
         ]
 
     async def reddit_subreddit_posts(self, *, subreddit: str, limit: int, fields: list[str] | None = None, force_latest: bool = True):
         return [
-            {"id": "old", "title": "older", "createdAt": "100", "subredditName": subreddit, "postUrl": "https://reddit.com/r/test/comments/old/", "commentsCount": "1"},
+            {"id": "old", "title": "older", "createdAt": _iso(30), "subredditName": subreddit, "postUrl": "https://reddit.com/r/test/comments/old/", "commentsCount": "1"},
             {
                 "id": "new",
                 "title": "newer",
-                "createdAt": "200",
+                "createdAt": _iso(1),
                 "subredditName": subreddit,
                 "postUrl": "https://reddit.com/r/test/comments/new/",
                 "url": "https://i.redd.it/new.jpg",
@@ -66,7 +78,7 @@ class FakeXpozClient:
         return {
             "posts": [],
             "comments": [
-                {"id": "c1", "body": "comment", "authorUsername": "user", "parentId": post_id, "score": "3", "createdAt": "201"}
+                {"id": "c1", "body": "comment", "authorUsername": "user", "parentId": post_id, "score": "3", "createdAt": _iso(1)}
             ],
         }
 
@@ -112,3 +124,44 @@ async def test_reddit_collector_sorts_media_and_optional_comments() -> None:
     assert items[1].metadata["entity_type"] == "reddit_comment"
     assert items[1].source_id == "new:c1"
     assert fake.comment_calls == ["new", "old"]
+
+
+async def test_x_collector_uses_snowflake_timestamp_when_timestamp_is_missing() -> None:
+    class SnowflakeClient(FakeXpozClient):
+        async def twitter_posts_by_author(self, *, username: str, limit: int, fields: list[str] | None = None, force_latest: bool = True):
+            return [
+                {"id": _snowflake_id(1), "text": "recent by id", "authorUsername": username},
+                {"id": _snowflake_id(30), "text": "old by id", "authorUsername": username},
+            ]
+
+        async def twitter_posts_by_ids(self, *, post_ids: list[str], fields: list[str] | None = None, force_latest: bool = True):
+            self.detail_ids = post_ids
+            return [{"id": post_id, "text": f"detail {post_id}", "authorUsername": "aleabitoreddit"} for post_id in post_ids]
+
+    fake = SnowflakeClient()
+    collector = XpozXUserTimelineCollector(
+        collector_id="x.aleabitoreddit",
+        collector_config=CollectorConfig(kind=X_SOURCE_TYPE, handle="aleabitoreddit", limit=2),
+        provider_config=XpozProviderConfig(),
+        client=fake,
+    )
+
+    items = await collector.collect(RuntimeContext(config=None))
+
+    assert len(items) == 2
+    assert items[0].source_id == fake.detail_ids[0]
+
+
+async def test_collector_warns_when_fetch_cap_may_truncate_lookback_window() -> None:
+    fake = FakeXpozClient()
+    collector = XpozRedditSubredditCollector(
+        collector_id="reddit.test",
+        collector_config=CollectorConfig(kind=REDDIT_SOURCE_TYPE, subreddit="test", limit=1),
+        provider_config=XpozProviderConfig(),
+        client=fake,
+    )
+
+    await collector.collect(RuntimeContext(config=None))
+
+    assert collector.warnings
+    assert "fetch cap" in collector.warnings[0].message

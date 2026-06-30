@@ -21,7 +21,7 @@ def test_profile_and_source_management_hot_reloads_config(tmp_path) -> None:
 
     add_x = client.post(
         "/v1/sources/x-users",
-        json={"handle": "newuser", "profile": "tech", "limit": 5, "enabled": True},
+        json={"handle": "newuser", "profile": "tech", "limit": 50, "lookback_hours": 12, "enabled": True},
     )
     assert add_x.status_code == 200
     assert add_x.json()["collector_id"] == "x.newuser"
@@ -33,7 +33,10 @@ def test_profile_and_source_management_hot_reloads_config(tmp_path) -> None:
     config = load_config(config_path)
     assert "tech" in config.reports
     assert config.reports["tech"].collector_ids == ["x.newuser"]
-    assert any(source.handle == "newuser" and source.enabled for source in config.sources.x_users)
+    assert any(
+        source.handle == "newuser" and source.enabled and source.limit == 50 and source.lookback_hours == 12
+        for source in config.sources.x_users
+    )
 
 
 def test_reddit_source_delete_updates_profile(tmp_path) -> None:

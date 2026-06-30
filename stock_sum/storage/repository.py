@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from stock_sum.core.models import RawItem, RawItemSaveResult, Report, Summary
+from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult, Report, Summary
 from stock_sum.storage.models import StoredCollectionRun, StoredDownloadedMedia, StoredRedditPost, StoredXPost
 
 
@@ -41,16 +42,68 @@ class StorageRepository(Protocol):
     async def save_raw_items(self, items: list[RawItem]) -> RawItemSaveResult:
         """Persist raw collected items."""
 
+    async def save_provider_api_responses(
+        self,
+        *,
+        collection_run_id: str,
+        collector_id: str,
+        responses: list[ProviderApiResponse],
+    ) -> None:
+        """Persist raw provider API/tool responses for one collection run."""
+
+    async def start_llm_analysis_run(
+        self,
+        *,
+        analysis_run_id: str,
+        profile: str,
+        provider: str,
+        model: str,
+        prompt_version: str,
+        instructions: str | None = None,
+    ) -> None:
+        """Record the start of a chunked LLM analysis run."""
+
+    async def finish_llm_analysis_run(
+        self,
+        *,
+        analysis_run_id: str,
+        status: str,
+        chunk_count: int = 0,
+        succeeded_count: int = 0,
+        failed_count: int = 0,
+        error_text: str | None = None,
+    ) -> None:
+        """Record the completion of a chunked LLM analysis run."""
+
+    async def save_llm_x_post_analyses(self, rows: list[dict]) -> None:
+        """Persist X post analysis rows."""
+
+    async def save_llm_reddit_post_analyses(self, rows: list[dict]) -> None:
+        """Persist Reddit post analysis rows."""
+
+    async def save_llm_reddit_comment_analyses(self, rows: list[dict]) -> None:
+        """Persist Reddit comment analysis rows."""
+
+    async def read_llm_analysis_report(self, *, profile: str, analysis_run_id: str | None = None) -> dict:
+        """Read stored analysis rows as a renderer-ready summary object."""
+
     async def list_collection_runs(self, *, profile: str | None = None, limit: int | None = None) -> list[StoredCollectionRun]:
         """Return stored collection runs."""
 
-    async def read_x_posts(self, *, handles: list[str] | None = None, limit: int | None = None) -> list[StoredXPost]:
+    async def read_x_posts(
+        self,
+        *,
+        handles: list[str] | None = None,
+        since_posted_at: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[StoredXPost]:
         """Read stored X posts with media."""
 
     async def read_reddit_posts(
         self,
         *,
         subreddits: list[str] | None = None,
+        since_posted_at: datetime | None = None,
         limit: int | None = None,
     ) -> list[StoredRedditPost]:
         """Read stored Reddit posts with media and comments."""

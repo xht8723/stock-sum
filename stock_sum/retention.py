@@ -1,4 +1,4 @@
-"""Bounded runtime data retention for app-managed files."""
+"""Bounded retention for generated artifacts and downloaded media."""
 
 from __future__ import annotations
 
@@ -14,12 +14,6 @@ import aiosqlite
 from stock_sum.config.models import AppConfig
 
 
-SQLITE_SOURCE_TYPES = {
-    "x": "x_user_timeline",
-    "reddit": "reddit_subreddit",
-}
-
-
 @dataclass
 class RetentionSummary:
     """Result of one retention status or prune pass."""
@@ -33,7 +27,6 @@ class RetentionSummary:
     http_job_dirs_deleted: int = 0
     media_files_deleted: int = 0
     sqlite_rows_deleted: int = 0
-    sqlite_vacuumed: bool = False
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -97,17 +90,19 @@ class DataRetentionService:
         if self._under_limit(summary):
             return summary
 
-        await self._prune_sqlite(summary)
         summary.bytes_after = self.total_size_bytes()
         summary.bytes_deleted = max(0, summary.bytes_before - summary.bytes_after)
         return summary
 
     def total_size_bytes(self) -> int:
-        """Return total bytes for managed artifact, media, and SQLite files."""
+        """Return total bytes for bounded artifact and media files.
+
+        SQLite source history is intentionally excluded from this cap.
+        """
 
         seen: set[Path] = set()
         total = 0
-        for path in (self.artifact_dir, self.media_root, self.sqlite_path, *self._sqlite_sidecar_paths()):
+        for path in (self.artifact_dir, self.media_root):
             total += _path_size(path, seen)
         return total
 
@@ -177,28 +172,6 @@ class DataRetentionService:
             summary.media_files_deleted += 1
             summary.bytes_deleted += size
 
-    async def _prune_sqlite(self, summary: RetentionSummary) -> None:
-        if not self.sqlite_path.exists():
-            return
-        while summary.bytes_after > summary.max_total_bytes:
-            async with aiosqlite.connect(self.sqlite_path) as db:
-                deleted = await _delete_oldest_sqlite_batch(db)
-                if deleted == 0:
-                    break
-                if not summary.dry_run:
-                    await db.commit()
-                else:
-                    await db.rollback()
-                summary.sqlite_rows_deleted += deleted
-
-            if not summary.dry_run and self.config.retention.vacuum_sqlite:
-                async with aiosqlite.connect(self.sqlite_path) as db:
-                    await db.execute("VACUUM")
-                    summary.sqlite_vacuumed = True
-            elif summary.dry_run:
-                break
-            summary.bytes_after = self.total_size_bytes()
-
     def _http_job_candidates(self) -> list[Path]:
         if not self.artifact_dir.exists():
             return []
@@ -209,13 +182,6 @@ class DataRetentionService:
         if not self.media_root.exists():
             return []
         return sorted((path for path in self.media_root.rglob("*") if path.is_file()), key=lambda path: _mtime(path))
-
-    def _sqlite_sidecar_paths(self) -> list[Path]:
-        return [
-            Path(f"{self.sqlite_path}-wal"),
-            Path(f"{self.sqlite_path}-shm"),
-        ]
-
 
 def _path_size(path: Path, seen: set[Path]) -> int:
     if not path.exists():
@@ -268,108 +234,6 @@ async def _downloaded_media_rows(db: aiosqlite.Connection) -> list[dict[str, Any
         {"remote_url_hash": row[0], "local_path": row[1], "downloaded_at": row[2]}
         for row in rows
     ]
-
-
-async def _delete_oldest_sqlite_batch(db: aiosqlite.Connection, *, batch_size: int = 100) -> int:
-    deleted = 0
-    deleted += await _delete_oldest_x_posts(db, batch_size=batch_size)
-    deleted += await _delete_oldest_reddit_posts(db, batch_size=batch_size)
-    deleted += await _delete_oldest_collection_runs(db, batch_size=batch_size)
-    deleted += await _delete_oldest_orphan_index_rows(db, batch_size=batch_size)
-    return deleted
-
-
-async def _delete_oldest_x_posts(db: aiosqlite.Connection, *, batch_size: int) -> int:
-    rows = await _fetch_all(
-        db,
-        """
-        SELECT status_id, handle
-        FROM raw_x_posts
-        ORDER BY collected_at ASC
-        LIMIT ?
-        """,
-        (batch_size,),
-    )
-    for status_id, handle in rows:
-        await db.execute("DELETE FROM raw_x_post_media WHERE status_id = ?", (status_id,))
-        await db.execute("DELETE FROM raw_x_posts WHERE handle = ? AND status_id = ?", (handle, status_id))
-        await db.execute(
-            "DELETE FROM raw_item_index WHERE source_type = ? AND source_id = ?",
-            (SQLITE_SOURCE_TYPES["x"], status_id),
-        )
-    return len(rows)
-
-
-async def _delete_oldest_reddit_posts(db: aiosqlite.Connection, *, batch_size: int) -> int:
-    rows = await _fetch_all(
-        db,
-        """
-        SELECT post_id, subreddit
-        FROM raw_reddit_posts
-        ORDER BY collected_at ASC
-        LIMIT ?
-        """,
-        (batch_size,),
-    )
-    for post_id, subreddit in rows:
-        await db.execute("DELETE FROM raw_reddit_comments WHERE post_id = ?", (post_id,))
-        await db.execute("DELETE FROM raw_reddit_post_media WHERE post_id = ?", (post_id,))
-        await db.execute("DELETE FROM raw_reddit_posts WHERE subreddit = ? AND post_id = ?", (subreddit, post_id))
-        await db.execute(
-            """
-            DELETE FROM raw_item_index
-            WHERE source_type = ?
-              AND (source_id = ? OR source_id LIKE ?)
-            """,
-            (SQLITE_SOURCE_TYPES["reddit"], post_id, f"{post_id}:%"),
-        )
-    return len(rows)
-
-
-async def _delete_oldest_collection_runs(db: aiosqlite.Connection, *, batch_size: int) -> int:
-    rows = await _fetch_all(
-        db,
-        """
-        SELECT run_id
-        FROM collection_runs
-        ORDER BY COALESCE(finished_at, started_at) ASC
-        LIMIT ?
-        """,
-        (batch_size,),
-    )
-    for (run_id,) in rows:
-        await db.execute("DELETE FROM collection_runs WHERE run_id = ?", (run_id,))
-    return len(rows)
-
-
-async def _delete_oldest_orphan_index_rows(db: aiosqlite.Connection, *, batch_size: int) -> int:
-    rows = await _fetch_all(
-        db,
-        """
-        SELECT source_type, source_id
-        FROM raw_item_index
-        ORDER BY latest_seen_at ASC
-        LIMIT ?
-        """,
-        (batch_size,),
-    )
-    for source_type, source_id in rows:
-        await db.execute(
-            "DELETE FROM raw_item_index WHERE source_type = ? AND source_id = ?",
-            (source_type, source_id),
-        )
-    return len(rows)
-
-
-async def _fetch_all(db: aiosqlite.Connection, query: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
-    try:
-        cursor = await db.execute(query, params)
-    except aiosqlite.OperationalError:
-        return []
-    try:
-        return await cursor.fetchall()
-    finally:
-        await cursor.close()
 
 
 def _is_protected(path: Path, protected: set[Path]) -> bool:

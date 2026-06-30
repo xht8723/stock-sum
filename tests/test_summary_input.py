@@ -1,5 +1,7 @@
 """Summary input builder tests."""
 
+from datetime import datetime, timedelta, timezone
+
 from stock_sum.config.models import AppConfig, LLMConfig, ReportProfileConfig, StorageConfig
 from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.storage.models import (
@@ -9,6 +11,10 @@ from stock_sum.storage.models import (
     StoredRedditPost,
     StoredXPost,
 )
+
+
+def _iso(hours_ago: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
 
 
 class FakeSummaryRepository:
@@ -29,15 +35,16 @@ class FakeSummaryRepository:
             )
         ]
 
-    async def read_x_posts(self, *, handles=None, limit=None):
+    async def read_x_posts(self, *, handles=None, since_posted_at=None, limit=None):
         assert handles == ["alpha"]
+        assert since_posted_at is not None
         return [
             StoredXPost(
                 status_id="1",
                 handle="alpha",
                 author_handle="alpha",
                 author_name="Alpha",
-                posted_at_text="now",
+                posted_at_text=_iso(1),
                 url="https://x.com/alpha/status/1",
                 text="x text",
                 reply_count=1,
@@ -55,11 +62,29 @@ class FakeSummaryRepository:
                         local_path="data/media/x/x.jpg",
                     )
                 ],
-            )
+            ),
+            StoredXPost(
+                status_id="old",
+                handle="alpha",
+                author_handle="alpha",
+                author_name="Alpha",
+                posted_at_text=_iso(30),
+                url="https://x.com/alpha/status/old",
+                text="old x text",
+                reply_count=None,
+                repost_count=None,
+                like_count=None,
+                quote_count=None,
+                view_count=None,
+                raw_metadata={},
+                collected_at="2026-06-27T00:00:01+00:00",
+                media=[],
+            ),
         ]
 
-    async def read_reddit_posts(self, *, subreddits=None, limit=None):
+    async def read_reddit_posts(self, *, subreddits=None, since_posted_at=None, limit=None):
         assert subreddits == ["bets"]
+        assert since_posted_at is not None
         return [
             StoredRedditPost(
                 post_id="abc",
@@ -75,7 +100,7 @@ class FakeSummaryRepository:
                 upvote_ratio=0.9,
                 num_comments=2,
                 thumbnail_url=None,
-                created_at_text="now",
+                created_at_text=_iso(1),
                 raw_metadata={},
                 collected_at="2026-06-27T00:00:01+00:00",
                 media=[
@@ -96,13 +121,33 @@ class FakeSummaryRepository:
                         score=1,
                         ups=1,
                         url="https://reddit.example/comment",
-                        created_at_text="later",
+                        created_at_text=_iso(1),
                         depth=0,
                         raw_metadata={},
                         collected_at="2026-06-27T00:00:02+00:00",
                     )
                 ],
-            )
+            ),
+            StoredRedditPost(
+                post_id="old",
+                subreddit="bets",
+                fullname="t3_old",
+                title="old reddit title",
+                author="author",
+                url="https://reddit.example/old",
+                permalink="https://www.reddit.com/r/bets/comments/old/post/",
+                selftext="old reddit body",
+                score=1,
+                ups=1,
+                upvote_ratio=0.1,
+                num_comments=0,
+                thumbnail_url=None,
+                created_at_text=_iso(30),
+                raw_metadata={},
+                collected_at="2026-06-27T00:00:01+00:00",
+                media=[],
+                comments=[],
+            ),
         ]
 
 

@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal
+from typing import Any, Callable, Literal
 from uuid import uuid4
 import hashlib
 import json
 
-from stock_sum.collectors.playwright.capitol_trades import CAPITOL_TRADES_URL, scrape_capitol_trades
 from stock_sum.config.models import AppConfig
 from stock_sum.core.context import RuntimeContext
-from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning, Summary
+from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
 from stock_sum.core.pipeline import ReportPipeline
+from stock_sum.llm.analysis import LLMAnalysisService, PROMPT_VERSION
 from stock_sum.llm.registry import build_llm_client
 from stock_sum.media.downloader import MediaDownloader
 from stock_sum.retention import DataRetentionService
@@ -33,8 +33,6 @@ class ReportJobOptions:
 
     mode: ReportMode = "html"
     download_images: bool = False
-    include_capitol_trades: bool = False
-    capitol_trades_limit: int = 12
     instructions: str | None = None
     title: str = "Market Social Digest"
     max_images_per_post: int = 3
@@ -84,7 +82,6 @@ class HttpJobManager:
         repository_factory: Callable[[], SQLiteStorageRepository] | None = None,
         llm_client_factory: Callable[[], Any] | None = None,
         renderer_factory: Callable[[str], PresentationRenderer] | None = None,
-        capitol_scraper: Callable[..., Awaitable[Any]] | None = None,
         retention_service_factory: Callable[[], DataRetentionService] | None = None,
     ) -> None:
         self.config = config
@@ -96,7 +93,6 @@ class HttpJobManager:
         self._repository_factory = repository_factory or (lambda: SQLiteStorageRepository(config.storage.sqlite_path))
         self._llm_client_factory = llm_client_factory or (lambda: build_llm_client(config.llm))
         self._renderer_factory = renderer_factory or (lambda title: PresentationRenderer(title=title))
-        self._capitol_scraper = capitol_scraper or scrape_capitol_trades
         self._retention_service_factory = retention_service_factory or (lambda: DataRetentionService(config))
 
     def create_report_job(self, profile: str, options: ReportJobOptions) -> HttpJobRecord:
@@ -169,32 +165,24 @@ class HttpJobManager:
                 max_images_total=options.max_images_total,
             )
 
-            self._update(job_id, phase="summarizing")
-            summary = await self._llm_client_factory().summarize(payload_data, instructions=options.instructions)
-            response_data = _summary_response_data(
+            self._update(job_id, phase="analyzing")
+            analysis = await LLMAnalysisService(
+                config=self.config,
+                repository=repository,
+                llm_client=self._llm_client_factory(),
+            ).analyze(
+                summary_input,
+                instructions=options.instructions,
+                max_images_per_post=options.max_images_per_post,
+                max_images_total=options.max_images_total,
+            )
+            warnings.extend(analysis.warnings)
+            response_data = _analysis_response_data(
                 profile=job.profile,
                 provider=self.config.llm.provider,
-                summary=summary,
+                analysis=analysis,
                 input_media=payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
             )
-
-            if options.include_capitol_trades:
-                self._update(job_id, phase="scraping_capitol_trades")
-                try:
-                    snapshot = await self._capitol_scraper(
-                        url=CAPITOL_TRADES_URL,
-                        limit=options.capitol_trades_limit,
-                    )
-                    response_data["capitol_trades"] = snapshot.to_dict()
-                except Exception as exc:
-                    warnings.append(
-                        PipelineSectionWarning(
-                            section="capitol_trades",
-                            source_id=CAPITOL_TRADES_URL,
-                            phase="scraping_capitol_trades",
-                            message=str(exc),
-                        )
-                    )
 
             warning_data = _warnings_to_dicts(warnings)
             response_data["pipeline_warnings"] = warning_data
@@ -326,7 +314,6 @@ class HttpJobManager:
                     "http_job_dirs_deleted": 0,
                     "media_files_deleted": 0,
                     "sqlite_rows_deleted": 0,
-                    "sqlite_vacuumed": False,
                     "errors": [str(exc)],
                     "over_limit": False,
                 },
@@ -431,11 +418,12 @@ class HttpJobManager:
                 "provider": self.config.llm.provider,
                 "model": self.config.llm.model,
                 "thinking_enabled": self.config.llm.thinking_enabled,
+                "analysis_prompt_version": PROMPT_VERSION,
+                "analysis_x_posts_per_chunk": self.config.llm.analysis_x_posts_per_chunk,
+                "analysis_max_chars_per_chunk": self.config.llm.analysis_max_chars_per_chunk,
             },
             "options": {
                 "download_images": options.download_images,
-                "include_capitol_trades": options.include_capitol_trades,
-                "capitol_trades_limit": options.capitol_trades_limit,
                 "instructions": options.instructions,
                 "max_images_per_post": options.max_images_per_post,
                 "max_images_total": options.max_images_total,
@@ -528,19 +516,25 @@ def _no_social_data_message(result: PipelineCollectionResult) -> str:
     return message
 
 
-def _summary_response_data(
+def _analysis_response_data(
     *,
     profile: str,
     provider: str,
-    summary: Summary,
+    analysis: Any,
     input_media: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "profile": profile,
         "provider": provider,
-        "model": summary.model,
-        "summary_text": summary.text,
-        "summary": summary.metadata.get("parsed"),
+        "model": analysis.model,
+        "summary_text": json.dumps(analysis.summary, ensure_ascii=False),
+        "summary": analysis.summary,
         "input_media": input_media,
-        "metadata": {key: value for key, value in summary.metadata.items() if key != "parsed"},
+        "metadata": {
+            "analysis_run_id": analysis.analysis_run_id,
+            "prompt_version": analysis.prompt_version,
+            "chunk_count": analysis.chunk_count,
+            "succeeded_count": analysis.succeeded_count,
+            "failed_count": analysis.failed_count,
+        },
     }

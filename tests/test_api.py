@@ -45,7 +45,7 @@ def test_report_job_lifecycle_and_artifact_download(tmp_path) -> None:
 
     create_response = client.post(
         "/v1/reports/default/jobs",
-        json={"mode": "html", "include_capitol_trades": False},
+        json={"mode": "html"},
     )
 
     assert create_response.status_code == 202
@@ -69,7 +69,7 @@ def test_report_job_format_endpoint_sets_mode(tmp_path) -> None:
 
     create_response = client.post(
         "/v1/reports/default/jobs/discord",
-        json={"include_capitol_trades": True},
+        json={},
     )
 
     assert create_response.status_code == 202

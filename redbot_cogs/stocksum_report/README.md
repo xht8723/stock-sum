@@ -41,8 +41,8 @@ API:
 ```text
 /stocksum profiles list
 /stocksum sources list
-/stocksum sources add-x handle:aleabitoreddit
-/stocksum sources add-reddit subreddit:wallstreetbets
+/stocksum sources add-x handle:aleabitoreddit limit:100 lookback_hours:24
+/stocksum sources add-reddit subreddit:wallstreetbets limit:100 lookback_hours:24
 /stocksum llm providers
 /stocksum llm select provider:deepseek
 /stocksum secrets list

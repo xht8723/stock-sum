@@ -12,7 +12,7 @@ from stock_sum.retention import RetentionSummary
 from stock_sum.storage.models import StoredXPost
 
 
-async def test_report_job_succeeds_with_capitol_warning(tmp_path) -> None:
+async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
     manager = HttpJobManager(
         _test_config(tmp_path),
         pipeline_factory=lambda: FakePipeline(
@@ -31,21 +31,20 @@ async def test_report_job_succeeds_with_capitol_warning(tmp_path) -> None:
         ),
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: FakeLLM(),
-        capitol_scraper=failed_capitol_scraper,
     )
-    job = manager.create_report_job("default", ReportJobOptions(mode="discord", include_capitol_trades=True))
+    job = manager.create_report_job("default", ReportJobOptions(mode="discord"))
 
-    await manager.run_report_job(job.job_id, ReportJobOptions(mode="discord", include_capitol_trades=True))
+    await manager.run_report_job(job.job_id, ReportJobOptions(mode="discord"))
 
     status = manager.get_job(job.job_id)
     assert status is not None
     assert status.status == "succeeded"
     assert status.artifact_path is not None
-    assert len(status.warnings) == 2
+    assert len(status.warnings) == 1
     summary = Path(status.summary_path or "").read_text(encoding="utf-8")
     assert "pipeline_warnings" in summary
     assert "failed_sections" in summary
-    assert "Capitol blocked" in summary
+    assert "temporary reddit failure" in summary
 
 
 async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
@@ -265,11 +264,14 @@ class FakePipeline:
 class FakeRepository:
     def __init__(self, *, with_social_data: bool) -> None:
         self.with_social_data = with_social_data
+        self.x_analysis_rows = []
+        self.reddit_post_analysis_rows = []
+        self.reddit_comment_analysis_rows = []
 
     async def list_collection_runs(self, *, profile: str | None = None, limit: int = 20):
         return []
 
-    async def read_x_posts(self, *, handles=None, collector_id=None, profile=None, since=None, limit=50):
+    async def read_x_posts(self, *, handles=None, since_posted_at=None, collector_id=None, profile=None, since=None, limit=50):
         if not self.with_social_data:
             return []
         return [
@@ -278,7 +280,7 @@ class FakeRepository:
                 handle="aleabitoreddit",
                 author_handle="aleabitoreddit",
                 author_name="Serenity",
-                posted_at_text="today",
+                posted_at_text="2999-01-01T00:00:00+00:00",
                 url="https://x.com/aleabitoreddit/status/1",
                 text="market signal",
                 reply_count=1,
@@ -291,36 +293,74 @@ class FakeRepository:
             )
         ]
 
-    async def read_reddit_posts(self, *, subreddits=None, collector_id=None, profile=None, since=None, limit=50):
+    async def read_reddit_posts(self, *, subreddits=None, since_posted_at=None, collector_id=None, profile=None, since=None, limit=50):
         return []
+
+    async def start_llm_analysis_run(self, **kwargs):
+        return None
+
+    async def finish_llm_analysis_run(self, **kwargs):
+        return None
+
+    async def save_llm_x_post_analyses(self, rows):
+        self.x_analysis_rows.extend(rows)
+
+    async def save_llm_reddit_post_analyses(self, rows):
+        self.reddit_post_analysis_rows.extend(rows)
+
+    async def save_llm_reddit_comment_analyses(self, rows):
+        self.reddit_comment_analysis_rows.extend(rows)
+
+    async def read_llm_analysis_report(self, *, profile: str, analysis_run_id: str | None = None):
+        posts = [
+            {
+                "source_ref": row["source_ref"],
+                "source_id": row["status_id"],
+                "title": row["summary"],
+                "post_summary": row["summary"],
+                "sentiment": row["sentiment"],
+                "tags": ["market", "social", "signal", "risk", "watch"],
+                "interpretation": row["interpretation"],
+                "confidence": row["confidence"],
+                "urls": [row["url"]],
+            }
+            for row in self.x_analysis_rows
+        ]
+        return {
+            "x_reports": [{"handle": "aleabitoreddit", "overall_summary": ["summary"], "posts": posts}],
+            "reddit_report": {"overall_summary": [], "posts": []},
+        }
 
 
 class FakeLLM:
+    provider = "fake"
+    model = "fake"
+
     def __init__(self) -> None:
         self.calls = 0
 
     async def summarize(self, payload, *, instructions=None) -> Summary:
+        return await self.complete_json([])
+
+    async def complete_json(self, messages) -> Summary:
         self.calls += 1
         return Summary(
-            text="{}",
+            text='{"source":"x","posts":[{"source_ref":"x1","source_id":"1","sentiment":"bullish","tags":["market","social","signal","risk","watch"],"summary":"summary","interpretation":"interpretation","confidence":"medium"}]}',
             model="fake",
             metadata={
                 "parsed": {
-                    "x_reports": [
+                    "source": "x",
+                    "posts": [
                         {
-                            "handle": "aleabitoreddit",
-                            "overall_summary": ["summary"],
-                            "posts": [
-                                {
-                                    "title": "Signal",
-                                    "post_summary": "summary",
-                                    "sentiment": "bullish",
-                                    "confidence": "medium",
-                                    "urls": ["https://x.com/aleabitoreddit/status/1"],
-                                }
-                            ],
+                            "source_ref": "x1",
+                            "source_id": "1",
+                            "sentiment": "bullish",
+                            "tags": ["market", "social", "signal", "risk", "watch"],
+                            "summary": "summary",
+                            "interpretation": "interpretation",
+                            "confidence": "medium",
                         }
-                    ]
+                    ],
                 }
             },
         )
@@ -341,8 +381,6 @@ class FakeRetentionService:
         )
 
 
-async def failed_capitol_scraper(**kwargs):
-    raise RuntimeError("Capitol blocked")
 
 
 def _successful_collection_result() -> PipelineCollectionResult:

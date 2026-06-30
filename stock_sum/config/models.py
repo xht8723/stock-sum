@@ -48,7 +48,6 @@ class RetentionConfig(BaseModel):
     enabled: bool = True
     max_total_bytes: int = Field(default=2_147_483_648, ge=1)
     prune_after_pipeline: bool = True
-    vacuum_sqlite: bool = True
 
 
 class ModelsDevConfig(BaseModel):
@@ -105,6 +104,8 @@ class LLMConfig(BaseModel):
     temperature: float = Field(default=0.2, ge=0, le=2)
     max_tokens: int = Field(default=5000, ge=1)
     thinking_enabled: bool = False
+    analysis_x_posts_per_chunk: int = Field(default=10, ge=1)
+    analysis_max_chars_per_chunk: int = Field(default=12000, ge=1000)
 
 
 class ReportProfileConfig(BaseModel):
@@ -126,7 +127,8 @@ class CollectorConfig(BaseModel):
     subreddit: str | None = None
     sort: str = "new"
     timeframe: str = "day"
-    limit: int = Field(default=10, ge=1)
+    limit: int = Field(default=100, ge=1)
+    lookback_hours: int = Field(default=24, ge=1)
     trim: bool = True
     include_comments: bool = False
     comments_per_post: int = Field(default=0, ge=0)
@@ -137,7 +139,8 @@ class XUserSourceConfig(BaseModel):
 
     handle: str
     enabled: bool = True
-    limit: int = Field(default=10, ge=1)
+    limit: int = Field(default=100, ge=1)
+    lookback_hours: int = Field(default=24, ge=1)
 
 
 class RedditSubredditSourceConfig(BaseModel):
@@ -147,7 +150,8 @@ class RedditSubredditSourceConfig(BaseModel):
     enabled: bool = True
     sort: str = "new"
     timeframe: str = "day"
-    limit: int = Field(default=10, ge=1)
+    limit: int = Field(default=100, ge=1)
+    lookback_hours: int = Field(default=24, ge=1)
     trim: bool = True
     include_comments: bool = False
     comments_per_post: int = Field(default=0, ge=0)

@@ -124,12 +124,15 @@ Manage long source lists:
 
 ```powershell
 stock-sum config x-user list --config config.toml
-stock-sum config x-user add aleabitoreddit --config config.toml --profile default --limit 10
+stock-sum config x-user add aleabitoreddit --config config.toml --profile default --limit 100 --lookback-hours 24
 stock-sum config x-user delete aleabitoreddit --config config.toml --profile default
 stock-sum config subreddit list --config config.toml
-stock-sum config subreddit add wallstreetbets --config config.toml --profile default --sort new --limit 10
+stock-sum config subreddit add wallstreetbets --config config.toml --profile default --sort new --limit 100 --lookback-hours 24
 stock-sum config subreddit delete wallstreetbets --config config.toml --profile default
 ```
+
+For X and Reddit sources, `--limit` is the provider fetch cap. Reports keep only
+posts inside `--lookback-hours`, defaulting to the last 24 hours.
 
 Important configuration sections:
 
@@ -137,8 +140,9 @@ Important configuration sections:
 - `[server]`: local HTTP host, port, artifact directory, one-hour report cache,
   and exact IP blacklist.
 - `[storage]`: SQLite database path.
-- `[retention]`: managed runtime data cap and cleanup behavior. Defaults to a
-  2GB total cap across HTTP job artifacts, downloaded media, and SQLite data.
+- `[retention]`: generated artifact/media cleanup behavior. Defaults to a 2GB
+  cap across HTTP job artifacts and downloaded media; collected SQLite source
+  history is preserved.
 - `[models_dev]`: external model catalog URL, cache path, and refresh interval.
 - `[playwright]`: browser automation defaults for future site-specific browser
   collectors.
@@ -221,8 +225,8 @@ stock-sum config subreddit add wallstreetbets --config config.toml --profile def
 ```
 
 Fresh configs already enable `x.aleabitoreddit` and
-`reddit.wallstreetbets` in the `default` profile; use the source commands above
-to customize or replace them.
+`reddit.wallstreetbets` in the `default` profile with a 100-post fetch cap and
+24-hour lookback; use the source commands above to customize or replace them.
 
 Daemon and report commands:
 
@@ -233,6 +237,7 @@ stock-sum collect --collector x.aleabitoreddit --config config.toml
 stock-sum collect --collector reddit.wallstreetbets --config config.toml
 stock-sum payload build --profile default --output docs/examples/summary_input_sample.json --config config.toml --download-images --mode vision
 stock-sum llm summarize --profile default --payload docs/examples/summary_input_sample.json --output C:\tmp\stock-sum-deepseek-response.json --config config.toml
+stock-sum llm analyze --profile default --output C:\tmp\stock-sum-analysis-response.json --config config.toml
 stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode html --output C:\tmp\stock-sum-report.html
 stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode markdown --output C:\tmp\stock-sum-report.md
 stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode text --output C:\tmp\stock-sum-report.txt
@@ -242,10 +247,10 @@ stock-sum run-report --profile default --config config.toml
 `setup reset` is destructive. It prints the target config, env file, and data
 directory, then requires confirmation and typing `RESET` before deletion.
 
-The bundled example sources are disabled. To use them, either set
-`enabled = true` in TOML or add a source through the CLI, then run the generated
-collector ID directly or through a report profile. X and Reddit collection use
-Xpoz through an internal MCP-over-HTTP client.
+Fresh configs enable bundled example sources for `x.aleabitoreddit` and
+`reddit.wallstreetbets`. Customize them through TOML or the source CLI, then run
+the generated collector ID directly or through a report profile. X and Reddit
+collection use Xpoz through an internal MCP-over-HTTP client.
 
 `payload build` reads collected data from SQLite and writes an LLM-ready JSON
 payload with separate X and Reddit sections. X posts are grouped by handle;
@@ -256,10 +261,15 @@ debug payload, `--mode compact` for a lower-token text payload, and
 `--mode vision` for the compact payload plus an ordered image attachment
 manifest.
 
-`llm summarize` sends the compact payload text to the configured DeepSeek model
-and writes the full response metadata plus parsed JSON summary to the requested
-output file. The first provider client is text-only; media is referenced by
-media IDs, URLs, or local paths rather than uploaded as image bytes.
+HTTP report jobs use chunked LLM analysis, persist per-post/per-comment
+sentiment and tags in SQLite, then render final reports deterministically from
+stored analysis rows. Reddit is analyzed per post with comments linked under the
+post; X is analyzed in bounded handle/post chunks.
+
+`llm analyze` runs the same chunked analysis path from the CLI. `llm summarize`
+remains a single-call debug command for existing payload files. The first
+provider client is text-only; media is referenced by media IDs, URLs, or local
+paths rather than uploaded as image bytes.
 
 `report render` turns the LLM response JSON into final presentation artifacts.
 Use `--mode html` for a standalone visual report, `--mode markdown` for a
@@ -288,9 +298,7 @@ Example:
 
 ```powershell
 curl http://127.0.0.1:8000/health
-curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs/html `
-  -H "Content-Type: application/json" `
-  -d '{"include_capitol_trades":true}'
+curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs/html
 ```
 
 The response includes a `job_id` that can be polled until the report succeeds or
@@ -300,8 +308,9 @@ fails.
 
 `stock-sum` prunes managed runtime data after report and collection pipeline
 runs when `[retention].enabled` and `[retention].prune_after_pipeline` are true.
-The default cap is `2147483648` bytes across `[server].artifact_dir`,
-`[media].root_dir`, and `[storage].sqlite_path`.
+The default cap is `2147483648` bytes across `[server].artifact_dir` and
+`[media].root_dir`. SQLite source history and provider response archives are not
+counted against this cap.
 
 ```powershell
 stock-sum retention status --config config.toml
@@ -309,9 +318,10 @@ stock-sum retention prune --dry-run --config config.toml
 stock-sum retention prune --apply --config config.toml
 ```
 
-Cleanup deletes oldest HTTP job artifacts first, downloaded media next, and old
-SQLite collection history last. The current HTTP job artifact is protected while
-cleanup runs so API clients can still download it.
+Cleanup deletes oldest HTTP job artifacts first, then downloaded media and the
+matching `downloaded_media` cache rows. It does not prune collection runs,
+source rows, source indexes, or provider response archives. The current HTTP job
+artifact is protected while cleanup runs so API clients can still download it.
 
 ## Docker quick start
 

@@ -71,7 +71,7 @@ async def test_retention_prunes_downloaded_media_and_database_row(tmp_path) -> N
         assert await _count_rows(db, "downloaded_media") == 0
 
 
-async def test_retention_prunes_sqlite_source_rows(tmp_path) -> None:
+async def test_retention_preserves_sqlite_source_history(tmp_path) -> None:
     config = _retention_config(tmp_path, max_total_bytes=1)
     repository = SQLiteStorageRepository(tmp_path / "stock_sum.sqlite3")
     await repository.save_raw_items(
@@ -95,12 +95,11 @@ async def test_retention_prunes_sqlite_source_rows(tmp_path) -> None:
 
     summary = await DataRetentionService(config).prune()
 
-    assert summary.sqlite_rows_deleted > 0
-    assert summary.sqlite_vacuumed is True
+    assert summary.sqlite_rows_deleted == 0
     async with aiosqlite.connect(tmp_path / "stock_sum.sqlite3") as db:
-        assert await _count_rows(db, "raw_x_posts") == 0
-        assert await _count_rows(db, "raw_reddit_posts") == 0
-        assert await _count_rows(db, "raw_item_index") == 0
+        assert await _count_rows(db, "raw_x_posts") == 1
+        assert await _count_rows(db, "raw_reddit_posts") == 1
+        assert await _count_rows(db, "raw_item_index") == 2
 
 
 async def test_retention_dry_run_does_not_delete_files(tmp_path) -> None:

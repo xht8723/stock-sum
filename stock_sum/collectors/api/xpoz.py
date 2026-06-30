@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import csv
 import html
@@ -16,7 +16,7 @@ import httpx
 from stock_sum.config.models import CollectorConfig, XpozProviderConfig
 from stock_sum.core.context import RuntimeContext
 from stock_sum.core.errors import ConfigurationError, StockSumError
-from stock_sum.core.models import RawItem
+from stock_sum.core.models import PipelineSectionWarning, ProviderApiResponse, RawItem
 
 X_SOURCE_TYPE = "x_user_timeline"
 REDDIT_SOURCE_TYPE = "reddit_subreddit"
@@ -119,6 +119,7 @@ class XpozClient:
         self.transport = transport
         self._session_id: str | None = None
         self._initialized = False
+        self.provider_responses: list[ProviderApiResponse] = []
 
     @classmethod
     def from_provider_config(cls, config: XpozProviderConfig) -> XpozClient:
@@ -203,26 +204,35 @@ class XpozClient:
     ) -> dict[str, list[dict[str, Any]]]:
         """Return one Reddit post and comments by post ID."""
 
-        text = await self.call_tool_text(
-            "getRedditPostWithCommentsById",
-            {
+        tool_name = "getRedditPostWithCommentsById"
+        arguments = {
                 "postId": post_id,
                 "limit": limit,
                 "forceLatest": force_latest,
                 "responseType": "fast",
                 "postFields": post_fields or REDDIT_POST_FIELDS,
                 "commentFields": comment_fields or REDDIT_COMMENT_FIELDS,
-            },
-        )
-        return {
-            "posts": parse_xpoz_rows(text, preferred_prefix="posts"),
-            "comments": parse_xpoz_rows(text, preferred_prefix="comments"),
         }
+        text = await self.call_tool_text(tool_name, arguments)
+        posts = parse_xpoz_rows(text, preferred_prefix="posts")
+        comments = parse_xpoz_rows(text, preferred_prefix="comments")
+        archive_rows = [
+            {"section": "posts", **row}
+            for row in posts
+        ] + [
+            {"section": "comments", **row}
+            for row in comments
+        ]
+        self._record_provider_response(tool_name, arguments, text, archive_rows)
+        return {"posts": posts, "comments": comments}
 
     async def call_tool_rows(self, tool_name: str, arguments: Mapping[str, Any]) -> list[dict[str, Any]]:
         """Call one Xpoz MCP tool and parse row-like text content."""
 
-        return parse_xpoz_rows(await self.call_tool_text(tool_name, arguments))
+        text = await self.call_tool_text(tool_name, arguments)
+        rows = parse_xpoz_rows(text)
+        self._record_provider_response(tool_name, arguments, text, rows)
+        return rows
 
     async def call_tool_text(self, tool_name: str, arguments: Mapping[str, Any]) -> str:
         """Call one Xpoz MCP tool and return joined text content."""
@@ -304,6 +314,31 @@ class XpozClient:
             raise XpozError(f"Xpoz request failed: HTTP {response.status_code}.")
         return parse_mcp_response_text(response.text)
 
+    def take_provider_responses(self) -> list[ProviderApiResponse]:
+        """Return and clear captured provider responses."""
+
+        responses = self.provider_responses
+        self.provider_responses = []
+        return responses
+
+    def _record_provider_response(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        raw_response_text: str,
+        parsed_rows: list[dict[str, Any]],
+    ) -> None:
+        self.provider_responses.append(
+            ProviderApiResponse(
+                provider="xpoz",
+                tool_name=tool_name,
+                request_arguments=dict(arguments),
+                raw_response_text=raw_response_text,
+                parsed_rows=parsed_rows,
+                row_count=len(parsed_rows),
+            )
+        )
+
 
 class XpozXUserTimelineCollector:
     """Collect recent X user timeline posts through Xpoz."""
@@ -322,27 +357,51 @@ class XpozXUserTimelineCollector:
         self.collector_config = collector_config
         self.provider_config = provider_config
         self.client = client or XpozClient.from_provider_config(provider_config)
+        self.warnings: list[PipelineSectionWarning] = []
+        self.api_responses: list[ProviderApiResponse] = []
 
     async def collect(self, context: RuntimeContext) -> list[RawItem]:
+        self.warnings = []
+        self.api_responses = []
+        _clear_provider_responses(self.client)
         handle = normalize_x_handle(self.collector_config.handle or "")
-        author_posts = await self.client.twitter_posts_by_author(
-            username=handle,
-            limit=max(self.collector_config.limit, 1),
-            fields=X_AUTHOR_FIELDS,
-            force_latest=True,
-        )
-        author_posts = sorted(author_posts, key=x_post_sort_key, reverse=True)
-        status_ids = [_string_value(post, "id") for post in author_posts if _string_value(post, "id")]
-        status_ids = _dedupe(status_ids)[: self.collector_config.limit]
-        detail_posts = await self.client.twitter_posts_by_ids(
-            post_ids=status_ids,
-            fields=X_DETAIL_FIELDS,
-            force_latest=True,
-        )
-        by_id = {_string_value(post, "id"): post for post in detail_posts if _string_value(post, "id")}
-        merged = [by_id.get(status_id) or next(post for post in author_posts if _string_value(post, "id") == status_id) for status_id in status_ids]
-        merged = sorted(merged, key=x_post_sort_key, reverse=True)
-        return [_raw_x_post_item(post, handle) for post in merged[: self.collector_config.limit]]
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=self.collector_config.lookback_hours)
+        try:
+            author_posts = await self.client.twitter_posts_by_author(
+                username=handle,
+                limit=max(self.collector_config.limit, 1),
+                fields=X_AUTHOR_FIELDS,
+                force_latest=True,
+            )
+            author_posts = sorted(author_posts, key=x_post_sort_key, reverse=True)
+            self.warnings.extend(
+                _cap_warnings(
+                    posts=author_posts,
+                    limit=self.collector_config.limit,
+                    cutoff=cutoff,
+                    collector_id=self.collector_id,
+                    source_label=f"X user @{handle}",
+                    phase="collecting",
+                )
+            )
+            status_ids = [_string_value(post, "id") for post in author_posts if _string_value(post, "id")]
+            status_ids = _dedupe(status_ids)[: self.collector_config.limit]
+            detail_posts = await self.client.twitter_posts_by_ids(
+                post_ids=status_ids,
+                fields=X_DETAIL_FIELDS,
+                force_latest=True,
+            )
+            by_id = {_string_value(post, "id"): post for post in detail_posts if _string_value(post, "id")}
+            author_by_id = {_string_value(post, "id"): post for post in author_posts if _string_value(post, "id")}
+            merged = [
+                {**author_by_id.get(status_id, {}), **by_id.get(status_id, {})}
+                for status_id in status_ids
+                if status_id in author_by_id or status_id in by_id
+            ]
+            merged = sorted(merged, key=x_post_sort_key, reverse=True)
+            return [_raw_x_post_item(post, handle) for post in merged]
+        finally:
+            self.api_responses = _take_provider_responses(self.client)
 
 
 class XpozRedditSubredditCollector:
@@ -362,25 +421,44 @@ class XpozRedditSubredditCollector:
         self.collector_config = collector_config
         self.provider_config = provider_config
         self.client = client or XpozClient.from_provider_config(provider_config)
+        self.warnings: list[PipelineSectionWarning] = []
+        self.api_responses: list[ProviderApiResponse] = []
 
     async def collect(self, context: RuntimeContext) -> list[RawItem]:
+        self.warnings = []
+        self.api_responses = []
+        _clear_provider_responses(self.client)
         subreddit = normalize_subreddit(self.collector_config.subreddit or "")
-        posts = await self.client.reddit_subreddit_posts(
-            subreddit=subreddit,
-            limit=self.collector_config.limit,
-            fields=REDDIT_POST_FIELDS,
-            force_latest=True,
-        )
-        posts = sorted(posts, key=reddit_post_sort_key, reverse=True)[: self.collector_config.limit]
-        items: list[RawItem] = []
-        for post in posts:
-            post_item = _raw_reddit_post_item(post, subreddit)
-            if post_item is None:
-                continue
-            items.append(post_item)
-            if self.collector_config.include_comments and self.collector_config.comments_per_post > 0:
-                items.extend(await self._collect_comments(post_item))
-        return items
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=self.collector_config.lookback_hours)
+        try:
+            posts = await self.client.reddit_subreddit_posts(
+                subreddit=subreddit,
+                limit=self.collector_config.limit,
+                fields=REDDIT_POST_FIELDS,
+                force_latest=True,
+            )
+            posts = sorted(posts, key=reddit_post_sort_key, reverse=True)[: self.collector_config.limit]
+            self.warnings.extend(
+                _cap_warnings(
+                    posts=posts,
+                    limit=self.collector_config.limit,
+                    cutoff=cutoff,
+                    collector_id=self.collector_id,
+                    source_label=f"r/{subreddit}",
+                    phase="collecting",
+                )
+            )
+            items: list[RawItem] = []
+            for post in posts:
+                post_item = _raw_reddit_post_item(post, subreddit)
+                if post_item is None:
+                    continue
+                items.append(post_item)
+                if self.collector_config.include_comments and self.collector_config.comments_per_post > 0:
+                    items.extend(await self._collect_comments(post_item))
+            return items
+        finally:
+            self.api_responses = _take_provider_responses(self.client)
 
     async def _collect_comments(self, post_item: RawItem) -> list[RawItem]:
         payload = await self.client.reddit_post_with_comments(
@@ -651,12 +729,68 @@ def reddit_post_sort_key(post: Mapping[str, Any]) -> tuple[str, str]:
     return (_timestamp_text(post) or "", _string_value(post, "id") or "")
 
 
+def _cap_warnings(
+    *,
+    posts: list[Mapping[str, Any]],
+    limit: int,
+    cutoff: datetime,
+    collector_id: str,
+    source_label: str,
+    phase: str,
+) -> list[PipelineSectionWarning]:
+    if len(posts) != limit or not posts:
+        return []
+    parsed = [_posted_at(post) for post in posts]
+    timestamps = [timestamp for timestamp in parsed if timestamp is not None]
+    oldest = min(timestamps, default=None)
+    if oldest is None or oldest < cutoff:
+        return []
+    return [
+        PipelineSectionWarning(
+            section="collector",
+            source_id=collector_id,
+            phase=phase,
+            message=(
+                f"{source_label} returned {limit} posts and the oldest fetched post is still within "
+                "the configured lookback window; increase the source fetch cap to reduce truncation risk."
+            ),
+        )
+    ]
+
+
 def snowflake_timestamp(status_id: str) -> str | None:
     try:
         milliseconds = (int(status_id) >> 22) + 1288834974657
     except ValueError:
         return None
     return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _posted_at(payload: Mapping[str, Any]) -> datetime | None:
+    timestamp = _timestamp_text(payload) or snowflake_timestamp(_string_value(payload, "id") or "")
+    return parse_timestamp(timestamp)
+
+
+def parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if re.fullmatch(r"\d+(\.\d+)?", normalized):
+        try:
+            return datetime.fromtimestamp(float(normalized), timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _timestamp_text(payload: Mapping[str, Any]) -> str | None:
@@ -748,3 +882,15 @@ def _media_type_from_url(url: str) -> str:
     if re.search(r"\.gif(\?|$)", url, re.IGNORECASE):
         return "gif"
     return "image"
+
+
+def _clear_provider_responses(client: Any) -> None:
+    if hasattr(client, "provider_responses"):
+        client.provider_responses = []
+
+
+def _take_provider_responses(client: Any) -> list[ProviderApiResponse]:
+    take_responses = getattr(client, "take_provider_responses", None)
+    if callable(take_responses):
+        return take_responses()
+    return []

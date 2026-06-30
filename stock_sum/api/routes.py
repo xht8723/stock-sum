@@ -34,8 +34,6 @@ class ReportJobRequest(BaseModel):
 
     mode: ReportModePath = "html"
     download_images: bool = False
-    include_capitol_trades: bool = False
-    capitol_trades_limit: int = Field(default=12, ge=1)
     instructions: str | None = None
     title: str = "Market Social Digest"
     max_images_per_post: int = Field(default=3, ge=0)
@@ -67,7 +65,8 @@ class XUserRequest(BaseModel):
 
     handle: str
     enabled: bool = True
-    limit: int = Field(default=10, ge=1)
+    limit: int = Field(default=100, ge=1)
+    lookback_hours: int = Field(default=24, ge=1)
     profile: str | None = None
     overwrite: bool = True
 
@@ -79,7 +78,8 @@ class SubredditRequest(BaseModel):
     enabled: bool = True
     sort: str = "new"
     timeframe: str = "day"
-    limit: int = Field(default=10, ge=1)
+    limit: int = Field(default=100, ge=1)
+    lookback_hours: int = Field(default=24, ge=1)
     trim: bool = True
     include_comments: bool = False
     comments_per_post: int = Field(default=0, ge=0)
@@ -334,6 +334,7 @@ def build_router(
                 request.handle,
                 enabled=request.enabled,
                 limit=request.limit,
+                lookback_hours=request.lookback_hours,
                 profile=request.profile,
                 overwrite=request.overwrite,
             ),
@@ -363,6 +364,7 @@ def build_router(
                 sort=request.sort,
                 timeframe=request.timeframe,
                 limit=request.limit,
+                lookback_hours=request.lookback_hours,
                 trim=request.trim,
                 include_comments=request.include_comments,
                 comments_per_post=request.comments_per_post,

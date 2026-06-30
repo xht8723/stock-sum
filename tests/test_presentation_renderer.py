@@ -72,6 +72,7 @@ def _grouped_response() -> dict:
                             "title": "NBIS growth post",
                             "post_summary": "Compares NBIS to HOOD growth.",
                             "sentiment": "bullish",
+                            "tags": ["nbis", "growth", "cloud", "revenue", "risk"],
                             "interpretation": "High-conviction but speculative.",
                             "confidence": "medium",
                             "urls": ["https://x.com/aleabitoreddit/status/1"],
@@ -87,7 +88,9 @@ def _grouped_response() -> dict:
                         "title": "MSTR thread",
                         "post_summary": "Main post is bearish.",
                         "comments_sentiment": "Comments mostly agree with jokes.",
+                        "comment_sentiment_counts": {"bullish": 1, "bearish": 2, "mixed": 0, "neutral": 1, "unclear": 0},
                         "sentiment": "bearish",
+                        "tags": ["mstr", "bitcoin", "leverage", "risk", "sentiment"],
                         "confidence": "medium",
                         "urls": ["https://www.reddit.com/r/test/comments/1/"],
                     }
@@ -105,27 +108,6 @@ def _grouped_response() -> dict:
                 "kind": "photo",
                 "remote_url": "https://cdn.example/x-chart.jpg",
             }
-        },
-        "capitol_trades": {
-            "source_url": "https://www.capitoltrades.com/trades?page=1",
-            "cards": [{"label": "TRADES", "value": "36,776"}],
-            "trades": [
-                {
-                    "politician": "Nancy Pelosi",
-                    "party": "Democrat",
-                    "chamber": "House",
-                    "state": "CA",
-                    "issuer": "Intel Corp",
-                    "ticker": "INTC:US",
-                    "published": "24 Jun 2026",
-                    "traded": "28 May 2026",
-                    "filed_after": "25 days",
-                    "owner": "Spouse",
-                    "transaction_type": "BUY*",
-                    "size": "1M-5M",
-                    "price": "N/A",
-                }
-            ],
         },
     }
 
@@ -179,9 +161,9 @@ def test_discord_markdown_renderer_is_compact_and_clickable() -> None:
     assert "**Social Media Sentiment**" in rendered
     assert "__Medium Importance__" in rendered
     assert "**NBIS growth post**" in rendered
+    assert "Tags: nbis, growth, cloud, revenue, risk" in rendered
     assert "[Read source](https://x.com/aleabitoreddit/status/1)" in rendered
     assert "[Image 1](https://cdn.example/x-chart.jpg)" in rendered
-    assert "**Politician Trading Info**" in rendered
     assert "| Politician |" not in rendered
     assert "x1" not in rendered
     assert "m1" not in rendered
@@ -231,6 +213,8 @@ def test_grouped_markdown_renderer_uses_requested_heading_layout() -> None:
     assert "#### NBIS growth post" in rendered
     assert "#### MSTR thread" in rendered
     assert "Comments:" in rendered
+    assert "Comment stats:" in rendered
+    assert "Tags:" in rendered
     assert "![Post image](https://cdn.example/x-chart.jpg)" in rendered
     assert "x1" not in rendered
     assert "r1" not in rendered
@@ -247,31 +231,30 @@ def test_grouped_html_renderer_uses_user_and_post_sections() -> None:
     assert "aleabitoreddit" in rendered
     assert "NBIS growth post" in rendered
     assert "Comments" in rendered
+    assert "nbis, growth, cloud, revenue, risk" in rendered
+    assert "bearish: 2" in rendered
     assert 'src="https://cdn.example/x-chart.jpg"' in rendered
-    assert "Politician Trading Info" in rendered
-    assert "Nancy Pelosi" in rendered
-    assert "BUY*" in rendered
-    assert "36,776" not in rendered
+    assert "Trading Info" not in rendered
     assert "Media Observations" not in rendered
     assert "Risks And Uncertainties" not in rendered
 
 
-def test_grouped_text_renderer_includes_capitol_trades() -> None:
+def test_grouped_text_renderer_is_social_only() -> None:
     rendered = PresentationRenderer().render(_grouped_response(), mode="text")
 
-    assert "POLITICIAN TRADING INFO" in rendered
-    assert "Nancy Pelosi (Democrat | House | CA) BUY* Intel Corp" in rendered
-    assert "TRADES: 36,776" not in rendered
+    assert "TRADING INFO" not in rendered
+    assert "NBIS growth post" in rendered
+    assert "MSTR thread" in rendered
 
 
 def test_renderer_outputs_pipeline_warnings_in_all_modes() -> None:
     response = _grouped_response()
     response["pipeline_warnings"] = [
         {
-            "section": "capitol_trades",
-            "source_id": "https://www.capitoltrades.com/trades?page=1",
-            "phase": "scraping_capitol_trades",
-            "message": "Vercel checkpoint",
+            "section": "optional_enrichment",
+            "source_id": "future.source",
+            "phase": "enrichment",
+            "message": "Temporarily unavailable",
             "recoverable": True,
         }
     ]
@@ -282,7 +265,7 @@ def test_renderer_outputs_pipeline_warnings_in_all_modes() -> None:
     text = PresentationRenderer().render(response, mode="text")
 
     assert "Unavailable Sections" in html
-    assert "Vercel checkpoint" in html
+    assert "Temporarily unavailable" in html
     assert "## Unavailable Sections" in markdown
     assert "**Unavailable Sections**" in discord
     assert "UNAVAILABLE SECTIONS" in text

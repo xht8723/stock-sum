@@ -45,9 +45,16 @@ class ReportPipeline:
             collector_id=collector_id,
             source_type=source_type,
         )
+        collector: Collector | None = None
         try:
             collector = self.collector_factory(collector_id)
             items = await collector.collect(self.context)
+            collector_warnings = list(getattr(collector, "warnings", []))
+            await self._save_provider_api_responses(
+                run_id=run_id,
+                collector_id=collector_id,
+                collector=collector,
+            )
             save_result = await self.repository.save_raw_items(items)
             await self.repository.finish_collection_run(
                 run_id=run_id,
@@ -66,9 +73,17 @@ class ReportPipeline:
                 inserted_count=save_result.inserted_count,
                 updated_count=save_result.updated_count,
                 sqlite_path=self.context.config.storage.sqlite_path,
+                warnings=collector_warnings,
             )
         except Exception as exc:
             error = str(exc)
+            if collector is not None:
+                await self._save_provider_api_responses(
+                    run_id=run_id,
+                    collector_id=collector_id,
+                    collector=collector,
+                    suppress_errors=True,
+                )
             await self.repository.finish_collection_run(
                 run_id=run_id,
                 status="failed",
@@ -90,6 +105,27 @@ class ReportPipeline:
                 raise
             return result
 
+    async def _save_provider_api_responses(
+        self,
+        *,
+        run_id: str,
+        collector_id: str,
+        collector: Collector,
+        suppress_errors: bool = False,
+    ) -> None:
+        responses = list(getattr(collector, "api_responses", []))
+        if not responses:
+            return
+        try:
+            await self.repository.save_provider_api_responses(
+                collection_run_id=run_id,
+                collector_id=collector_id,
+                responses=responses,
+            )
+        except Exception:
+            if not suppress_errors:
+                raise
+
     async def run_report(self, profile: str) -> PipelineCollectionResult:
         """Run the collection phase for a report profile."""
 
@@ -103,6 +139,7 @@ class ReportPipeline:
         for collector_id in profile_config.collector_ids:
             run = await self.collect_collector(collector_id, profile=profile, raise_on_error=False)
             runs.append(run)
+            warnings.extend(run.warnings)
             if run.status == "failed":
                 warnings.append(
                     PipelineSectionWarning(

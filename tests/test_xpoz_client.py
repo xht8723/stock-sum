@@ -49,6 +49,52 @@ async def test_client_sends_bearer_auth_and_initializes(monkeypatch) -> None:
     assert seen_headers == ["Bearer secret", "Bearer secret", "Bearer secret"]
 
 
+async def test_client_archives_tool_response_without_auth_secret(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload["method"] == "initialize":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {}})
+        if payload["method"] == "notifications/initialized":
+            return httpx.Response(202)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "status: success\ndata:\n  results[1]:\n    - id: \"123\"\n      text: \"hello\"",
+                        }
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setenv("XPOZ_API_KEY", "secret")
+    client = XpozClient(
+        api_key_env="XPOZ_API_KEY",
+        server_url="https://mcp.xpoz.ai/mcp",
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+
+    await client.call_tool_rows("getTwitterPostsByAuthor", {"username": "aleabitoreddit", "limit": 100})
+    responses = client.take_provider_responses()
+
+    assert len(responses) == 1
+    response = responses[0]
+    assert response.provider == "xpoz"
+    assert response.tool_name == "getTwitterPostsByAuthor"
+    assert response.request_arguments == {"username": "aleabitoreddit", "limit": 100}
+    assert response.parsed_rows == [{"id": "123", "text": "hello"}]
+    assert response.row_count == 1
+    assert "hello" in response.raw_response_text
+    assert "secret" not in json.dumps(response.request_arguments)
+    assert client.take_provider_responses() == []
+
+
 async def test_client_missing_api_key_fails(monkeypatch) -> None:
     monkeypatch.delenv("XPOZ_API_KEY", raising=False)
     client = XpozClient(api_key_env="XPOZ_API_KEY", server_url="https://mcp.xpoz.ai/mcp", timeout_seconds=60)

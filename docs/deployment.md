@@ -196,11 +196,13 @@ stock-sum config sync --config config.toml
 The bundled default profile includes enabled starter sources for
 `x.aleabitoreddit` and `reddit.wallstreetbets`. X and Reddit sources use Xpoz.
 Source-list entries resolve to collector IDs such as `x.aleabitoreddit` and
-`reddit.wallstreetbets`. Use the config CLI to add, delete, or replace sources.
+`reddit.wallstreetbets`. By default, stock-sum fetches up to 100 provider rows
+and keeps posts from the last 24 hours. Use the config CLI to add, delete, or
+replace sources.
 
 ```bash
-stock-sum config x-user add aleabitoreddit --config config.toml --profile default
-stock-sum config subreddit add wallstreetbets --config config.toml --profile default
+stock-sum config x-user add aleabitoreddit --config config.toml --profile default --limit 100 --lookback-hours 24
+stock-sum config subreddit add wallstreetbets --config config.toml --profile default --limit 100 --lookback-hours 24
 stock-sum collect --collector x.aleabitoreddit --config config.toml
 stock-sum collect --collector reddit.wallstreetbets --config config.toml
 stock-sum collect --profile default --config config.toml
@@ -492,9 +494,10 @@ seconds, defaulting to `3600`; set it to `0` when every request should force a
 fresh collection and LLM run.
 Managed runtime data is also capped by `[retention].max_total_bytes`, defaulting
 to `2147483648` bytes. Cleanup runs after report/collection jobs and prunes
-oldest HTTP artifacts, downloaded media, then SQLite history. Use
-`stock-sum retention status` and `stock-sum retention prune --dry-run` to inspect
-usage before applying manual cleanup.
+oldest HTTP artifacts and downloaded media. SQLite source history and provider
+response archives are intentionally excluded from this cap. Use `stock-sum
+retention status` and `stock-sum retention prune --dry-run` to inspect usage
+before applying manual cleanup.
 
 Minimal Nginx location:
 

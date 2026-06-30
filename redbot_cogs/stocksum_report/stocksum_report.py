@@ -164,7 +164,6 @@ class StockSumHttpClient:
         *,
         profile: str,
         output_format: str,
-        include_capitol_trades: bool,
     ) -> StockSumArtifact:
         """Create, poll, and download one stock-sum report job."""
 
@@ -177,7 +176,6 @@ class StockSumHttpClient:
                 session,
                 profile=profile,
                 output_format=output_format,
-                include_capitol_trades=include_capitol_trades,
             )
             job_id = _required_string(job, "job_id")
             status_payload = await self._poll_until_done(session, job_id)
@@ -270,14 +268,10 @@ class StockSumHttpClient:
         *,
         profile: str,
         output_format: str,
-        include_capitol_trades: bool,
     ) -> dict[str, Any]:
         url = f"{self.base_url}/v1/reports/{quote(profile, safe='')}/jobs/{quote(output_format, safe='')}"
-        payload = {
-            "include_capitol_trades": include_capitol_trades,
-        }
         try:
-            async with session.post(url, json=payload, headers=self._headers()) as response:
+            async with session.post(url, json={}, headers=self._headers()) as response:
                 return await self._json_response(response, expected_status=202)
         except StockSumCogError:
             raise
@@ -375,7 +369,6 @@ class StockSumReport(commands.Cog):
     @app_commands.describe(
         profile="stock-sum report profile name",
         format="report artifact format",
-        include_capitol_trades="include Capitol Trades politician trading rows",
         private="send the response only to you",
     )
     @app_commands.choices(
@@ -392,7 +385,6 @@ class StockSumReport(commands.Cog):
         interaction,
         profile: str = "default",
         format: str = "discord",
-        include_capitol_trades: bool = True,
         private: bool = False,
     ) -> None:
         """Slash command handler for report generation."""
@@ -405,7 +397,6 @@ class StockSumReport(commands.Cog):
             artifact = await StockSumHttpClient.from_env().run_report(
                 profile=profile,
                 output_format=format,
-                include_capitol_trades=include_capitol_trades,
             )
         except StockSumCogError as exc:
             await _send_report_output(interaction, _failure_message(exc), private=private)
@@ -480,10 +471,18 @@ class StockSumReport(commands.Cog):
         await self._send_api_json(interaction, "/v1/sources", title="Sources")
 
     @sources.command(name="add-x", description="Add an X user source.")
-    async def sources_add_x(self, interaction, handle: str, profile: str = "default", limit: int = 10, enabled: bool = True) -> None:
+    async def sources_add_x(
+        self,
+        interaction,
+        handle: str,
+        profile: str = "default",
+        limit: int = 100,
+        lookback_hours: int = 24,
+        enabled: bool = True,
+    ) -> None:
         if not await self._require_owner(interaction):
             return
-        payload = {"handle": handle, "profile": profile, "limit": limit, "enabled": enabled}
+        payload = {"handle": handle, "profile": profile, "limit": limit, "lookback_hours": lookback_hours, "enabled": enabled}
         await self._send_api_json(interaction, "/v1/sources/x-users", method="post", payload=payload, title=f"Added X source {handle}", private=True)
 
     @sources.command(name="delete-x", description="Delete an X user source.")
@@ -499,7 +498,8 @@ class StockSumReport(commands.Cog):
         interaction,
         subreddit: str,
         profile: str = "default",
-        limit: int = 10,
+        limit: int = 100,
+        lookback_hours: int = 24,
         include_comments: bool = False,
         comments_per_post: int = 0,
     ) -> None:
@@ -509,6 +509,7 @@ class StockSumReport(commands.Cog):
             "subreddit": subreddit,
             "profile": profile,
             "limit": limit,
+            "lookback_hours": lookback_hours,
             "include_comments": include_comments,
             "comments_per_post": comments_per_post,
         }

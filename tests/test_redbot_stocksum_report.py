@@ -43,7 +43,6 @@ async def test_client_sends_report_request_and_downloads_artifact() -> None:
     artifact = await client.run_report(
         profile="default",
         output_format="html",
-        include_capitol_trades=True,
     )
 
     assert artifact.job_id == "job-1"
@@ -54,7 +53,7 @@ async def test_client_sends_report_request_and_downloads_artifact() -> None:
         "http://stock-sum.local/v1/reports/default/jobs/html",
         {
             "headers": {},
-            "json": {"include_capitol_trades": True},
+            "json": {},
         },
     )
     assert session.requests[1][2]["headers"] == {}
@@ -77,7 +76,6 @@ async def test_client_uses_discord_format_endpoint() -> None:
     artifact = await client.run_report(
         profile="default",
         output_format="discord",
-        include_capitol_trades=False,
     )
 
     assert artifact.filename == "stock-sum-report-job-discord.md"
@@ -86,7 +84,7 @@ async def test_client_uses_discord_format_endpoint() -> None:
         "http://stock-sum.local/v1/reports/default/jobs/discord",
         {
             "headers": {},
-            "json": {"include_capitol_trades": False},
+            "json": {},
         },
     )
 
@@ -99,7 +97,7 @@ async def test_client_reports_failed_job() -> None:
     client = StockSumHttpClient(session=session, poll_seconds=0)
 
     with pytest.raises(StockSumRequestError, match="LLM failed"):
-        await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
+        await client.run_report(profile="default", output_format="html")
 
 
 async def test_client_downloads_successful_job_with_warnings() -> None:
@@ -111,7 +109,7 @@ async def test_client_downloads_successful_job_with_warnings() -> None:
                 {
                     "job_id": "job-warn",
                     "status": "succeeded",
-                    "warnings": [{"section": "capitol_trades", "message": "blocked"}],
+                    "warnings": [{"section": "collector", "message": "temporary source failure"}],
                 },
             ),
             FakeResponse(200, body=b"report", headers={"content-type": "text/markdown; charset=utf-8"}),
@@ -119,10 +117,10 @@ async def test_client_downloads_successful_job_with_warnings() -> None:
     )
     client = StockSumHttpClient(session=session, poll_seconds=0)
 
-    artifact = await client.run_report(profile="default", output_format="discord", include_capitol_trades=True)
+    artifact = await client.run_report(profile="default", output_format="discord")
 
     assert artifact.content == b"report"
-    assert artifact.status["warnings"][0]["section"] == "capitol_trades"
+    assert artifact.status["warnings"][0]["section"] == "collector"
 
 
 async def test_client_retries_transient_poll_disconnect() -> None:
@@ -136,7 +134,7 @@ async def test_client_retries_transient_poll_disconnect() -> None:
     )
     client = StockSumHttpClient(session=session, poll_seconds=0, timeout_seconds=10)
 
-    artifact = await client.run_report(profile="default", output_format="text", include_capitol_trades=False)
+    artifact = await client.run_report(profile="default", output_format="text")
 
     assert artifact.job_id == "job-retry"
     assert artifact.content == b"ok"
@@ -154,7 +152,7 @@ async def test_client_reports_timeout() -> None:
     )
 
     with pytest.raises(StockSumRequestError, match="timed out"):
-        await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
+        await client.run_report(profile="default", output_format="html")
 
 
 async def test_client_maps_blacklist_failure() -> None:
@@ -165,7 +163,7 @@ async def test_client_maps_blacklist_failure() -> None:
     client = StockSumHttpClient(session=session)
 
     with pytest.raises(StockSumRequestError, match="blacklisted"):
-        await client.run_report(profile="default", output_format="html", include_capitol_trades=False)
+        await client.run_report(profile="default", output_format="html")
 
 
 async def test_client_management_json_methods_send_expected_requests() -> None:
@@ -223,7 +221,7 @@ async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="discord", include_capitol_trades=True, private=True)
+    await report.report(interaction, profile="default", format="discord", private=True)
 
     assert interaction.response.messages == [
         {
@@ -248,7 +246,7 @@ async def test_report_command_sends_public_discord_report_directly_to_channel(mo
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="discord", include_capitol_trades=True, private=False)
+    await report.report(interaction, profile="default", format="discord", private=False)
 
     assert interaction.response.messages == [
         {
@@ -271,7 +269,7 @@ async def test_report_command_sends_file_for_non_discord_format(monkeypatch) -> 
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="html", include_capitol_trades=True, private=False)
+    await report.report(interaction, profile="default", format="html", private=False)
 
     assert interaction.response.messages[0]["content"] == "Report is being generated, please wait a few minutes."
     assert interaction.followup.messages == []
@@ -293,7 +291,7 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="discord", include_capitol_trades=True, private=True)
+    await report.report(interaction, profile="default", format="discord", private=True)
 
     assert interaction.response.messages[0]["content"] == "Report is being generated, please wait a few minutes."
     assert interaction.followup.messages == [
@@ -329,13 +327,20 @@ async def test_management_source_add_calls_api_for_owner(monkeypatch) -> None:
     client = FakeManagementClient()
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.sources_add_x(interaction, handle="@aleabitoreddit", profile="default", limit=15, enabled=True)
+    await report.sources_add_x(
+        interaction,
+        handle="@aleabitoreddit",
+        profile="default",
+        limit=150,
+        lookback_hours=12,
+        enabled=True,
+    )
 
     assert client.calls == [
         (
             "post",
             "/v1/sources/x-users",
-            {"handle": "@aleabitoreddit", "profile": "default", "limit": 15, "enabled": True},
+            {"handle": "@aleabitoreddit", "profile": "default", "limit": 150, "lookback_hours": 12, "enabled": True},
         )
     ]
     assert interaction.response.messages[0]["ephemeral"] is True
@@ -444,7 +449,7 @@ class FakeStockSumClient:
         self.content = content
         self.filename = filename
 
-    async def run_report(self, *, profile: str, output_format: str, include_capitol_trades: bool) -> StockSumArtifact:
+    async def run_report(self, *, profile: str, output_format: str) -> StockSumArtifact:
         return StockSumArtifact(
             job_id="job-1",
             filename=self.filename,
@@ -455,7 +460,7 @@ class FakeStockSumClient:
 
 
 class FakeFailingStockSumClient:
-    async def run_report(self, *, profile: str, output_format: str, include_capitol_trades: bool) -> StockSumArtifact:
+    async def run_report(self, *, profile: str, output_format: str) -> StockSumArtifact:
         raise StockSumRequestError("broken")
 
 

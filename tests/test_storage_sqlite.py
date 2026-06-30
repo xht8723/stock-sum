@@ -1,13 +1,19 @@
 """SQLite storage repository tests."""
 
+from datetime import datetime, timedelta, timezone
+
 import aiosqlite
 import pytest
 
 from stock_sum.core.errors import UnsupportedSourceTypeError
-from stock_sum.core.models import RawItem
+from stock_sum.core.models import ProviderApiResponse, RawItem
 from stock_sum.media.downloader import remote_url_hash
 from stock_sum.storage.models import StoredDownloadedMedia
 from stock_sum.storage.sqlite import SQLiteStorageRepository
+
+
+def _iso(hours_ago: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
 
 
 async def test_initialize_creates_expected_tables(tmp_path) -> None:
@@ -21,7 +27,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
             """
             SELECT name FROM sqlite_master
             WHERE type = 'table'
-              AND name IN (?, ?, ?, ?, ?, ?, ?, ?)
+              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "collection_runs",
@@ -32,6 +38,11 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
                 "raw_reddit_comments",
                 "raw_reddit_post_media",
                 "downloaded_media",
+                "raw_provider_api_responses",
+                "llm_analysis_runs",
+                "llm_x_post_analyses",
+                "llm_reddit_post_analyses",
+                "llm_reddit_comment_analyses",
             ),
         )
         try:
@@ -48,7 +59,20 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         "raw_reddit_comments",
         "raw_reddit_post_media",
         "downloaded_media",
+        "raw_provider_api_responses",
+        "llm_analysis_runs",
+        "llm_x_post_analyses",
+        "llm_reddit_post_analyses",
+        "llm_reddit_comment_analyses",
     }
+
+    async with aiosqlite.connect(db_path) as db:
+        x_columns = await _columns(db, "raw_x_posts")
+        reddit_columns = await _columns(db, "raw_reddit_posts")
+        comment_columns = await _columns(db, "raw_reddit_comments")
+    assert "posted_at_utc" in x_columns
+    assert "created_at_utc" in reddit_columns
+    assert "created_at_utc" in comment_columns
 
 
 async def test_save_x_items_upserts_posts_media_and_index(tmp_path) -> None:
@@ -89,6 +113,36 @@ async def test_save_x_items_upserts_posts_media_and_index(tmp_path) -> None:
     assert len(posts) == 1
     assert posts[0].status_id == "123"
     assert posts[0].media[0].remote_url == "https://cdn.example/img.jpg"
+
+
+async def test_read_x_posts_filters_by_posted_cutoff(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    old = RawItem(
+        source_id="111",
+        source_type="x_user_timeline",
+        url="https://x.com/example/status/111",
+        text="old",
+        metadata={"entity_type": "x_post", "handle": "example", "posted_at_text": _iso(30)},
+    )
+    recent = RawItem(
+        source_id="222",
+        source_type="x_user_timeline",
+        url="https://x.com/example/status/222",
+        text="recent",
+        metadata={"entity_type": "x_post", "handle": "example", "posted_at_text": _iso(1)},
+    )
+
+    await repository.save_raw_items([old, recent])
+
+    posts = await repository.read_x_posts(
+        handles=["example"],
+        since_posted_at=datetime.now(timezone.utc) - timedelta(hours=24),
+    )
+
+    assert [post.status_id for post in posts] == ["222"]
+    async with aiosqlite.connect(db_path) as db:
+        assert await _count_rows(db, "raw_x_posts") == 2
 
 
 async def test_read_x_posts_orders_by_recent_status_id_before_collection_time(tmp_path) -> None:
@@ -179,6 +233,171 @@ async def test_save_reddit_items_upserts_posts_comments_media_and_index(tmp_path
     assert posts[0].media[0].remote_url == "https://preview.example/img.jpg"
 
 
+async def test_read_reddit_posts_filters_by_posted_cutoff(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    old = RawItem(
+        source_id="old",
+        source_type="reddit_subreddit",
+        url="https://www.reddit.com/r/wallstreetbets/comments/old/post/",
+        text="old",
+        metadata={
+            "entity_type": "reddit_post",
+            "subreddit": "wallstreetbets",
+            "title": "Old post",
+            "created_at_text": _iso(30),
+        },
+    )
+    recent = RawItem(
+        source_id="recent",
+        source_type="reddit_subreddit",
+        url="https://www.reddit.com/r/wallstreetbets/comments/recent/post/",
+        text="recent",
+        metadata={
+            "entity_type": "reddit_post",
+            "subreddit": "wallstreetbets",
+            "title": "Recent post",
+            "created_at_text": _iso(1),
+        },
+    )
+
+    await repository.save_raw_items([old, recent])
+
+    posts = await repository.read_reddit_posts(
+        subreddits=["wallstreetbets"],
+        since_posted_at=datetime.now(timezone.utc) - timedelta(hours=24),
+    )
+
+    assert [post.post_id for post in posts] == ["recent"]
+    async with aiosqlite.connect(db_path) as db:
+        assert await _count_rows(db, "raw_reddit_posts") == 2
+
+
+async def test_save_provider_api_responses_archives_raw_and_parsed_payloads(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    response = ProviderApiResponse(
+        provider="xpoz",
+        tool_name="getTwitterPostsByAuthor",
+        request_arguments={"username": "aleabitoreddit", "limit": 100},
+        raw_response_text="status: success\ndata:\n  results[0]{id,text}:",
+        parsed_rows=[{"id": "123", "text": "hello"}],
+        row_count=1,
+    )
+
+    await repository.save_provider_api_responses(
+        collection_run_id="run-1",
+        collector_id="x.aleabitoreddit",
+        responses=[response],
+    )
+
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            """
+            SELECT provider, tool_name, request_arguments_json, raw_response_text,
+                   parsed_rows_json, row_count
+            FROM raw_provider_api_responses
+            """
+        )
+        try:
+            row = await cursor.fetchone()
+        finally:
+            await cursor.close()
+
+    assert row[0] == "xpoz"
+    assert row[1] == "getTwitterPostsByAuthor"
+    assert "aleabitoreddit" in row[2]
+    assert "Authorization" not in row[2]
+    assert row[3].startswith("status: success")
+    assert '"text": "hello"' in row[4]
+    assert row[5] == 1
+
+
+async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    await repository.start_llm_analysis_run(
+        analysis_run_id="analysis-1",
+        profile="default",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        prompt_version="llm-analysis-v1",
+    )
+    await repository.save_llm_x_post_analyses(
+        [
+            {
+                "analysis_run_id": "analysis-1",
+                "profile": "default",
+                "handle": "aleabitoreddit",
+                "status_id": "123",
+                "source_ref": "x1",
+                "url": "https://x.com/aleabitoreddit/status/123",
+                "posted_at_text": "2026-06-30T00:00:00+00:00",
+                "sentiment": "bullish",
+                "tags_json": '["ai","growth","cloud","risk","watch"]',
+                "summary": "X post summary.",
+                "interpretation": "Market relevance.",
+                "confidence": "medium",
+                "raw_response_json": "{}",
+                "analyzed_at": "2026-06-30T00:00:00+00:00",
+            }
+        ]
+    )
+    await repository.save_llm_reddit_post_analyses(
+        [
+            {
+                "analysis_run_id": "analysis-1",
+                "profile": "default",
+                "subreddit": "wallstreetbets",
+                "post_id": "abc",
+                "source_ref": "r1",
+                "title": "Reddit post",
+                "url": "https://reddit.com/r/wallstreetbets/comments/abc/",
+                "created_at_text": "2026-06-30T00:00:00+00:00",
+                "sentiment": "mixed",
+                "tags_json": '["semis","memory","earnings","risk","watch"]',
+                "summary": "Reddit post summary.",
+                "interpretation": "Comment thread is divided.",
+                "confidence": "high",
+                "comment_sentiment_counts_json": '{"bullish":1,"bearish":0,"mixed":1,"neutral":0,"unclear":0}',
+                "raw_response_json": "{}",
+                "analyzed_at": "2026-06-30T00:00:00+00:00",
+            }
+        ]
+    )
+    await repository.save_llm_reddit_comment_analyses(
+        [
+            {
+                "analysis_run_id": "analysis-1",
+                "profile": "default",
+                "subreddit": "wallstreetbets",
+                "post_id": "abc",
+                "comment_id": "c1",
+                "source_ref": "r1.c1",
+                "parent_id": "abc",
+                "sentiment": "bullish",
+                "summary": "Comment likes the setup.",
+                "confidence": "medium",
+                "raw_response_json": "{}",
+                "analyzed_at": "2026-06-30T00:00:00+00:00",
+            }
+        ]
+    )
+    await repository.finish_llm_analysis_run(
+        analysis_run_id="analysis-1",
+        status="succeeded",
+        chunk_count=2,
+        succeeded_count=2,
+    )
+
+    report = await repository.read_llm_analysis_report(profile="default", analysis_run_id="analysis-1")
+
+    assert report["x_reports"][0]["posts"][0]["tags"] == ["ai", "growth", "cloud", "risk", "watch"]
+    reddit_post = report["reddit_report"]["posts"][0]
+    assert reddit_post["comment_sentiment_counts"]["bullish"] == 1
+    assert reddit_post["comments_sentiment"] == "bullish: 1, bearish: 0, mixed: 1, neutral: 0, unclear: 0"
+
+
 async def test_downloaded_media_upsert_is_idempotent(tmp_path) -> None:
     db_path = tmp_path / "storage.sqlite3"
     repository = SQLiteStorageRepository(db_path)
@@ -254,3 +473,11 @@ async def _count_rows(db: aiosqlite.Connection, table: str) -> int:
     finally:
         await cursor.close()
     return row[0]
+
+
+async def _columns(db: aiosqlite.Connection, table: str) -> set[str]:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    try:
+        return {row[1] for row in await cursor.fetchall()}
+    finally:
+        await cursor.close()
