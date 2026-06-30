@@ -67,6 +67,7 @@ payload_app = typer.Typer(help="Build LLM-ready payloads from collected data.")
 llm_app = typer.Typer(help="Run LLM summarization against payloads.")
 report_app = typer.Typer(help="Render final presentation reports.")
 retention_app = typer.Typer(help="Inspect and prune managed runtime data.")
+database_app = typer.Typer(help="Inspect and reset SQLite storage.")
 app.add_typer(config_app, name="config")
 app.add_typer(setup_app, name="setup")
 app.add_typer(secrets_app, name="secrets")
@@ -74,6 +75,7 @@ app.add_typer(payload_app, name="payload")
 app.add_typer(llm_app, name="llm")
 app.add_typer(report_app, name="report")
 app.add_typer(retention_app, name="retention")
+app.add_typer(database_app, name="database")
 config_app.add_typer(profile_app, name="profile")
 config_app.add_typer(x_user_app, name="x-user")
 config_app.add_typer(subreddit_app, name="subreddit")
@@ -170,6 +172,17 @@ def _remove_reset_target(path: Path) -> bool:
     else:
         path.unlink()
     return True
+
+
+def _sqlite_reset_targets(sqlite_path: Path) -> list[Path]:
+    """Return SQLite database and sidecar files that can be reset together."""
+
+    return [
+        sqlite_path,
+        Path(f"{sqlite_path}-wal"),
+        Path(f"{sqlite_path}-shm"),
+        Path(f"{sqlite_path}-journal"),
+    ]
 
 
 def _run_retention_after_pipeline(settings) -> RetentionSummary | None:
@@ -508,6 +521,52 @@ def retention_prune(
     settings = load_config(config)
     summary = asyncio.run(DataRetentionService(settings).prune(dry_run=dry_run))
     console.print_json(json.dumps(summary.to_dict()))
+
+
+@database_app.command("reset")
+def database_reset(
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    sqlite_path: Path | None = typer.Option(None, "--sqlite-path", help="Override the SQLite file path from config."),
+    yes: bool = typer.Option(False, "--yes", help="Skip interactive confirmations."),
+) -> None:
+    """Delete the SQLite database and sidecar files so schema is recreated cleanly."""
+
+    if sqlite_path is None:
+        settings = load_config(config)
+        sqlite_path = Path(settings.storage.sqlite_path)
+    if str(sqlite_path) == ":memory:":
+        console.print("Cannot reset in-memory SQLite storage.")
+        raise typer.Exit(code=1)
+
+    targets = _sqlite_reset_targets(sqlite_path)
+    console.print("[red]WARNING[/red] This will delete collected SQLite history and LLM analysis rows.")
+    console.print("Stop the stock-sum daemon before resetting the database.")
+    console.print("Targets:")
+    for target in targets:
+        marker = "exists" if target.exists() else "not present"
+        console.print(f"- {target} ({marker})")
+
+    if not yes:
+        if not typer.confirm("Continue with database reset?"):
+            console.print("Database reset cancelled.")
+            raise typer.Exit(code=1)
+        confirmation = typer.prompt("Type RESET DATABASE to confirm deletion")
+        if confirmation != "RESET DATABASE":
+            console.print("Database reset cancelled.")
+            raise typer.Exit(code=1)
+
+    removed: list[str] = []
+    for target in targets:
+        try:
+            if target.exists():
+                target.unlink()
+                removed.append(str(target))
+        except OSError as exc:
+            console.print(f"Failed to remove {target}: {exc}")
+            raise typer.Exit(code=1) from exc
+
+    console.print_json(json.dumps({"removed": removed, "sqlite_path": str(sqlite_path), "status": "reset"}))
+    console.print("Restart the daemon or run the next collection/report job to recreate the schema.")
 
 
 @llm_app.command("summarize")

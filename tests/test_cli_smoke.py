@@ -120,6 +120,14 @@ def test_retention_help() -> None:
     assert "prune" in result.output
 
 
+def test_database_help() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["database", "--help"])
+
+    assert result.exit_code == 0
+    assert "reset" in result.output
+
+
 def test_config_profile_help() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["config", "profile", "--help"])
@@ -176,6 +184,46 @@ def test_secrets_set_list_remove_without_printing_value(tmp_path) -> None:
     assert remove_result.exit_code == 0
     assert list_after_remove.exit_code == 0
     assert "TEST_SECRET" not in list_after_remove.output
+
+
+def test_database_reset_requires_confirmation_and_removes_sqlite_sidecars(tmp_path) -> None:
+    db_path = tmp_path / "stock_sum.sqlite3"
+    wal_path = tmp_path / "stock_sum.sqlite3-wal"
+    shm_path = tmp_path / "stock_sum.sqlite3-shm"
+    journal_path = tmp_path / "stock_sum.sqlite3-journal"
+    for path in (db_path, wal_path, shm_path, journal_path):
+        path.write_text("db", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "database",
+            "reset",
+            "--sqlite-path",
+            str(db_path),
+        ],
+        input="y\nRESET DATABASE\n",
+    )
+
+    assert result.exit_code == 0
+    assert '"status": "reset"' in result.output
+    assert not db_path.exists()
+    assert not wal_path.exists()
+    assert not shm_path.exists()
+    assert not journal_path.exists()
+
+
+def test_database_reset_cancel_keeps_sqlite_file(tmp_path) -> None:
+    db_path = tmp_path / "stock_sum.sqlite3"
+    db_path.write_text("db", encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["database", "reset", "--sqlite-path", str(db_path)], input="n\n")
+
+    assert result.exit_code == 1
+    assert "cancelled" in result.output
+    assert db_path.exists()
 
 
 def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:

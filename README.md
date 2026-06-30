@@ -304,6 +304,19 @@ curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs/html
 The response includes a `job_id` that can be polled until the report succeeds or
 fails.
 
+## Database Reset
+
+If a development database was created by an older schema, stop the daemon and
+reset only the SQLite storage:
+
+```powershell
+stock-sum database reset --config config.toml
+```
+
+Use `--yes` for non-interactive deployments. The command removes the configured
+SQLite file plus `-wal`, `-shm`, and `-journal` sidecars. It does not remove
+config, env files, artifacts, or downloaded media.
+
 ## Runtime Data Retention
 
 `stock-sum` prunes managed runtime data after report and collection pipeline
