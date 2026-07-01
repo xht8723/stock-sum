@@ -27,7 +27,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
             """
             SELECT name FROM sqlite_master
             WHERE type = 'table'
-              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "collection_runs",
@@ -43,6 +43,8 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
                 "llm_x_post_analyses",
                 "llm_reddit_post_analyses",
                 "llm_reddit_comment_analyses",
+                "raw_house_ptr_filings",
+                "raw_house_ptr_trade_rows",
             ),
         )
         try:
@@ -64,6 +66,8 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         "llm_x_post_analyses",
         "llm_reddit_post_analyses",
         "llm_reddit_comment_analyses",
+        "raw_house_ptr_filings",
+        "raw_house_ptr_trade_rows",
     }
 
     async with aiosqlite.connect(db_path) as db:
@@ -422,6 +426,87 @@ async def test_downloaded_media_upsert_is_idempotent(tmp_path) -> None:
         count = await _count_rows(db, "downloaded_media")
 
     assert count == 1
+
+
+async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    item = RawItem(
+        source_id="20024228",
+        source_type="house_ptr_disclosures",
+        url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
+        text="Jane Doe House PTR disclosure",
+        metadata={
+            "entity_type": "house_ptr_filing",
+            "doc_id": "20024228",
+            "year": 2026,
+            "name": "Jane Doe",
+            "status": "Member",
+            "state": "CA",
+            "filing_date": "2026-06-30",
+            "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
+            "raw_xml": {"DocID": "20024228"},
+            "tables": [[["Asset", "Type", "Date", "Amount"], ["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"]]],
+            "trade_rows": [
+                {
+                    "table_index": 0,
+                    "row_index": 0,
+                    "cells": ["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"],
+                    "fields": {
+                        "asset": "AAPL",
+                        "transaction_type": "Purchase",
+                        "transaction_date": "2026-06-20",
+                        "amount": "$1,001 - $15,000",
+                    },
+                }
+            ],
+            "extraction_status": "succeeded",
+            "extraction_error": None,
+        },
+    )
+
+    first = await repository.save_raw_items([item])
+    second = await repository.save_raw_items([item])
+
+    assert first.inserted_count == 1
+    assert second.updated_count == 1
+    assert await repository.existing_house_ptr_doc_ids(year=2026) == {"20024228"}
+    trades = await repository.read_house_ptr_trades(limit=20)
+    assert len(trades) == 1
+    assert trades[0].name == "Jane Doe"
+    assert trades[0].asset == "AAPL"
+    assert trades[0].transaction_type == "Purchase"
+    assert trades[0].raw_cells[0] == "AAPL"
+
+
+async def test_failed_house_ptr_extractions_are_not_skipped(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    failed_item = RawItem(
+        source_id="20024229",
+        source_type="house_ptr_disclosures",
+        url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024229.pdf",
+        text="Jane Doe failed House PTR disclosure",
+        metadata={
+            "entity_type": "house_ptr_filing",
+            "doc_id": "20024229",
+            "year": 2026,
+            "name": "Jane Doe",
+            "status": "Member",
+            "state": "CA",
+            "filing_date": "2026-06-30",
+            "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024229.pdf",
+            "raw_xml": {"DocID": "20024229"},
+            "tables": [],
+            "trade_rows": [],
+            "extraction_status": "failed",
+            "extraction_error": "temporary PDF parse failure",
+        },
+    )
+
+    await repository.save_raw_items([failed_item])
+
+    assert await repository.existing_house_ptr_doc_ids(year=2026) == set()
 
 
 async def test_save_unsupported_source_type_does_not_create_generic_storage(tmp_path) -> None:

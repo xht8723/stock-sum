@@ -98,6 +98,50 @@ def test_reddit_comment_maps_to_source_table() -> None:
     assert mapped.row["body"] == "comment"
 
 
+def test_house_ptr_filing_maps_to_source_tables() -> None:
+    item = RawItem(
+        source_id="20024228",
+        source_type="house_ptr_disclosures",
+        url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
+        text="Jane Doe House PTR disclosure",
+        metadata={
+            "entity_type": "house_ptr_filing",
+            "doc_id": "20024228",
+            "year": 2026,
+            "name": "Jane Doe",
+            "status": "Member",
+            "state": "CA",
+            "filing_date": "2026-06-30",
+            "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
+            "raw_xml": {"DocID": "20024228"},
+            "tables": [[["Asset", "Type"], ["AAPL", "Purchase"]]],
+            "trade_rows": [
+                {
+                    "table_index": 0,
+                    "row_index": 0,
+                    "cells": ["AAPL", "Purchase"],
+                    "fields": {
+                        "asset": "AAPL",
+                        "transaction_type": "Purchase",
+                        "transaction_date": "2026-06-20",
+                        "amount": "$1,001 - $15,000",
+                    },
+                }
+            ],
+            "extraction_status": "succeeded",
+            "extraction_error": None,
+        },
+    )
+
+    mapped = map_raw_item(item)
+
+    assert mapped.table == "raw_house_ptr_filings"
+    assert mapped.key == ("20024228",)
+    assert mapped.row["name"] == "Jane Doe"
+    assert mapped.media_rows[0]["asset"] == "AAPL"
+    assert json.loads(mapped.media_rows[0]["raw_cells_json"]) == ["AAPL", "Purchase"]
+
+
 def test_unsupported_source_type_raises() -> None:
     item = RawItem(source_id="1", source_type="generic_api", url=None, text="data")
 

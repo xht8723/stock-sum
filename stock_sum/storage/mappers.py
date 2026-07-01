@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 import json
 
+from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
 from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import RawItem
@@ -45,6 +46,8 @@ def map_raw_item(item: RawItem) -> MappedRawItem:
             return _map_reddit_post(item)
         if entity_type == "reddit_comment":
             return _map_reddit_comment(item)
+    if item.source_type == HOUSE_PTR_SOURCE_TYPE:
+        return _map_house_ptr_filing(item)
     raise UnsupportedSourceTypeError(f"Unsupported raw item source type: {item.source_type}")
 
 
@@ -142,6 +145,46 @@ def _map_reddit_comment(item: RawItem) -> MappedRawItem:
             "collected_at": item.collected_at.isoformat(),
             "created_at_utc": _normalized_timestamp(item.metadata.get("created_at_text")),
         },
+    )
+
+
+def _map_house_ptr_filing(item: RawItem) -> MappedRawItem:
+    trade_rows = []
+    for row in item.metadata.get("trade_rows", []):
+        if not isinstance(row, dict):
+            continue
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        trade_rows.append(
+            {
+                "doc_id": item.source_id,
+                "table_index": row.get("table_index", 0),
+                "row_index": row.get("row_index", 0),
+                "asset": fields.get("asset"),
+                "transaction_type": fields.get("transaction_type"),
+                "transaction_date": fields.get("transaction_date"),
+                "amount": fields.get("amount"),
+                "raw_cells_json": raw_json(row.get("cells", [])),
+                "raw_json": raw_json(row),
+            }
+        )
+    return MappedRawItem(
+        table="raw_house_ptr_filings",
+        key=(item.source_id,),
+        row={
+            "doc_id": item.source_id,
+            "year": item.metadata.get("year"),
+            "name": item.metadata.get("name"),
+            "status": item.metadata.get("status"),
+            "state": item.metadata.get("state"),
+            "filing_date": item.metadata.get("filing_date"),
+            "pdf_url": item.metadata.get("pdf_url") or item.url,
+            "raw_xml_json": raw_json(item.metadata.get("raw_xml", {})),
+            "tables_json": raw_json(item.metadata.get("tables", [])),
+            "extraction_status": item.metadata.get("extraction_status"),
+            "extraction_error": item.metadata.get("extraction_error"),
+            "collected_at": item.collected_at.isoformat(),
+        },
+        media_rows=trade_rows,
     )
 
 

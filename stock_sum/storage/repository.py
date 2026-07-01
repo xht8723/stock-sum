@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult, Report, Summary
-from stock_sum.storage.models import StoredCollectionRun, StoredDownloadedMedia, StoredRedditPost, StoredXPost
+from stock_sum.storage.models import StoredCollectionRun, StoredDownloadedMedia, StoredHousePtrTradeRow, StoredRedditPost, StoredXPost
 
 
 @runtime_checkable
@@ -107,6 +107,12 @@ class StorageRepository(Protocol):
         limit: int | None = None,
     ) -> list[StoredRedditPost]:
         """Read stored Reddit posts with media and comments."""
+
+    async def existing_house_ptr_doc_ids(self, *, year: int | None = None) -> set[str]:
+        """Return successfully extracted House PTR DocIDs safe to skip."""
+
+    async def read_house_ptr_trades(self, *, limit: int = 20) -> list[StoredHousePtrTradeRow]:
+        """Read recent House PTR trade rows for deterministic report rendering."""
 
     async def get_downloaded_media(self, remote_url: str) -> StoredDownloadedMedia | None:
         """Return downloaded media metadata by remote URL."""

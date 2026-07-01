@@ -355,7 +355,7 @@ class StockSumReport(commands.Cog):
 
     stocksum = app_commands.Group(name="stocksum", description="Manage stock-sum.")
     profiles = app_commands.Group(name="profiles", description="Manage report profiles.", parent=stocksum)
-    sources = app_commands.Group(name="sources", description="Manage X and Reddit sources.", parent=stocksum)
+    sources = app_commands.Group(name="sources", description="Manage report sources.", parent=stocksum)
     llm = app_commands.Group(name="llm", description="Manage LLM settings.", parent=stocksum)
     secrets = app_commands.Group(name="secrets", description="Manage stock-sum API keys.", parent=stocksum)
     collect_group = app_commands.Group(name="collect", description="Run collection jobs.", parent=stocksum)
@@ -466,7 +466,7 @@ class StockSumReport(commands.Cog):
             return
         await self._send_api_json(interaction, f"/v1/profiles/{quote(name, safe='')}", method="delete", title=f"Deleted profile {name}", private=True)
 
-    @sources.command(name="list", description="List configured X and Reddit sources.")
+    @sources.command(name="list", description="List configured report sources.")
     async def sources_list(self, interaction) -> None:
         await self._send_api_json(interaction, "/v1/sources", title="Sources")
 
@@ -521,6 +521,33 @@ class StockSumReport(commands.Cog):
             return
         path = f"/v1/sources/subreddits/{quote(subreddit, safe='')}?profile={quote(profile, safe='')}"
         await self._send_api_json(interaction, path, method="delete", title=f"Deleted subreddit {subreddit}", private=True)
+
+    @sources.command(name="house-show", description="Show the House PTR disclosure source.")
+    async def sources_house_show(self, interaction) -> None:
+        await self._send_api_json(interaction, "/v1/sources/house-ptr", title="House PTR Source")
+
+    @sources.command(name="house-set", description="Configure the House PTR disclosure source.")
+    async def sources_house_set(
+        self,
+        interaction,
+        profile: str = "default",
+        enabled: bool = True,
+        year: int = 0,
+        render_limit: int = 20,
+        download_concurrency: int = 4,
+        parse_concurrency: int = 2,
+    ) -> None:
+        if not await self._require_owner(interaction):
+            return
+        payload = {
+            "profile": profile,
+            "enabled": enabled,
+            "year": year,
+            "render_limit": render_limit,
+            "download_concurrency": download_concurrency,
+            "parse_concurrency": parse_concurrency,
+        }
+        await self._send_api_json(interaction, "/v1/sources/house-ptr", method="patch", payload=payload, title="Updated House PTR source", private=True)
 
     @llm.command(name="providers", description="List supported LLM providers.")
     async def llm_providers(self, interaction) -> None:

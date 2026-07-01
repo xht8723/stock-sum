@@ -12,14 +12,15 @@ The project is currently an API-first service scaffold:
 - TOML-based configuration with Pydantic validation.
 - Cache-first `models.dev` metadata refresh support.
 - Xpoz API collectors for X user timelines and Reddit subreddit posts.
+- Official House PTR disclosure collection from House Clerk ZIP/XML/PDF data.
 - Generic collector interfaces and Playwright infrastructure for future
   site-specific collectors.
-- SQLite shared collection run/index storage plus source-specific X/Reddit raw
-  tables.
+- SQLite shared collection run/index storage plus source-specific X, Reddit,
+  and House PTR raw tables.
 
-The bundled X and Reddit collectors are disabled in the example config by
-default. Enable the collector you want, set `XPOZ_API_KEY` in the process
-environment, and reference the collector from a report profile.
+The bundled starter sources are enabled in the example config: X, Reddit, and
+House PTR. Set `XPOZ_API_KEY` for X/Reddit collection; House PTR uses public
+House Clerk disclosure files.
 
 ## Requirements
 
@@ -129,6 +130,8 @@ stock-sum config x-user delete aleabitoreddit --config config.toml --profile def
 stock-sum config subreddit list --config config.toml
 stock-sum config subreddit add wallstreetbets --config config.toml --profile default --sort new --limit 100 --lookback-hours 24
 stock-sum config subreddit delete wallstreetbets --config config.toml --profile default
+stock-sum config house-ptr show --config config.toml
+stock-sum config house-ptr set --config config.toml --profile default --enabled --render-limit 20
 ```
 
 For X and Reddit sources, `--limit` is the provider fetch cap. Reports keep only
@@ -137,7 +140,7 @@ posts inside `--lookback-hours`, defaulting to the last 24 hours.
 Important configuration sections:
 
 - `[service]`: service name, default timezone, and collector concurrency.
-- `[server]`: local HTTP host, port, artifact directory, one-hour report cache,
+- `[server]`: local HTTP host, port, artifact directory, six-hour report cache,
   and exact IP blacklist.
 - `[storage]`: SQLite database path.
 - `[retention]`: generated artifact/media cleanup behavior. Defaults to a 2GB
@@ -155,6 +158,8 @@ Important configuration sections:
   collector ID `x.<handle>`.
 - `[[sources.subreddits]]`: long-list subreddit sources. Each one resolves to
   collector ID `reddit.<subreddit>`.
+- `[sources.house_ptr]`: official House PTR disclosure source. It resolves to
+  collector ID `house.ptr`.
 - `[collectors.*.*]`: generic future collector definitions.
 - `[delivery.email.*]` and `[delivery.whatsapp.*]`: delivery definitions.
 
@@ -251,13 +256,14 @@ stock-sum run-report --profile default --config config.toml
 `setup reset` is destructive. It prints the target config, env file, and data
 directory, then requires confirmation and typing `RESET` before deletion.
 
-Fresh configs enable bundled example sources for `x.aleabitoreddit` and
-`reddit.wallstreetbets`. Customize them through TOML or the source CLI, then run
-the generated collector ID directly or through a report profile. X and Reddit
-collection use Xpoz through an internal MCP-over-HTTP client.
+Fresh configs enable bundled example sources for `x.aleabitoreddit`,
+`reddit.wallstreetbets`, and `house.ptr`. Customize them through TOML or the
+source CLI, then run the generated collector ID directly or through a report
+profile. X and Reddit collection use Xpoz through an internal MCP-over-HTTP
+client; House PTR uses official public House Clerk disclosure files.
 
-`payload build` reads collected data from SQLite and writes an LLM-ready JSON
-payload with separate X and Reddit sections. X posts are grouped by handle;
+`payload build` reads collected social data from SQLite and writes an LLM-ready
+JSON payload with separate X and Reddit sections. X posts are grouped by handle;
 Reddit posts are grouped by subreddit with comments nested under the matching
 post. With `--download-images`, eligible image media is saved under ignored
 `data/media/` and referenced from the JSON payload. Use `--mode full` for a
@@ -268,7 +274,8 @@ manifest.
 HTTP report jobs use chunked LLM analysis, persist per-post/per-comment
 sentiment and tags in SQLite, then render final reports deterministically from
 stored analysis rows. Reddit is analyzed per post with comments linked under the
-post; X is analyzed in bounded handle/post chunks.
+post; X is analyzed in bounded handle/post chunks. House PTR rows are rendered
+deterministically from SQLite and are not sent to the LLM in this version.
 
 `llm analyze` runs the same chunked analysis path from the CLI. `llm summarize`
 remains a single-call debug command for existing payload files. The first
@@ -285,7 +292,7 @@ portable document, `--mode discord` for Discord-friendly markdown, or
 Start the daemon, then use these endpoints. The local API is open to any
 non-blacklisted client; configure exact IP blocks with `[server].blacklisted_ips`.
 Successful report jobs are cached for `[server].report_cache_ttl_seconds`
-seconds, defaulting to one hour. Set it to `0` to disable report reuse.
+seconds, defaulting to six hours. Set it to `0` to disable report reuse.
 
 - `GET /health`: returns service health.
 - `GET /v1/config/effective`: returns the loaded configuration. Secret values are
@@ -383,7 +390,8 @@ stock-sum collect --help
 
 ## Current limitations
 
-- Xpoz X/Reddit collectors are implemented, but disabled by default.
+- Xpoz X/Reddit and House PTR collectors are implemented and enabled by default
+  in the starter profile.
 - The first implementation persists remote media URLs and metadata; image
   downloads are available through `payload build --download-images`.
 - Each future API integration should get its own source-specific raw tables.

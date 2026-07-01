@@ -143,6 +143,48 @@ def list_subreddits(path: str | Path) -> list[dict[str, Any]]:
     return [dict(item) for item in read_toml_document(path).get("sources", {}).get("subreddits", [])]
 
 
+def get_house_ptr_source(path: str | Path) -> dict[str, Any]:
+    """Return the configured House PTR source."""
+
+    return dict(read_toml_document(path).get("sources", {}).get("house_ptr", {}))
+
+
+def set_house_ptr_source(
+    path: str | Path,
+    *,
+    enabled: bool,
+    year: int | None,
+    render_limit: int,
+    download_concurrency: int,
+    parse_concurrency: int,
+    zip_url_template: str,
+    pdf_url_template: str,
+    profile: str | None = None,
+) -> str:
+    """Set House PTR source configuration and optionally attach it to a profile."""
+
+    document = read_toml_document(path)
+    sources = _sources_table(document)
+    source = tomlkit.table()
+    source["enabled"] = enabled
+    source["year"] = year or 0
+    source["render_limit"] = render_limit
+    source["download_concurrency"] = download_concurrency
+    source["parse_concurrency"] = parse_concurrency
+    source["zip_url_template"] = zip_url_template
+    source["pdf_url_template"] = pdf_url_template
+    sources["house_ptr"] = source
+
+    collector_id = "house.ptr"
+    if profile:
+        if enabled:
+            _add_collector_to_profile(document, profile, collector_id)
+        else:
+            _remove_collector_from_profile(document, profile, collector_id)
+    Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
+    return collector_id
+
+
 def add_x_user(
     path: str | Path,
     handle: str,

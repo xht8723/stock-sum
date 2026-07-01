@@ -1,5 +1,6 @@
 """Collector factory tests."""
 
+from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
 import pytest
 
@@ -21,6 +22,13 @@ def test_source_list_subreddit_resolves_to_collector_config() -> None:
 
     assert source_type_for_collector_id(config, "reddit.wallstreetbets") == REDDIT_SOURCE_TYPE
     assert get_collector_config(config, "reddit.wallstreetbets").lookback_hours == 24
+
+
+def test_house_ptr_source_resolves_to_collector_config() -> None:
+    config = load_config("stock_sum/config/example.toml")
+
+    assert source_type_for_collector_id(config, "house.ptr") == HOUSE_PTR_SOURCE_TYPE
+    assert get_collector_config(config, "house.ptr").render_limit == 20
 
 
 def test_removed_scrape_creators_kind_fails_clearly() -> None:

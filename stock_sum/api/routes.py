@@ -21,6 +21,7 @@ from stock_sum.config.writer import (
     delete_subreddit,
     delete_x_user,
     edit_profile,
+    set_house_ptr_source,
 )
 from stock_sum.llm.registry import get_llm_provider, list_llm_providers
 from stock_sum.retention import DataRetentionService
@@ -85,6 +86,19 @@ class SubredditRequest(BaseModel):
     comments_per_post: int = Field(default=10, ge=0)
     profile: str | None = None
     overwrite: bool = True
+
+
+class HousePtrRequest(BaseModel):
+    """Request body for updating House PTR source settings."""
+
+    enabled: bool = True
+    year: int | None = Field(default=None, ge=0)
+    render_limit: int = Field(default=20, ge=1)
+    download_concurrency: int = Field(default=4, ge=1)
+    parse_concurrency: int = Field(default=2, ge=1)
+    zip_url_template: str = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
+    pdf_url_template: str = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
+    profile: str | None = "default"
 
 
 class LLMConfigPatchRequest(BaseModel):
@@ -317,6 +331,7 @@ def build_router(
         return {
             "x_users": [source.model_dump(mode="json") for source in active.sources.x_users],
             "subreddits": [source.model_dump(mode="json") for source in active.sources.subreddits],
+            "house_ptr": active.sources.house_ptr.model_dump(mode="json"),
         }
 
     @v1.get("/sources/x-users", dependencies=management_dependencies)
@@ -379,6 +394,30 @@ def build_router(
         runtime_manager = _require_runtime(runtime)
         collector_id = _mutate_runtime(runtime_manager, lambda path: delete_subreddit(path, subreddit, profile=profile))
         return {"deleted": collector_id}
+
+    @v1.get("/sources/house-ptr", dependencies=management_dependencies)
+    async def get_house_ptr_source() -> dict[str, Any]:
+        active = _require_config(current_config())
+        return {"house_ptr": active.sources.house_ptr.model_dump(mode="json")}
+
+    @v1.patch("/sources/house-ptr", dependencies=management_dependencies)
+    async def patch_house_ptr_source(request: HousePtrRequest) -> dict[str, Any]:
+        runtime_manager = _require_runtime(runtime)
+        collector_id = _mutate_runtime(
+            runtime_manager,
+            lambda path: set_house_ptr_source(
+                path,
+                enabled=request.enabled,
+                year=request.year,
+                render_limit=request.render_limit,
+                download_concurrency=request.download_concurrency,
+                parse_concurrency=request.parse_concurrency,
+                zip_url_template=request.zip_url_template,
+                pdf_url_template=request.pdf_url_template,
+                profile=request.profile,
+            ),
+        )
+        return {"collector_id": collector_id, "house_ptr": runtime_manager.config.sources.house_ptr.model_dump(mode="json")}
 
     @v1.get("/llm/providers", dependencies=management_dependencies)
     async def llm_providers() -> dict[str, Any]:

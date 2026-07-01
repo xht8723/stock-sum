@@ -112,6 +112,42 @@ def _grouped_response() -> dict:
     }
 
 
+def _house_response() -> dict:
+    response = _grouped_response()
+    response["house_ptr"] = [
+        {
+            "doc_id": "20024228",
+            "year": 2026,
+            "name": "Jane Doe",
+            "status": "Member",
+            "state": "CA",
+            "filing_date": "2026-06-30",
+            "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
+            "asset": "AAPL",
+            "transaction_type": "Purchase",
+            "transaction_date": "2026-06-20",
+            "amount": "$1,001 - $15,000",
+            "raw_cells": ["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"],
+        },
+        {
+            "doc_id": "20024229",
+            "year": 2026,
+            "name": "John Doe",
+            "status": "Member",
+            "state": "NY",
+            "filing_date": "2026-06-29",
+            "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024229.pdf",
+            "asset": "MSFT",
+            "transaction_type": "S (partial)",
+            "transaction_date": "2026-06-19",
+            "amount": "$15,001 - $50,000",
+            "raw_cells": ["MSFT", "S (partial)", "2026-06-19", "$15,001 - $50,000"],
+        }
+    ]
+    response["summary"]["house_ptr"] = response["house_ptr"]
+    return response
+
+
 def test_html_renderer_outputs_all_sections_and_escapes_html() -> None:
     response = _response()
     response["summary"]["x_signals"][0]["claim"] = "<script>alert(1)</script>"
@@ -321,3 +357,31 @@ def test_renderer_outputs_pipeline_warnings_in_all_modes() -> None:
     assert "## Unavailable Sections" in markdown
     assert "**Unavailable Sections**" in discord
     assert "UNAVAILABLE SECTIONS" in text
+
+
+def test_renderer_outputs_house_ptr_disclosures_in_all_modes() -> None:
+    response = _house_response()
+
+    html = PresentationRenderer().render(response, mode="html")
+    markdown = PresentationRenderer().render(response, mode="markdown")
+    discord = PresentationRenderer().render(response, mode="discord")
+    text = PresentationRenderer().render(response, mode="text")
+
+    assert "Official Trading Disclosures" in html
+    assert "<td>Jane Doe</td>" in html
+    assert "AAPL" in html
+    assert ">Purchase<" in html
+    assert ">Sell (partial)<" in html
+    assert 'href="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf"' in html
+    assert "## Official Trading Disclosures" in markdown
+    assert "Action: Purchase" in markdown
+    assert "Action: Sell (partial)" in markdown
+    assert "[Read PDF](https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf)" in markdown
+    assert "**Official Trading Disclosures**" in discord
+    assert "Action Purchase" in discord
+    assert "Action Sell (partial)" in discord
+    assert "[PDF](https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf)" in discord
+    assert "OFFICIAL TRADING DISCLOSURES" in text
+    assert "Action: Purchase" in text
+    assert "Action: Sell (partial)" in text
+    assert "Source: https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf" in text

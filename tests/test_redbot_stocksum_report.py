@@ -378,6 +378,40 @@ async def test_management_reddit_source_add_defaults_to_comments(monkeypatch) ->
     assert "Added subreddit wallstreetbets" in interaction.response.messages[0]["content"]
 
 
+async def test_management_house_ptr_source_set(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=True))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.sources_house_set(
+        interaction,
+        profile="default",
+        enabled=True,
+        year=2026,
+        render_limit=15,
+        download_concurrency=3,
+        parse_concurrency=2,
+    )
+
+    assert client.calls == [
+        (
+            "patch",
+            "/v1/sources/house-ptr",
+            {
+                "profile": "default",
+                "enabled": True,
+                "year": 2026,
+                "render_limit": 15,
+                "download_concurrency": 3,
+                "parse_concurrency": 2,
+            },
+        )
+    ]
+    assert interaction.response.messages[0]["ephemeral"] is True
+    assert "Updated House PTR source" in interaction.response.messages[0]["content"]
+
+
 async def test_secret_set_command_is_ephemeral_and_redacted(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))

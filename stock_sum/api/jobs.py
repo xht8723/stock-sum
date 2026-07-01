@@ -179,32 +179,40 @@ class HttpJobManager:
             downloader = MediaDownloader(self.config.media, repository) if options.download_images else None
             builder = SummaryInputBuilder(config=self.config, repository=repository, downloader=downloader)
             summary_input = await builder.build(profile=job.profile, download_images=options.download_images)
-            if not _summary_input_has_social_data(summary_input):
+            house_ptr_rows = await repository.read_house_ptr_trades(limit=_house_ptr_render_limit(self.config))
+            has_social_data = _summary_input_has_social_data(summary_input)
+            if not has_social_data and not house_ptr_rows:
                 raise RuntimeError(_no_social_data_message(collection_result))
-            payload_data = summary_input.to_dict(
-                mode="compact",
-                max_images_per_post=options.max_images_per_post,
-                max_images_total=options.max_images_total,
-            )
+            if has_social_data:
+                payload_data = summary_input.to_dict(
+                    mode="compact",
+                    max_images_per_post=options.max_images_per_post,
+                    max_images_total=options.max_images_total,
+                )
 
-            self._update(job_id, phase="analyzing")
-            analysis = await LLMAnalysisService(
-                config=self.config,
-                repository=repository,
-                llm_client=self._llm_client_factory(),
-            ).analyze(
-                summary_input,
-                instructions=options.instructions,
-                max_images_per_post=options.max_images_per_post,
-                max_images_total=options.max_images_total,
-            )
-            warnings.extend(analysis.warnings)
-            response_data = _analysis_response_data(
-                profile=job.profile,
-                provider=self.config.llm.provider,
-                analysis=analysis,
-                input_media=payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
-            )
+                self._update(job_id, phase="analyzing")
+                analysis = await LLMAnalysisService(
+                    config=self.config,
+                    repository=repository,
+                    llm_client=self._llm_client_factory(),
+                ).analyze(
+                    summary_input,
+                    instructions=options.instructions,
+                    max_images_per_post=options.max_images_per_post,
+                    max_images_total=options.max_images_total,
+                )
+                warnings.extend(analysis.warnings)
+                response_data = _analysis_response_data(
+                    profile=job.profile,
+                    provider=self.config.llm.provider,
+                    analysis=analysis,
+                    input_media=payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
+                )
+            else:
+                response_data = _house_only_response_data(profile=job.profile, provider=self.config.llm.provider)
+            response_data["house_ptr"] = _house_ptr_rows_to_dicts(house_ptr_rows)
+            if isinstance(response_data.get("summary"), dict):
+                response_data["summary"]["house_ptr"] = response_data["house_ptr"]
 
             warning_data = _warnings_to_dicts(warnings)
             response_data["pipeline_warnings"] = warning_data
@@ -636,6 +644,45 @@ def _no_social_data_message(result: PipelineCollectionResult) -> str:
     if failed:
         message += f" Failed collectors: {', '.join(failed)}."
     return message
+
+
+def _house_ptr_render_limit(config: AppConfig) -> int:
+    return config.sources.house_ptr.render_limit
+
+
+def _house_ptr_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "doc_id": row.doc_id,
+            "year": row.year,
+            "name": row.name,
+            "status": row.status,
+            "state": row.state,
+            "filing_date": row.filing_date,
+            "pdf_url": row.pdf_url,
+            "table_index": row.table_index,
+            "row_index": row.row_index,
+            "asset": row.asset,
+            "transaction_type": row.transaction_type,
+            "transaction_date": row.transaction_date,
+            "amount": row.amount,
+            "raw_cells": row.raw_cells,
+            "collected_at": row.collected_at,
+        }
+        for row in rows
+    ]
+
+
+def _house_only_response_data(*, profile: str, provider: str) -> dict[str, Any]:
+    return {
+        "profile": profile,
+        "provider": provider,
+        "model": None,
+        "summary_text": json.dumps({"x_reports": [], "reddit_report": {"overall_summary": [], "posts": []}}, ensure_ascii=False),
+        "summary": {"x_reports": [], "reddit_report": {"overall_summary": [], "posts": []}},
+        "input_media": {},
+        "metadata": {"analysis_run_id": None, "prompt_version": PROMPT_VERSION, "chunk_count": 0, "succeeded_count": 0, "failed_count": 0},
+    }
 
 
 def _analysis_response_data(

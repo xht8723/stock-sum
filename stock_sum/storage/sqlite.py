@@ -16,6 +16,7 @@ from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 from stock_sum.storage.models import (
     StoredCollectionRun,
     StoredDownloadedMedia,
+    StoredHousePtrTradeRow,
     StoredMediaAsset,
     StoredRedditComment,
     StoredRedditPost,
@@ -150,6 +151,37 @@ CREATE TABLE IF NOT EXISTS raw_provider_api_responses (
 
 CREATE INDEX IF NOT EXISTS idx_provider_api_responses_run
 ON raw_provider_api_responses (collection_run_id);
+
+CREATE TABLE IF NOT EXISTS raw_house_ptr_filings (
+    doc_id TEXT PRIMARY KEY,
+    year INTEGER NOT NULL,
+    name TEXT,
+    status TEXT,
+    state TEXT,
+    filing_date TEXT,
+    pdf_url TEXT,
+    raw_xml_json TEXT NOT NULL,
+    tables_json TEXT NOT NULL,
+    extraction_status TEXT NOT NULL,
+    extraction_error TEXT,
+    collected_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS raw_house_ptr_trade_rows (
+    doc_id TEXT NOT NULL,
+    table_index INTEGER NOT NULL,
+    row_index INTEGER NOT NULL,
+    asset TEXT,
+    transaction_type TEXT,
+    transaction_date TEXT,
+    amount TEXT,
+    raw_cells_json TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (doc_id, table_index, row_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_house_ptr_filings_recent
+ON raw_house_ptr_filings (filing_date DESC, collected_at DESC);
 
 CREATE TABLE IF NOT EXISTS llm_analysis_runs (
     analysis_run_id TEXT PRIMARY KEY,
@@ -706,6 +738,65 @@ class SQLiteStorageRepository:
                 )
         return posts
 
+    async def existing_house_ptr_doc_ids(self, *, year: int | None = None) -> set[str]:
+        """Return successfully extracted House PTR DocIDs safe to skip."""
+
+        await self.initialize()
+        query = "SELECT doc_id FROM raw_house_ptr_filings WHERE extraction_status = ?"
+        params: list[Any] = ["succeeded"]
+        if year is not None:
+            query += " AND year = ?"
+            params.append(year)
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            cursor = await db.execute(query, params)
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return {str(row[0]) for row in rows}
+
+    async def read_house_ptr_trades(self, *, limit: int = 20) -> list[StoredHousePtrTradeRow]:
+        """Read recent House PTR trade rows joined with filing metadata."""
+
+        await self.initialize()
+        query = """
+            SELECT f.doc_id, f.year, f.name, f.status, f.state, f.filing_date, f.pdf_url,
+                   r.table_index, r.row_index, r.asset, r.transaction_type, r.transaction_date,
+                   r.amount, r.raw_cells_json, r.raw_json, f.collected_at
+            FROM raw_house_ptr_trade_rows r
+            JOIN raw_house_ptr_filings f ON f.doc_id = r.doc_id
+            ORDER BY COALESCE(f.filing_date, f.collected_at) DESC, f.collected_at DESC,
+                     f.doc_id DESC, r.table_index ASC, r.row_index ASC
+            LIMIT ?
+        """
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            cursor = await db.execute(query, (limit,))
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return [
+            StoredHousePtrTradeRow(
+                doc_id=row[0],
+                year=row[1],
+                name=row[2],
+                status=row[3],
+                state=row[4],
+                filing_date=row[5],
+                pdf_url=row[6],
+                table_index=row[7],
+                row_index=row[8],
+                asset=row[9],
+                transaction_type=row[10],
+                transaction_date=row[11],
+                amount=row[12],
+                raw_cells=_json_list(row[13]),
+                raw_metadata=_json_obj(row[14]),
+                collected_at=row[15],
+            )
+            for row in rows
+        ]
+
     async def get_downloaded_media(self, remote_url: str) -> StoredDownloadedMedia | None:
         """Return downloaded media metadata by remote URL."""
 
@@ -1045,6 +1136,8 @@ async def _mapped_row_exists(db: aiosqlite.Connection, item: MappedRawItem) -> b
         query = "SELECT 1 FROM raw_reddit_posts WHERE subreddit = ? AND post_id = ?"
     elif item.table == "raw_reddit_comments":
         query = "SELECT 1 FROM raw_reddit_comments WHERE post_id = ? AND comment_id = ?"
+    elif item.table == "raw_house_ptr_filings":
+        query = "SELECT 1 FROM raw_house_ptr_filings WHERE doc_id = ?"
     else:
         raise ValueError(f"Unsupported mapped table: {item.table}")
     cursor = await db.execute(query, item.key)
@@ -1067,6 +1160,12 @@ async def _upsert_mapped_item(db: aiosqlite.Connection, item: MappedRawItem) -> 
         return
     if item.table == "raw_reddit_comments":
         await _upsert_reddit_comment(db, item.row)
+        return
+    if item.table == "raw_house_ptr_filings":
+        await _upsert_house_ptr_filing(db, item.row)
+        await _delete_house_ptr_trade_rows(db, item.row["doc_id"])
+        for trade_row in item.media_rows:
+            await _upsert_house_ptr_trade_row(db, trade_row)
         return
     raise ValueError(f"Unsupported mapped table: {item.table}")
 
@@ -1191,6 +1290,59 @@ async def _upsert_reddit_media(db: aiosqlite.Connection, row: dict[str, Any]) ->
         ON CONFLICT (post_id, media_url) DO UPDATE SET
             media_type = excluded.media_type,
             source_field = excluded.source_field,
+            raw_json = excluded.raw_json
+        """,
+        row,
+    )
+
+
+async def _upsert_house_ptr_filing(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        INSERT INTO raw_house_ptr_filings (
+            doc_id, year, name, status, state, filing_date, pdf_url, raw_xml_json,
+            tables_json, extraction_status, extraction_error, collected_at
+        ) VALUES (
+            :doc_id, :year, :name, :status, :state, :filing_date, :pdf_url, :raw_xml_json,
+            :tables_json, :extraction_status, :extraction_error, :collected_at
+        )
+        ON CONFLICT (doc_id) DO UPDATE SET
+            year = excluded.year,
+            name = excluded.name,
+            status = excluded.status,
+            state = excluded.state,
+            filing_date = excluded.filing_date,
+            pdf_url = excluded.pdf_url,
+            raw_xml_json = excluded.raw_xml_json,
+            tables_json = excluded.tables_json,
+            extraction_status = excluded.extraction_status,
+            extraction_error = excluded.extraction_error,
+            collected_at = excluded.collected_at
+        """,
+        row,
+    )
+
+
+async def _delete_house_ptr_trade_rows(db: aiosqlite.Connection, doc_id: str) -> None:
+    await db.execute("DELETE FROM raw_house_ptr_trade_rows WHERE doc_id = ?", (doc_id,))
+
+
+async def _upsert_house_ptr_trade_row(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        INSERT INTO raw_house_ptr_trade_rows (
+            doc_id, table_index, row_index, asset, transaction_type, transaction_date,
+            amount, raw_cells_json, raw_json
+        ) VALUES (
+            :doc_id, :table_index, :row_index, :asset, :transaction_type, :transaction_date,
+            :amount, :raw_cells_json, :raw_json
+        )
+        ON CONFLICT (doc_id, table_index, row_index) DO UPDATE SET
+            asset = excluded.asset,
+            transaction_type = excluded.transaction_type,
+            transaction_date = excluded.transaction_date,
+            amount = excluded.amount,
+            raw_cells_json = excluded.raw_cells_json,
             raw_json = excluded.raw_json
         """,
         row,

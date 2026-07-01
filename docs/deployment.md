@@ -3,7 +3,8 @@
 This guide explains how to deploy `stock-sum` on a regular machine and with
 Docker. The current project state includes the HTTP daemon, configuration
 validation, models.dev cache, shared SQLite run/index storage, Xpoz X/Reddit
-API collectors, and generic Playwright infrastructure.
+API collectors, official House PTR disclosure collection, and generic
+Playwright infrastructure.
 
 ## Deployment model
 
@@ -197,17 +198,20 @@ stock-sum config sync --config config.toml
 ```
 
 The bundled default profile includes enabled starter sources for
-`x.aleabitoreddit` and `reddit.wallstreetbets`. X and Reddit sources use Xpoz.
-Source-list entries resolve to collector IDs such as `x.aleabitoreddit` and
-`reddit.wallstreetbets`. By default, stock-sum fetches up to 100 provider rows
-and keeps posts from the last 24 hours. Use the config CLI to add, delete, or
-replace sources.
+`x.aleabitoreddit`, `reddit.wallstreetbets`, and `house.ptr`. X and Reddit
+sources use Xpoz. House PTR uses official public House Clerk disclosure files.
+Source-list entries resolve to collector IDs such as `x.aleabitoreddit`,
+`reddit.wallstreetbets`, and `house.ptr`. By default, stock-sum fetches up to
+100 provider rows for social sources and keeps posts from the last 24 hours.
+Use the config CLI to add, delete, or replace sources.
 
 ```bash
 stock-sum config x-user add aleabitoreddit --config config.toml --profile default --limit 100 --lookback-hours 24
 stock-sum config subreddit add wallstreetbets --config config.toml --profile default --limit 100 --lookback-hours 24
+stock-sum config house-ptr set --config config.toml --profile default --enabled --render-limit 20
 stock-sum collect --collector x.aleabitoreddit --config config.toml
 stock-sum collect --collector reddit.wallstreetbets --config config.toml
+stock-sum collect --collector house.ptr --config config.toml
 stock-sum collect --profile default --config config.toml
 stock-sum run-report --profile default --config config.toml
 ```
@@ -493,7 +497,7 @@ When exposing the daemon beyond localhost, put it behind a reverse proxy or
 private network boundary. The current API has no authentication middleware, but
 you can block exact client IPs with `[server].blacklisted_ips`.
 Successful report jobs are reused for `[server].report_cache_ttl_seconds`
-seconds, defaulting to `3600`; set it to `0` when every request should force a
+seconds, defaulting to `21600`; set it to `0` when every request should force a
 fresh collection and LLM run.
 Managed runtime data is also capped by `[retention].max_total_bytes`, defaulting
 to `2147483648` bytes. Cleanup runs after report/collection jobs and prunes

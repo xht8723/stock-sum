@@ -33,12 +33,14 @@ from stock_sum.config.writer import (
     delete_subreddit,
     delete_x_user,
     edit_profile,
+    get_house_ptr_source,
     get_dotted_value,
     get_profile,
     list_subreddits,
     list_profiles,
     list_x_users,
     read_toml_document,
+    set_house_ptr_source,
     set_dotted_value,
     write_default_config,
 )
@@ -63,6 +65,7 @@ secrets_app = typer.Typer(help="Manage local env-file secrets.")
 profile_app = typer.Typer(help="Manage report profiles in TOML configuration.")
 x_user_app = typer.Typer(help="Manage X user sources in TOML configuration.")
 subreddit_app = typer.Typer(help="Manage subreddit sources in TOML configuration.")
+house_ptr_app = typer.Typer(help="Manage House PTR disclosure source in TOML configuration.")
 payload_app = typer.Typer(help="Build LLM-ready payloads from collected data.")
 llm_app = typer.Typer(help="Run LLM summarization against payloads.")
 report_app = typer.Typer(help="Render final presentation reports.")
@@ -79,6 +82,7 @@ app.add_typer(database_app, name="database")
 config_app.add_typer(profile_app, name="profile")
 config_app.add_typer(x_user_app, name="x-user")
 config_app.add_typer(subreddit_app, name="subreddit")
+config_app.add_typer(house_ptr_app, name="house-ptr")
 console = Console()
 
 
@@ -980,6 +984,52 @@ def subreddit_delete(
         raise typer.Exit(code=1) from exc
     load_config(config)
     console.print(f"Deleted subreddit source {collector_id}.")
+
+
+@house_ptr_app.command("show")
+def house_ptr_show(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+    """Show House PTR source settings."""
+
+    console.print_json(json.dumps({"house_ptr": get_house_ptr_source(config)}))
+
+
+@house_ptr_app.command("set")
+def house_ptr_set(
+    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether House PTR can be collected."),
+    year: int = typer.Option(0, "--year", min=0, help="Disclosure year, or 0 for current UTC year."),
+    render_limit: int = typer.Option(20, "--render-limit", min=1, help="Number of recent trade rows to render."),
+    download_concurrency: int = typer.Option(4, "--download-concurrency", min=1, help="Concurrent PDF downloads."),
+    parse_concurrency: int = typer.Option(2, "--parse-concurrency", min=1, help="Concurrent PDF table parse jobs."),
+    zip_url_template: str = typer.Option(
+        "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip",
+        "--zip-url-template",
+    ),
+    pdf_url_template: str = typer.Option(
+        "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf",
+        "--pdf-url-template",
+    ),
+    profile: str | None = typer.Option("default", "--profile", help="Profile to attach/detach house.ptr."),
+) -> None:
+    """Set House PTR source settings."""
+
+    try:
+        collector_id = set_house_ptr_source(
+            config,
+            enabled=enabled,
+            year=year or None,
+            render_limit=render_limit,
+            download_concurrency=download_concurrency,
+            parse_concurrency=parse_concurrency,
+            zip_url_template=zip_url_template,
+            pdf_url_template=pdf_url_template,
+            profile=profile,
+        )
+    except (KeyError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    load_config(config)
+    console.print(f"Updated House PTR source {collector_id}.")
 
 
 def main() -> None:

@@ -49,6 +49,9 @@ class ReportPipeline:
         collector: Collector | None = None
         try:
             collector = self.collector_factory(collector_id)
+            set_repository = getattr(collector, "set_repository", None)
+            if callable(set_repository):
+                set_repository(self.repository)
             items = await collector.collect(self.context)
             collector_warnings = list(getattr(collector, "warnings", []))
             await self._save_provider_api_responses(

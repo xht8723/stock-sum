@@ -57,6 +57,27 @@ def test_reddit_source_delete_updates_profile(tmp_path) -> None:
     assert "reddit.wallstreetbets" not in config.reports["default"].collector_ids
 
 
+def test_house_ptr_source_management_hot_reloads_config(tmp_path) -> None:
+    client, config_path, _env_file = _management_client(tmp_path)
+
+    show = client.get("/v1/sources/house-ptr")
+    patch = client.patch(
+        "/v1/sources/house-ptr",
+        json={"enabled": False, "year": 2025, "render_limit": 12, "profile": "default"},
+    )
+
+    assert show.status_code == 200
+    assert show.json()["house_ptr"]["enabled"] is True
+    assert patch.status_code == 200
+    assert patch.json()["collector_id"] == "house.ptr"
+
+    config = load_config(config_path)
+    assert config.sources.house_ptr.enabled is False
+    assert config.sources.house_ptr.year == 2025
+    assert config.sources.house_ptr.render_limit == 12
+    assert "house.ptr" not in config.reports["default"].collector_ids
+
+
 def test_llm_management_lists_and_selects_provider(tmp_path) -> None:
     client, config_path, _env_file = _management_client(tmp_path)
 

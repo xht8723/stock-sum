@@ -120,3 +120,25 @@ class StoredRedditPost:
     collected_at: str
     media: list[StoredMediaAsset] = field(default_factory=list)
     comments: list[StoredRedditComment] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class StoredHousePtrTradeRow:
+    """Stored House PTR trade row joined with filing metadata."""
+
+    doc_id: str
+    year: int
+    name: str | None
+    status: str | None
+    state: str | None
+    filing_date: str | None
+    pdf_url: str | None
+    table_index: int
+    row_index: int
+    asset: str | None
+    transaction_type: str | None
+    transaction_date: str | None
+    amount: str | None
+    raw_cells: list[str]
+    raw_metadata: dict[str, Any]
+    collected_at: str

@@ -50,6 +50,7 @@ class PresentationRenderer:
         sections = [
             _html_pipeline_warnings(response.get("pipeline_warnings")),
             _html_social_sentiment(summary, media_by_ref),
+            _html_house_ptr(response, summary),
         ]
         return "\n".join(
             [
@@ -80,6 +81,7 @@ class PresentationRenderer:
             "",
             _markdown_pipeline_warnings(response.get("pipeline_warnings")),
             _markdown_social_sentiment(summary, media_by_ref),
+            _markdown_house_ptr(response, summary),
         ]
         return "\n".join(line for line in lines if line is not None).strip() + "\n"
 
@@ -90,6 +92,7 @@ class PresentationRenderer:
             "",
             _discord_pipeline_warnings(response.get("pipeline_warnings")),
             _discord_social_sentiment(summary, media_by_ref),
+            _discord_house_ptr(response, summary),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
@@ -100,6 +103,7 @@ class PresentationRenderer:
             "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_social_sentiment(summary, media_by_ref),
+            _text_house_ptr(response, summary),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
@@ -225,6 +229,40 @@ def _html_social_card(item: dict[str, Any], media_by_ref: dict[str, list[dict[st
     return "\n".join(lines)
 
 
+def _html_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _house_ptr_items(response, summary)
+    if not rows:
+        return _html_section("Official Trading Disclosures", '<p class="empty">No official trading disclosures.</p>')
+    body_rows = []
+    for row in rows:
+        pdf_url = row.get("pdf_url")
+        link = ""
+        if pdf_url:
+            link = f'<a href="{escape(str(pdf_url), quote=True)}" rel="noreferrer">PDF</a>'
+        body_rows.append(
+            "<tr>"
+            f"<td>{escape(_stringify_item(row.get('name') or 'Unknown'))}</td>"
+            f"<td>{escape(_house_value(row.get('status')))}</td>"
+            f"<td>{escape(_house_value(row.get('state')))}</td>"
+            f"<td>{escape(_house_value(row.get('filing_date')))}</td>"
+            f"<td>{escape(_house_value(row.get('asset') or _raw_cells_preview(row)))}</td>"
+            f"<td>{escape(_house_trade_action(row.get('transaction_type')))}</td>"
+            f"<td>{escape(_house_value(row.get('transaction_date')))}</td>"
+            f"<td>{escape(_house_value(row.get('amount')))}</td>"
+            f"<td>{link}</td>"
+            "</tr>"
+        )
+    table = (
+        '<div class="table-wrap"><table class="disclosures"><thead><tr>'
+        "<th>Filer</th><th>Status</th><th>State</th><th>Filed</th><th>Asset</th>"
+        "<th>Action</th><th>Trade Date</th><th>Amount</th><th>Source</th>"
+        "</tr></thead><tbody>"
+        + "".join(body_rows)
+        + "</tbody></table></div>"
+    )
+    return _html_section("Official Trading Disclosures", table)
+
+
 def _html_social_badges(item: dict[str, Any]) -> str:
     badges = []
     label = item.get("source_label")
@@ -279,6 +317,25 @@ def _markdown_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dic
     return lines
 
 
+def _markdown_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _house_ptr_items(response, summary)
+    lines = ["## Official Trading Disclosures", ""]
+    if not rows:
+        return "\n".join([*lines, "_No official trading disclosures._", ""])
+    for row in rows:
+        title = " / ".join(str(value) for value in (row.get("name"), row.get("status"), row.get("state")) if value)
+        lines.append(f"- **{title or 'Unknown filer'}**")
+        lines.append(f"  - Filed: {_house_value(row.get('filing_date'))}")
+        lines.append(f"  - Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
+        lines.append(f"  - Action: {_house_trade_action(row.get('transaction_type'))}")
+        lines.append(f"  - Trade date: {_house_value(row.get('transaction_date'))}")
+        lines.append(f"  - Amount: {_house_value(row.get('amount'))}")
+        if row.get("pdf_url"):
+            lines.append(f"  - Source: [Read PDF]({row['pdf_url']})")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _discord_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
     buckets = _social_items_by_importance(summary)
     lines = ["**Social Media Sentiment**"]
@@ -321,6 +378,29 @@ def _discord_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict
     if links:
         lines.append("**Links:** " + " | ".join(links))
     return lines
+
+
+def _discord_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _house_ptr_items(response, summary)
+    lines = ["**Official Trading Disclosures**"]
+    if not rows:
+        return "\n".join([*lines, "_No official trading disclosures._"])
+    for row in rows:
+        title = " / ".join(str(value) for value in (row.get("name"), row.get("status"), row.get("state")) if value)
+        detail = " · ".join(
+            part
+            for part in (
+                f"Filed {_house_value(row.get('filing_date'))}" if row.get("filing_date") else "",
+                f"Asset {_house_value(row.get('asset') or _raw_cells_preview(row))}",
+                f"Action {_house_trade_action(row.get('transaction_type'))}" if row.get("transaction_type") else "",
+                f"Date {_house_value(row.get('transaction_date'))}" if row.get("transaction_date") else "",
+                f"Amount {_house_value(row.get('amount'))}" if row.get("amount") else "",
+            )
+            if part
+        )
+        source = f" [PDF]({row['pdf_url']})" if row.get("pdf_url") else ""
+        lines.append(f"- **{title or 'Unknown filer'}**: {detail}{source}")
+    return "\n".join(lines)
 
 
 def _discord_linked_media(source_ref: str, media_by_ref: dict[str, list[dict[str, Any]]]) -> list[str]:
@@ -370,6 +450,24 @@ def _text_social_item(item: dict[str, Any], media_by_ref: dict[str, list[dict[st
     return lines
 
 
+def _text_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _house_ptr_items(response, summary)
+    lines = ["OFFICIAL TRADING DISCLOSURES"]
+    if not rows:
+        return "\n".join([*lines, "  No official trading disclosures."])
+    for row in rows:
+        title = " / ".join(str(value) for value in (row.get("name"), row.get("status"), row.get("state")) if value)
+        lines.append(f"- {title or 'Unknown filer'}")
+        lines.append(f"  Filed: {_house_value(row.get('filing_date'))}")
+        lines.append(f"  Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
+        lines.append(f"  Action: {_house_trade_action(row.get('transaction_type'))}")
+        lines.append(f"  Trade date: {_house_value(row.get('transaction_date'))}")
+        lines.append(f"  Amount: {_house_value(row.get('amount'))}")
+        if row.get("pdf_url"):
+            lines.append(f"  Source: {row['pdf_url']}")
+    return "\n".join(lines)
+
+
 def _social_items_by_importance(summary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     buckets: dict[str, list[dict[str, Any]]] = {"high": [], "medium": [], "low": []}
     for item in _social_items(summary):
@@ -404,6 +502,34 @@ def _social_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             items.append({**item, "source_kind": "reddit", "source_label": "Reddit"})
     return items
+
+
+def _house_ptr_items(response: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
+    value = response.get("house_ptr") or summary.get("house_ptr")
+    return [item for item in _as_list(value) if isinstance(item, dict)]
+
+
+def _raw_cells_preview(row: dict[str, Any]) -> str:
+    cells = [str(item).strip() for item in _as_list(row.get("raw_cells")) if str(item).strip()]
+    return " | ".join(cells[:4])
+
+
+def _house_value(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    return _stringify_item(value)
+
+
+def _house_trade_action(value: Any) -> str:
+    text = _house_value(value)
+    normalized = text.strip().lower()
+    if normalized.startswith("p"):
+        return "Purchase"
+    if normalized.startswith("s"):
+        if "partial" in normalized:
+            return "Sell (partial)"
+        return "Sell"
+    return text
 
 
 def _importance_bucket(item: dict[str, Any]) -> str:
@@ -724,6 +850,11 @@ h3 { font-size: 16px; margin: 8px 0; }
 .badge.sentiment { background: #f3efe4; color: #624708; }
 .badge.media { background: #fff4d8; color: #6b4a00; }
 .links { display: grid; gap: 4px; margin-top: 8px; font-size: 12px; }
+.table-wrap { overflow-x: auto; }
+table.disclosures { width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; border: 1px solid #dde4eb; }
+table.disclosures th, table.disclosures td { border-bottom: 1px solid #e7edf3; padding: 7px 8px; text-align: left; vertical-align: top; }
+table.disclosures th { background: #eef4f9; color: #33485c; font-weight: 700; }
+table.disclosures td { overflow-wrap: anywhere; }
 .linked-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 10px; }
 .media-card { border: 1px solid #e4ebf1; border-radius: 8px; padding: 8px; background: #f8fafc; }
 .media-card img { width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: #fff; }

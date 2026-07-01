@@ -69,7 +69,7 @@ analysis_max_concurrency = 5
 [reports.default]
 timezone = "America/Vancouver"
 schedule = "0 8 * * 1-5"
-collector_ids = ["x.aleabitoreddit", "reddit.wallstreetbets"]
+collector_ids = ["x.aleabitoreddit", "reddit.wallstreetbets", "house.ptr"]
 delivery_ids = ["email.primary"]
 
 [[sources.x_users]]
@@ -88,6 +88,15 @@ lookback_hours = 24
 trim = true
 include_comments = true
 comments_per_post = 10
+
+[sources.house_ptr]
+enabled = true
+year = 0
+render_limit = 20
+download_concurrency = 4
+parse_concurrency = 2
+zip_url_template = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
+pdf_url_template = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
 
 [delivery.email.primary]
 kind = "email"

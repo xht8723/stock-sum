@@ -136,6 +136,12 @@ class CollectorConfig(BaseModel):
     trim: bool = True
     include_comments: bool = True
     comments_per_post: int = Field(default=10, ge=0)
+    year: int | None = Field(default=None, ge=0)
+    render_limit: int = Field(default=20, ge=1)
+    download_concurrency: int = Field(default=4, ge=1)
+    parse_concurrency: int = Field(default=2, ge=1)
+    zip_url_template: str = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
+    pdf_url_template: str = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
 
 
 class XUserSourceConfig(BaseModel):
@@ -161,11 +167,24 @@ class RedditSubredditSourceConfig(BaseModel):
     comments_per_post: int = Field(default=10, ge=0)
 
 
+class HousePtrSourceConfig(BaseModel):
+    """Configured House PTR disclosure source."""
+
+    enabled: bool = True
+    year: int | None = Field(default=None, ge=0)
+    render_limit: int = Field(default=20, ge=1)
+    download_concurrency: int = Field(default=4, ge=1)
+    parse_concurrency: int = Field(default=2, ge=1)
+    zip_url_template: str = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
+    pdf_url_template: str = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
+
+
 class SourcesConfig(BaseModel):
     """Long-list source configuration."""
 
     x_users: list[XUserSourceConfig] = Field(default_factory=list)
     subreddits: list[RedditSubredditSourceConfig] = Field(default_factory=list)
+    house_ptr: HousePtrSourceConfig = Field(default_factory=HousePtrSourceConfig)
 
 
 class EmailDeliveryConfig(BaseModel):

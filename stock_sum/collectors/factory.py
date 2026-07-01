@@ -8,8 +8,9 @@ from stock_sum.collectors.api.xpoz import (
     XpozRedditSubredditCollector,
     XpozXUserTimelineCollector,
 )
+from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE, HousePtrDisclosureCollector
 from stock_sum.collectors.base import Collector
-from stock_sum.config.models import AppConfig, CollectorConfig, RedditSubredditSourceConfig, XUserSourceConfig
+from stock_sum.config.models import AppConfig, CollectorConfig, HousePtrSourceConfig, RedditSubredditSourceConfig, XUserSourceConfig
 from stock_sum.core.errors import ConfigurationError
 
 
@@ -61,6 +62,11 @@ def build_collector(config: AppConfig, collector_id: str) -> Collector:
             collector_config=collector_config,
             provider_config=config.providers.xpoz,
         )
+    if collector_config.kind == HOUSE_PTR_SOURCE_TYPE:
+        return HousePtrDisclosureCollector(
+            collector_id=collector_id,
+            collector_config=collector_config,
+        )
 
     raise ConfigurationError(f"No collector implementation registered for kind: {collector_config.kind}")
 
@@ -74,6 +80,8 @@ def _get_source_list_collector_config(config: AppConfig, group: str, name: str) 
         for source in config.sources.subreddits:
             if _source_id(source.subreddit) == name:
                 return _reddit_source_to_collector_config(source)
+    if group == "house" and name == "ptr":
+        return _house_ptr_source_to_collector_config(config.sources.house_ptr)
     return None
 
 
@@ -99,6 +107,19 @@ def _reddit_source_to_collector_config(source: RedditSubredditSourceConfig) -> C
         trim=source.trim,
         include_comments=source.include_comments,
         comments_per_post=source.comments_per_post,
+    )
+
+
+def _house_ptr_source_to_collector_config(source: HousePtrSourceConfig) -> CollectorConfig:
+    return CollectorConfig(
+        kind=HOUSE_PTR_SOURCE_TYPE,
+        enabled=source.enabled,
+        year=source.year,
+        render_limit=source.render_limit,
+        download_concurrency=source.download_concurrency,
+        parse_concurrency=source.parse_concurrency,
+        zip_url_template=source.zip_url_template,
+        pdf_url_template=source.pdf_url_template,
     )
 
 

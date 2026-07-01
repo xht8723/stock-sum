@@ -40,7 +40,7 @@ def test_example_config_is_valid() -> None:
     assert config.llm.analysis_max_chars_per_chunk == 12000
     assert config.llm.analysis_max_concurrency == 5
     assert "default" in config.reports
-    assert config.reports["default"].collector_ids == ["x.aleabitoreddit", "reddit.wallstreetbets"]
+    assert config.reports["default"].collector_ids == ["x.aleabitoreddit", "reddit.wallstreetbets", "house.ptr"]
     assert config.sources.x_users[0].handle == "aleabitoreddit"
     assert config.sources.x_users[0].enabled is True
     assert config.sources.x_users[0].limit == 100
@@ -51,5 +51,10 @@ def test_example_config_is_valid() -> None:
     assert config.sources.subreddits[0].lookback_hours == 24
     assert config.sources.subreddits[0].include_comments is True
     assert config.sources.subreddits[0].comments_per_post == 10
+    assert config.sources.house_ptr.enabled is True
+    assert config.sources.house_ptr.year == 0
+    assert config.sources.house_ptr.render_limit == 20
+    assert config.sources.house_ptr.download_concurrency == 4
+    assert config.sources.house_ptr.parse_concurrency == 2
     assert config.collectors == {}
     assert config.delivery.email["primary"].password_env == "SMTP_PASSWORD"

@@ -10,7 +10,7 @@ from stock_sum.api.jobs import HttpJobManager, ReportJobOptions
 from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
-from stock_sum.storage.models import StoredXPost
+from stock_sum.storage.models import StoredHousePtrTradeRow, StoredXPost
 
 
 async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
@@ -78,7 +78,7 @@ async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
                 ],
             )
         ),
-        repository_factory=lambda: FakeRepository(with_social_data=False),
+        repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[]),
         llm_client_factory=lambda: llm,
     )
     job = manager.create_report_job("default", ReportJobOptions(mode="html"))
@@ -93,6 +93,27 @@ async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
     assert status.artifact_path is None
     assert llm.calls == 0
     assert status.warnings[0]["source_id"] == "x.missing"
+
+
+async def test_report_job_succeeds_with_house_only_data_and_skips_llm(tmp_path) -> None:
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[_house_row()]),
+        llm_client_factory=lambda: llm,
+    )
+    job = manager.create_report_job("default", ReportJobOptions(mode="text"))
+
+    await manager.run_report_job(job.job_id, ReportJobOptions(mode="text"))
+
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    assert status.status == "succeeded"
+    assert llm.calls == 0
+    artifact = Path(status.artifact_path or "").read_text(encoding="utf-8")
+    assert "OFFICIAL TRADING DISCLOSURES" in artifact
+    assert "Jane Doe" in artifact
 
 
 async def test_report_job_uses_recent_cache_and_rerenders_requested_mode(tmp_path) -> None:
@@ -413,8 +434,9 @@ class FakePipeline:
 
 
 class FakeRepository:
-    def __init__(self, *, with_social_data: bool) -> None:
+    def __init__(self, *, with_social_data: bool, house_rows=None) -> None:
         self.with_social_data = with_social_data
+        self.house_rows = house_rows or []
         self.x_analysis_rows = []
         self.reddit_post_analysis_rows = []
         self.reddit_comment_analysis_rows = []
@@ -446,6 +468,12 @@ class FakeRepository:
 
     async def read_reddit_posts(self, *, subreddits=None, since_posted_at=None, collector_id=None, profile=None, since=None, limit=50):
         return []
+
+    async def existing_house_ptr_doc_ids(self, *, year=None):
+        return set()
+
+    async def read_house_ptr_trades(self, *, limit=20):
+        return self.house_rows[:limit]
 
     async def start_llm_analysis_run(self, **kwargs):
         return None
@@ -536,6 +564,27 @@ class FakeRetentionService:
 
 def _successful_collection_result() -> PipelineCollectionResult:
     return PipelineCollectionResult(profile="default", runs=[], warnings=[])
+
+
+def _house_row() -> StoredHousePtrTradeRow:
+    return StoredHousePtrTradeRow(
+        doc_id="20024228",
+        year=2026,
+        name="Jane Doe",
+        status="Member",
+        state="CA",
+        filing_date="2026-06-30",
+        pdf_url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
+        table_index=0,
+        row_index=0,
+        asset="AAPL",
+        transaction_type="Purchase",
+        transaction_date="2026-06-20",
+        amount="$1,001 - $15,000",
+        raw_cells=["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"],
+        raw_metadata={},
+        collected_at="2026-06-30T00:00:00+00:00",
+    )
 
 
 def _test_config(tmp_path):
