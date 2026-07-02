@@ -132,12 +132,15 @@ class StoredHousePtrTradeRow:
     status: str | None
     state: str | None
     filing_date: str | None
+    filing_date_utc: str | None
     pdf_url: str | None
     table_index: int
     row_index: int
     asset: str | None
     transaction_type: str | None
     transaction_date: str | None
+    transaction_date_utc: str | None
+    transaction_action: str | None
     amount: str | None
     raw_cells: list[str]
     raw_metadata: dict[str, Any]

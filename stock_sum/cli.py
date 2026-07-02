@@ -370,7 +370,8 @@ def setup_init(
     console.print("Next steps:")
     console.print(f"1. Validate setup: stock-sum setup check --config {config} --env-file {env_file}")
     console.print(f"2. Start service: stock-sum daemon --config {config}")
-    console.print("3. Request report: POST /v1/reports/default/jobs or use the Redbot /report cog.")
+    console.print("3. Request social report: POST /v1/social-reports/default/jobs or use Redbot /socialreport.")
+    console.print("4. Request trading report: POST /v1/trading-reports/jobs or use Redbot /tradingreport.")
 
 
 @setup_app.command("check")
@@ -696,6 +697,7 @@ def report_render(
     input_path: Path = typer.Option(..., "--input", "-i", help="LLM summarize response JSON file."),
     output: Path = typer.Option(..., "--output", "-o", help="Rendered report output file."),
     mode: str = typer.Option("html", "--mode", help="Presentation mode: html, markdown, discord, or text."),
+    detail: str = typer.Option("minimum", "--detail", help="Social report detail: minimum, medium, or full."),
     title: str = typer.Option("Market Social Digest", "--title", help="Report title."),
 ) -> None:
     """Render an LLM response into a final presentation artifact."""
@@ -704,7 +706,7 @@ def report_render(
         response = json.loads(input_path.read_text(encoding="utf-8"))
         if not isinstance(response, dict):
             raise PresentationRenderError("Input response JSON must be an object.")
-        rendered = PresentationRenderer(title=title).render(response, mode=mode)
+        rendered = PresentationRenderer(title=title).render(response, mode=mode, detail=detail)
     except (OSError, ValueError, PresentationRenderError, StockSumError) as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
@@ -999,6 +1001,7 @@ def house_ptr_set(
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether House PTR can be collected."),
     year: int = typer.Option(0, "--year", min=0, help="Disclosure year, or 0 for current UTC year."),
     render_limit: int = typer.Option(20, "--render-limit", min=1, help="Number of recent trade rows to render."),
+    refresh_ttl_seconds: int = typer.Option(21600, "--refresh-ttl-seconds", min=0, help="Seconds before House PTR data is considered stale."),
     download_concurrency: int = typer.Option(4, "--download-concurrency", min=1, help="Concurrent PDF downloads."),
     parse_concurrency: int = typer.Option(2, "--parse-concurrency", min=1, help="Concurrent PDF table parse jobs."),
     zip_url_template: str = typer.Option(
@@ -1019,6 +1022,7 @@ def house_ptr_set(
             enabled=enabled,
             year=year or None,
             render_limit=render_limit,
+            refresh_ttl_seconds=refresh_ttl_seconds,
             download_concurrency=download_concurrency,
             parse_concurrency=parse_concurrency,
             zip_url_template=zip_url_template,

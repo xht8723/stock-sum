@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from uuid import uuid4
 import hashlib
@@ -11,6 +11,7 @@ from typing import Any
 
 import aiosqlite
 
+from stock_sum.collectors.api.house import normalize_house_date, normalize_house_name, normalize_house_transaction_action
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 from stock_sum.storage.models import (
@@ -156,9 +157,16 @@ CREATE TABLE IF NOT EXISTS raw_house_ptr_filings (
     doc_id TEXT PRIMARY KEY,
     year INTEGER NOT NULL,
     name TEXT,
+    prefix TEXT,
+    first_name TEXT,
+    last_name TEXT,
+    suffix TEXT,
+    display_name TEXT,
+    name_normalized TEXT,
     status TEXT,
     state TEXT,
     filing_date TEXT,
+    filing_date_utc TEXT,
     pdf_url TEXT,
     raw_xml_json TEXT NOT NULL,
     tables_json TEXT NOT NULL,
@@ -174,6 +182,8 @@ CREATE TABLE IF NOT EXISTS raw_house_ptr_trade_rows (
     asset TEXT,
     transaction_type TEXT,
     transaction_date TEXT,
+    transaction_date_utc TEXT,
+    transaction_action TEXT,
     amount TEXT,
     raw_cells_json TEXT NOT NULL,
     raw_json TEXT NOT NULL,
@@ -182,6 +192,12 @@ CREATE TABLE IF NOT EXISTS raw_house_ptr_trade_rows (
 
 CREATE INDEX IF NOT EXISTS idx_house_ptr_filings_recent
 ON raw_house_ptr_filings (filing_date DESC, collected_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_house_ptr_filings_name
+ON raw_house_ptr_filings (name_normalized);
+
+CREATE INDEX IF NOT EXISTS idx_house_ptr_trade_rows_transaction_date
+ON raw_house_ptr_trade_rows (transaction_date_utc);
 
 CREATE TABLE IF NOT EXISTS llm_analysis_runs (
     analysis_run_id TEXT PRIMARY KEY,
@@ -264,6 +280,114 @@ ON llm_reddit_post_analyses (profile, subreddit);
 """
 
 
+HOUSE_PTR_FILING_COLUMNS = {
+    "prefix": "TEXT",
+    "first_name": "TEXT",
+    "last_name": "TEXT",
+    "suffix": "TEXT",
+    "display_name": "TEXT",
+    "name_normalized": "TEXT",
+    "filing_date_utc": "TEXT",
+}
+
+HOUSE_PTR_TRADE_COLUMNS = {
+    "transaction_date_utc": "TEXT",
+    "transaction_action": "TEXT",
+}
+
+
+async def _ensure_schema_updates(db: aiosqlite.Connection) -> None:
+    """Apply additive schema updates for existing SQLite databases."""
+
+    await _ensure_columns(db, "raw_house_ptr_filings", HOUSE_PTR_FILING_COLUMNS)
+    await _ensure_columns(db, "raw_house_ptr_trade_rows", HOUSE_PTR_TRADE_COLUMNS)
+
+
+async def _ensure_columns(db: aiosqlite.Connection, table: str, columns: dict[str, str]) -> None:
+    cursor = await db.execute(f"PRAGMA table_info({table})")
+    try:
+        existing = {str(row[1]) for row in await cursor.fetchall()}
+    finally:
+        await cursor.close()
+    for name, definition in columns.items():
+        if name not in existing:
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+async def _backfill_house_ptr_normalized_columns(db: aiosqlite.Connection) -> None:
+    """Best-effort backfill for House PTR normalized query columns."""
+
+    cursor = await db.execute(
+        """
+        SELECT doc_id, name, raw_xml_json, filing_date
+        FROM raw_house_ptr_filings
+        WHERE name_normalized IS NULL OR display_name IS NULL OR filing_date_utc IS NULL
+        """
+    )
+    try:
+        filing_rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+    for doc_id, name, raw_xml_json, filing_date in filing_rows:
+        raw = _json_obj(raw_xml_json)
+        prefix = raw.get("prefix")
+        first_name = raw.get("first")
+        last_name = raw.get("last")
+        suffix = raw.get("suffix")
+        display_name = name or " ".join(part for part in (prefix, first_name, last_name, suffix) if part) or None
+        await db.execute(
+            """
+            UPDATE raw_house_ptr_filings
+            SET prefix = COALESCE(prefix, ?),
+                first_name = COALESCE(first_name, ?),
+                last_name = COALESCE(last_name, ?),
+                suffix = COALESCE(suffix, ?),
+                display_name = COALESCE(display_name, ?),
+                name_normalized = COALESCE(name_normalized, ?),
+                filing_date_utc = COALESCE(filing_date_utc, ?)
+            WHERE doc_id = ?
+            """,
+            (
+                prefix,
+                first_name,
+                last_name,
+                suffix,
+                display_name,
+                normalize_house_name(display_name),
+                normalize_house_date(filing_date),
+                doc_id,
+            ),
+        )
+
+    cursor = await db.execute(
+        """
+        SELECT doc_id, table_index, row_index, transaction_type, transaction_date
+        FROM raw_house_ptr_trade_rows
+        WHERE transaction_date_utc IS NULL OR transaction_action IS NULL
+        """
+    )
+    try:
+        trade_rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+    for doc_id, table_index, row_index, transaction_type, transaction_date in trade_rows:
+        await db.execute(
+            """
+            UPDATE raw_house_ptr_trade_rows
+            SET transaction_date_utc = COALESCE(transaction_date_utc, ?),
+                transaction_action = COALESCE(transaction_action, ?)
+            WHERE doc_id = ? AND table_index = ? AND row_index = ?
+            """,
+            (
+                normalize_house_date(transaction_date),
+                normalize_house_transaction_action(transaction_type),
+                doc_id,
+                table_index,
+                row_index,
+            ),
+        )
+
+
 class SQLiteStorageRepository:
     """SQLite repository for collection runs and source-specific raw items."""
 
@@ -276,6 +400,8 @@ class SQLiteStorageRepository:
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.sqlite_path) as db:
             await db.executescript(SCHEMA_SQL)
+            await _ensure_schema_updates(db)
+            await _backfill_house_ptr_normalized_columns(db)
             await db.commit()
 
     async def start_collection_run(
@@ -755,22 +881,49 @@ class SQLiteStorageRepository:
                 await cursor.close()
         return {str(row[0]) for row in rows}
 
-    async def read_house_ptr_trades(self, *, limit: int = 20) -> list[StoredHousePtrTradeRow]:
-        """Read recent House PTR trade rows joined with filing metadata."""
+    async def read_house_ptr_trades(
+        self,
+        *,
+        name_contains: str | None = None,
+        transaction_start: datetime | None = None,
+        transaction_end: datetime | None = None,
+        limit: int = 20,
+    ) -> list[StoredHousePtrTradeRow]:
+        """Read House PTR trade rows joined with filing metadata."""
 
         await self.initialize()
         query = """
-            SELECT f.doc_id, f.year, f.name, f.status, f.state, f.filing_date, f.pdf_url,
+            SELECT f.doc_id, f.year, COALESCE(f.display_name, f.name), f.status, f.state,
+                   f.filing_date, f.filing_date_utc, f.pdf_url,
                    r.table_index, r.row_index, r.asset, r.transaction_type, r.transaction_date,
-                   r.amount, r.raw_cells_json, r.raw_json, f.collected_at
+                   r.transaction_date_utc, r.transaction_action, r.amount, r.raw_cells_json,
+                   r.raw_json, f.collected_at
             FROM raw_house_ptr_trade_rows r
             JOIN raw_house_ptr_filings f ON f.doc_id = r.doc_id
-            ORDER BY COALESCE(f.filing_date, f.collected_at) DESC, f.collected_at DESC,
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+        normalized_name = normalize_house_name(name_contains)
+        if normalized_name:
+            conditions.append("f.name_normalized LIKE ?")
+            params.append(f"%{normalized_name}%")
+        if transaction_start is not None:
+            conditions.append("r.transaction_date_utc >= ?")
+            params.append(_datetime_param(transaction_start))
+        if transaction_end is not None:
+            conditions.append("r.transaction_date_utc <= ?")
+            params.append(_datetime_param(transaction_end, end_of_day=True))
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += """
+            ORDER BY COALESCE(r.transaction_date_utc, f.filing_date_utc, f.collected_at) DESC,
+                     f.collected_at DESC,
                      f.doc_id DESC, r.table_index ASC, r.row_index ASC
             LIMIT ?
         """
+        params.append(limit)
         async with aiosqlite.connect(self.sqlite_path) as db:
-            cursor = await db.execute(query, (limit,))
+            cursor = await db.execute(query, params)
             try:
                 rows = await cursor.fetchall()
             finally:
@@ -783,16 +936,19 @@ class SQLiteStorageRepository:
                 status=row[3],
                 state=row[4],
                 filing_date=row[5],
-                pdf_url=row[6],
-                table_index=row[7],
-                row_index=row[8],
-                asset=row[9],
-                transaction_type=row[10],
-                transaction_date=row[11],
-                amount=row[12],
-                raw_cells=_json_list(row[13]),
-                raw_metadata=_json_obj(row[14]),
-                collected_at=row[15],
+                filing_date_utc=row[6],
+                pdf_url=row[7],
+                table_index=row[8],
+                row_index=row[9],
+                asset=row[10],
+                transaction_type=row[11],
+                transaction_date=row[12],
+                transaction_date_utc=row[13],
+                transaction_action=row[14],
+                amount=row[15],
+                raw_cells=_json_list(row[16]),
+                raw_metadata=_json_obj(row[17]),
+                collected_at=row[18],
             )
             for row in rows
         ]
@@ -831,6 +987,14 @@ def _utc_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _datetime_param(value: datetime | date, *, end_of_day: bool = False) -> str:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.combine(value, time.max if end_of_day else time.min)
+    return _utc_datetime(parsed).isoformat()
 
 
 def _content_hash(item: RawItem) -> str:
@@ -1300,18 +1464,27 @@ async def _upsert_house_ptr_filing(db: aiosqlite.Connection, row: dict[str, Any]
     await db.execute(
         """
         INSERT INTO raw_house_ptr_filings (
-            doc_id, year, name, status, state, filing_date, pdf_url, raw_xml_json,
-            tables_json, extraction_status, extraction_error, collected_at
+            doc_id, year, name, prefix, first_name, last_name, suffix, display_name,
+            name_normalized, status, state, filing_date, filing_date_utc, pdf_url,
+            raw_xml_json, tables_json, extraction_status, extraction_error, collected_at
         ) VALUES (
-            :doc_id, :year, :name, :status, :state, :filing_date, :pdf_url, :raw_xml_json,
-            :tables_json, :extraction_status, :extraction_error, :collected_at
+            :doc_id, :year, :name, :prefix, :first_name, :last_name, :suffix, :display_name,
+            :name_normalized, :status, :state, :filing_date, :filing_date_utc, :pdf_url,
+            :raw_xml_json, :tables_json, :extraction_status, :extraction_error, :collected_at
         )
         ON CONFLICT (doc_id) DO UPDATE SET
             year = excluded.year,
             name = excluded.name,
+            prefix = excluded.prefix,
+            first_name = excluded.first_name,
+            last_name = excluded.last_name,
+            suffix = excluded.suffix,
+            display_name = excluded.display_name,
+            name_normalized = excluded.name_normalized,
             status = excluded.status,
             state = excluded.state,
             filing_date = excluded.filing_date,
+            filing_date_utc = excluded.filing_date_utc,
             pdf_url = excluded.pdf_url,
             raw_xml_json = excluded.raw_xml_json,
             tables_json = excluded.tables_json,
@@ -1332,15 +1505,17 @@ async def _upsert_house_ptr_trade_row(db: aiosqlite.Connection, row: dict[str, A
         """
         INSERT INTO raw_house_ptr_trade_rows (
             doc_id, table_index, row_index, asset, transaction_type, transaction_date,
-            amount, raw_cells_json, raw_json
+            transaction_date_utc, transaction_action, amount, raw_cells_json, raw_json
         ) VALUES (
             :doc_id, :table_index, :row_index, :asset, :transaction_type, :transaction_date,
-            :amount, :raw_cells_json, :raw_json
+            :transaction_date_utc, :transaction_action, :amount, :raw_cells_json, :raw_json
         )
         ON CONFLICT (doc_id, table_index, row_index) DO UPDATE SET
             asset = excluded.asset,
             transaction_type = excluded.transaction_type,
             transaction_date = excluded.transaction_date,
+            transaction_date_utc = excluded.transaction_date_utc,
+            transaction_action = excluded.transaction_action,
             amount = excluded.amount,
             raw_cells_json = excluded.raw_cells_json,
             raw_json = excluded.raw_json

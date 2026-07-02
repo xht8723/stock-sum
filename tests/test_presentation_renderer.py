@@ -152,7 +152,7 @@ def test_html_renderer_outputs_all_sections_and_escapes_html() -> None:
     response = _response()
     response["summary"]["x_signals"][0]["claim"] = "<script>alert(1)</script>"
 
-    rendered = PresentationRenderer().render(response, mode="html")
+    rendered = PresentationRenderer().render(response, mode="html", detail="full")
 
     assert "<!doctype html>" in rendered
     assert "Social Media Sentiment" in rendered
@@ -174,7 +174,7 @@ def test_html_renderer_outputs_all_sections_and_escapes_html() -> None:
 
 
 def test_markdown_renderer_preserves_refs_and_urls() -> None:
-    rendered = PresentationRenderer().render(_response(), mode="markdown")
+    rendered = PresentationRenderer().render(_response(), mode="markdown", detail="full")
 
     assert "# Market Social Digest" in rendered
     assert "## Social Media Sentiment" in rendered
@@ -191,7 +191,7 @@ def test_markdown_renderer_preserves_refs_and_urls() -> None:
 
 
 def test_discord_markdown_renderer_is_compact_and_clickable() -> None:
-    rendered = PresentationRenderer().render(_grouped_response(), mode="discord")
+    rendered = PresentationRenderer().render(_grouped_response(), mode="discord", detail="full")
 
     assert rendered.startswith("**Market Social Digest**")
     assert "**Social Media Sentiment**" in rendered
@@ -209,7 +209,7 @@ def test_discord_markdown_renderer_is_compact_and_clickable() -> None:
 
 
 def test_text_renderer_preserves_refs_and_urls() -> None:
-    rendered = PresentationRenderer().render(_response(), mode="text")
+    rendered = PresentationRenderer().render(_response(), mode="text", detail="full")
 
     assert "MARKET SOCIAL DIGEST" in rendered
     assert "SOCIAL MEDIA SENTIMENT" in rendered
@@ -228,14 +228,14 @@ def test_renderer_handles_missing_structured_summary_with_summary_text() -> None
 
     rendered = PresentationRenderer().render(response, mode="text")
 
-    assert "No social signals." in rendered
+    assert "No social signals at this detail level." in rendered
 
 
 def test_renderer_handles_missing_sections() -> None:
     rendered = PresentationRenderer().render({"summary": {"executive_summary": ["only summary"]}}, mode="html")
 
     assert "only summary" not in rendered
-    assert "No social signals." in rendered
+    assert "No social signals at this detail level." in rendered
 
 
 def test_renderer_rejects_unknown_mode() -> None:
@@ -243,8 +243,67 @@ def test_renderer_rejects_unknown_mode() -> None:
         PresentationRenderer().render(_response(), mode="pdf")
 
 
+def test_renderer_detail_minimum_includes_high_only() -> None:
+    response = _response()
+    response["summary"]["x_signals"][0]["confidence"] = "high"
+
+    rendered = PresentationRenderer().render(response, mode="markdown")
+
+    assert "### High Importance" in rendered
+    assert "X claim" in rendered
+    assert "Reddit claim" not in rendered
+    assert "### Medium Importance" not in rendered
+    assert "### Low Importance" not in rendered
+
+
+def test_renderer_detail_medium_includes_high_and_medium() -> None:
+    response = _response()
+    response["summary"]["x_signals"][0]["confidence"] = "high"
+
+    rendered = PresentationRenderer().render(response, mode="discord", detail="medium")
+
+    assert "__High Importance__" in rendered
+    assert "__Medium Importance__" in rendered
+    assert "X claim" in rendered
+    assert "Reddit claim" in rendered
+    assert "__Low Importance__" not in rendered
+
+
+def test_renderer_detail_full_includes_all_importance_levels() -> None:
+    response = _response()
+    response["summary"]["x_signals"].append(
+        {
+            "source_ref": "x2",
+            "claim": "High claim",
+            "confidence": "high",
+            "urls": ["https://x.com/example/status/2"],
+        }
+    )
+
+    rendered = PresentationRenderer().render(response, mode="text", detail="full")
+
+    assert "HIGH IMPORTANCE" in rendered
+    assert "MEDIUM IMPORTANCE" in rendered
+    assert "LOW IMPORTANCE" in rendered
+    assert "High claim" in rendered
+    assert "Reddit claim" in rendered
+    assert "X claim" in rendered
+
+
+def test_renderer_minimum_empty_state_when_no_high_importance_items() -> None:
+    rendered = PresentationRenderer().render(_grouped_response(), mode="html")
+
+    assert "No social signals at this detail level." in rendered
+    assert "NBIS growth post" not in rendered
+
+
+def test_renderer_rejects_unknown_detail() -> None:
+    with pytest.raises(PresentationRenderError):
+        PresentationRenderer().render(_response(), mode="html", detail="verbose")
+
+
 def test_grouped_markdown_renderer_uses_requested_heading_layout() -> None:
-    rendered = PresentationRenderer().render(_grouped_response(), mode="markdown")
+    rendered = PresentationRenderer().render(_grouped_response(), mode="markdown", detail="full")
 
     assert rendered.startswith("# Market Social Digest")
     assert "## Social Media Sentiment" in rendered
@@ -266,7 +325,7 @@ def test_grouped_markdown_renderer_uses_requested_heading_layout() -> None:
 
 
 def test_discord_reddit_details_are_not_indented_or_duplicated() -> None:
-    rendered = PresentationRenderer().render(_grouped_response(), mode="discord")
+    rendered = PresentationRenderer().render(_grouped_response(), mode="discord", detail="full")
 
     assert "\n**Comments:** Comments mostly agree with jokes." in rendered
     assert "\n**Stats:** `bullish 1` · `bearish 2` · `mixed 0` · `neutral 1` · `unclear 0`" in rendered
@@ -284,14 +343,14 @@ def test_discord_count_only_comments_are_not_duplicated() -> None:
     response = _grouped_response()
     response["summary"]["reddit_report"]["posts"][0]["comments_sentiment"] = "bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0"
 
-    rendered = PresentationRenderer().render(response, mode="discord")
+    rendered = PresentationRenderer().render(response, mode="discord", detail="full")
 
     assert "\n**Comments:** bullish: 1" not in rendered
     assert "\n**Stats:** `bullish 1` · `bearish 2` · `mixed 0` · `neutral 1` · `unclear 0`" in rendered
 
 
 def test_grouped_html_renderer_uses_user_and_post_sections() -> None:
-    rendered = PresentationRenderer().render(_grouped_response(), mode="html")
+    rendered = PresentationRenderer().render(_grouped_response(), mode="html", detail="full")
 
     assert "Social Media Sentiment" in rendered
     assert "Medium Importance" in rendered
@@ -309,7 +368,7 @@ def test_grouped_html_renderer_uses_user_and_post_sections() -> None:
 
 
 def test_grouped_text_renderer_is_social_only() -> None:
-    rendered = PresentationRenderer().render(_grouped_response(), mode="text")
+    rendered = PresentationRenderer().render(_grouped_response(), mode="text", detail="full")
 
     assert "TRADING INFO" not in rendered
     assert "NBIS growth post" in rendered
@@ -323,9 +382,9 @@ def test_count_only_comments_are_not_duplicated_in_all_non_discord_modes() -> No
     response = _grouped_response()
     response["summary"]["reddit_report"]["posts"][0]["comments_sentiment"] = "bullish: 1, bearish: 2, mixed: 0, neutral: 1, unclear: 0"
 
-    markdown = PresentationRenderer().render(response, mode="markdown")
-    html = PresentationRenderer().render(response, mode="html")
-    text = PresentationRenderer().render(response, mode="text")
+    markdown = PresentationRenderer().render(response, mode="markdown", detail="full")
+    html = PresentationRenderer().render(response, mode="html", detail="full")
+    text = PresentationRenderer().render(response, mode="text", detail="full")
 
     assert "- **comments_sentiment**: bullish: 1" not in markdown
     assert "Comments Sentiment" not in html
@@ -362,10 +421,10 @@ def test_renderer_outputs_pipeline_warnings_in_all_modes() -> None:
 def test_renderer_outputs_house_ptr_disclosures_in_all_modes() -> None:
     response = _house_response()
 
-    html = PresentationRenderer().render(response, mode="html")
-    markdown = PresentationRenderer().render(response, mode="markdown")
-    discord = PresentationRenderer().render(response, mode="discord")
-    text = PresentationRenderer().render(response, mode="text")
+    html = PresentationRenderer().render_trading(response, mode="html")
+    markdown = PresentationRenderer().render_trading(response, mode="markdown")
+    discord = PresentationRenderer().render_trading(response, mode="discord")
+    text = PresentationRenderer().render_trading(response, mode="text")
 
     assert "Official Trading Disclosures" in html
     assert "<td>Jane Doe</td>" in html

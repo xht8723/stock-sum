@@ -1,6 +1,6 @@
 {
   "author": ["stock-sum"],
-  "description": "Request stock-sum reports through a Discord slash command.",
+  "description": "Request stock-sum social and trading reports through Discord slash commands.",
   "install_msg": "Make sure stock-sum daemon is running, optionally set STOCK_SUM_BASE_URL for the Redbot process, then sync slash commands.",
   "short": "Slash command bridge for stock-sum reports.",
   "name": "stocksum_report",

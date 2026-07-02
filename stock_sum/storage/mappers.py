@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 import json
 
-from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
+from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE, normalize_house_date, normalize_house_name, normalize_house_transaction_action
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
 from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import RawItem
@@ -162,6 +162,8 @@ def _map_house_ptr_filing(item: RawItem) -> MappedRawItem:
                 "asset": fields.get("asset"),
                 "transaction_type": fields.get("transaction_type"),
                 "transaction_date": fields.get("transaction_date"),
+                "transaction_date_utc": normalize_house_date(fields.get("transaction_date")),
+                "transaction_action": normalize_house_transaction_action(fields.get("transaction_type")),
                 "amount": fields.get("amount"),
                 "raw_cells_json": raw_json(row.get("cells", [])),
                 "raw_json": raw_json(row),
@@ -174,9 +176,16 @@ def _map_house_ptr_filing(item: RawItem) -> MappedRawItem:
             "doc_id": item.source_id,
             "year": item.metadata.get("year"),
             "name": item.metadata.get("name"),
+            "prefix": item.metadata.get("prefix"),
+            "first_name": item.metadata.get("first_name"),
+            "last_name": item.metadata.get("last_name"),
+            "suffix": item.metadata.get("suffix"),
+            "display_name": item.metadata.get("display_name") or item.metadata.get("name"),
+            "name_normalized": item.metadata.get("name_normalized") or normalize_house_name(item.metadata.get("display_name") or item.metadata.get("name")),
             "status": item.metadata.get("status"),
             "state": item.metadata.get("state"),
             "filing_date": item.metadata.get("filing_date"),
+            "filing_date_utc": item.metadata.get("filing_date_utc") or normalize_house_date(item.metadata.get("filing_date")),
             "pdf_url": item.metadata.get("pdf_url") or item.url,
             "raw_xml_json": raw_json(item.metadata.get("raw_xml", {})),
             "tables_json": raw_json(item.metadata.get("tables", [])),

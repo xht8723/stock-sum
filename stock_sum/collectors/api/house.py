@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
@@ -31,11 +31,18 @@ class HousePtrFiling:
     doc_id: str
     year: int
     filing_type: str
-    name: str | None
-    status: str | None
-    state: str | None
-    filing_date: str | None
-    raw: dict[str, Any]
+    name: str | None = None
+    prefix: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    suffix: str | None = None
+    display_name: str | None = None
+    name_normalized: str | None = None
+    status: str | None = None
+    state: str | None = None
+    filing_date: str | None = None
+    filing_date_utc: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 class HousePtrDisclosureCollector:
@@ -157,14 +164,32 @@ def parse_house_filing_xml(content: bytes, *, year: int) -> HousePtrFiling | Non
     filing_type = _field(fields, "filingtype", "filing_type", "type") or ""
     if not doc_id:
         return None
+    prefix = _field(fields, "prefix")
+    first_name = _field(fields, "first", "firstname", "first_name")
+    last_name = _field(fields, "last", "lastname", "last_name")
+    suffix = _field(fields, "suffix")
+    display_name = _field(fields, "name", "filername", "membername", "candidate_name") or compose_house_display_name(
+        prefix=prefix,
+        first_name=first_name,
+        last_name=last_name,
+        suffix=suffix,
+    )
+    filing_date = _field(fields, "filingdate", "date", "datefiled")
     return HousePtrFiling(
         doc_id=doc_id,
         year=year,
         filing_type=filing_type,
-        name=_field(fields, "name", "filername", "membername", "candidate_name") or _compose_name(fields),
+        name=display_name,
+        prefix=prefix,
+        first_name=first_name,
+        last_name=last_name,
+        suffix=suffix,
+        display_name=display_name,
+        name_normalized=normalize_house_name(display_name),
         status=_field(fields, "status", "filerstatus", "memberstatus"),
         state=_field(fields, "state", "statedst", "state_dst", "filingstate"),
-        filing_date=_field(fields, "filingdate", "date", "datefiled"),
+        filing_date=filing_date,
+        filing_date_utc=normalize_house_date(filing_date),
         raw=fields,
     )
 
@@ -241,9 +266,16 @@ def house_ptr_raw_item(
             "doc_id": filing.doc_id,
             "year": filing.year,
             "name": filing.name,
+            "prefix": filing.prefix,
+            "first_name": filing.first_name,
+            "last_name": filing.last_name,
+            "suffix": filing.suffix,
+            "display_name": filing.display_name,
+            "name_normalized": filing.name_normalized,
             "status": filing.status,
             "state": filing.state,
             "filing_date": filing.filing_date,
+            "filing_date_utc": filing.filing_date_utc,
             "pdf_url": pdf_url,
             "raw_xml": filing.raw,
             "tables": tables,
@@ -279,15 +311,69 @@ def _field(fields: Mapping[str, str], *names: str) -> str | None:
     return None
 
 
-def _compose_name(fields: Mapping[str, str]) -> str | None:
-    parts = [
-        _field(fields, "prefix"),
-        _field(fields, "first", "firstname", "first_name"),
-        _field(fields, "last", "lastname", "last_name"),
-        _field(fields, "suffix"),
-    ]
+def compose_house_display_name(
+    *,
+    prefix: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    suffix: str | None = None,
+) -> str | None:
+    """Compose a display name from official House XML name fields."""
+
+    parts = [prefix, first_name, last_name, suffix]
     value = " ".join(part for part in parts if part)
     return value or None
+
+
+def normalize_house_name(value: str | None) -> str | None:
+    """Normalize a filer name for fuzzy search."""
+
+    if not value:
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    return re.sub(r"\s+", " ", normalized) or None
+
+
+def normalize_house_date(value: str | None) -> str | None:
+    """Normalize common House date strings to UTC ISO date-time text."""
+
+    if not value:
+        return None
+    text = value.strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+            return parsed.isoformat()
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.isoformat()
+
+
+def normalize_house_transaction_action(value: str | None) -> str | None:
+    """Normalize House transaction codes into queryable action values."""
+
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    if normalized.startswith("p"):
+        return "purchase"
+    if normalized.startswith("s"):
+        if "partial" in normalized:
+            return "sell_partial"
+        return "sell"
+    if normalized.startswith("purchase"):
+        return "purchase"
+    if normalized.startswith("sale") or normalized.startswith("sell"):
+        return "sell"
+    return normalized or None
 
 
 def _local_name(tag: str) -> str:

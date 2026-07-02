@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
@@ -12,6 +12,8 @@ import hashlib
 import json
 
 from stock_sum.config.models import AppConfig
+from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
+from stock_sum.collectors.factory import source_type_for_collector_id
 from stock_sum.core.context import RuntimeContext
 from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
 from stock_sum.core.pipeline import ReportPipeline
@@ -24,7 +26,7 @@ from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.storage.sqlite import SQLiteStorageRepository
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
-JobKind = Literal["report", "collect"]
+JobKind = Literal["report", "trading_report", "collect"]
 ReportMode = Literal["html", "markdown", "discord", "text", "json"]
 
 
@@ -33,11 +35,26 @@ class ReportJobOptions:
     """Options for a full report job."""
 
     mode: ReportMode = "html"
+    detail: Literal["minimum", "medium", "full"] = "minimum"
     download_images: bool = False
     instructions: str | None = None
     title: str = "Market Social Digest"
     max_images_per_post: int = 3
     max_images_total: int = 20
+
+
+@dataclass(frozen=True)
+class TradingReportJobOptions:
+    """Options for a House PTR trading disclosure report job."""
+
+    mode: ReportMode = "html"
+    name: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    days: int | None = None
+    limit: int = 20
+    title: str = "Official Trading Disclosures"
+    force_refresh: bool = False
 
 
 @dataclass
@@ -111,7 +128,7 @@ class HttpJobManager:
         self._retention_service_factory = retention_service_factory or (lambda: DataRetentionService(config))
 
     def create_report_job(self, profile: str, options: ReportJobOptions) -> HttpJobRecord:
-        """Create a queued full report job."""
+        """Create a queued social-media report job."""
 
         self._validate_profile(profile)
         record = self._new_job(
@@ -119,6 +136,18 @@ class HttpJobManager:
             profile=profile,
             mode=options.mode,
             cache_key=self._report_cache_key(profile, options),
+        )
+        self._save(record)
+        return record
+
+    def create_trading_report_job(self, options: TradingReportJobOptions) -> HttpJobRecord:
+        """Create a queued House PTR trading disclosure report job."""
+
+        _validate_trading_filters(options)
+        record = self._new_job(
+            kind="trading_report",
+            profile="trading",
+            mode=options.mode,
         )
         self._save(record)
         return record
@@ -145,7 +174,7 @@ class HttpJobManager:
         return record
 
     async def run_report_job(self, job_id: str, options: ReportJobOptions) -> None:
-        """Run collection, payload assembly, LLM summarization, and rendering."""
+        """Run social collection, payload assembly, LLM summarization, and rendering."""
 
         is_inflight_leader = False
         cache_key: str | None = None
@@ -165,7 +194,10 @@ class HttpJobManager:
                 return
 
             self._update(job_id, phase="collecting")
-            collection_result = await self._pipeline_factory().run_report(job.profile)
+            collection_result = await self._pipeline_factory().run_report(
+                job.profile,
+                collector_ids=_social_collector_ids(self.config, job.profile),
+            )
             warnings = list(collection_result.warnings)
             warning_data = _warnings_to_dicts(warnings)
             self._update(
@@ -179,40 +211,33 @@ class HttpJobManager:
             downloader = MediaDownloader(self.config.media, repository) if options.download_images else None
             builder = SummaryInputBuilder(config=self.config, repository=repository, downloader=downloader)
             summary_input = await builder.build(profile=job.profile, download_images=options.download_images)
-            house_ptr_rows = await repository.read_house_ptr_trades(limit=_house_ptr_render_limit(self.config))
             has_social_data = _summary_input_has_social_data(summary_input)
-            if not has_social_data and not house_ptr_rows:
+            if not has_social_data:
                 raise RuntimeError(_no_social_data_message(collection_result))
-            if has_social_data:
-                payload_data = summary_input.to_dict(
-                    mode="compact",
-                    max_images_per_post=options.max_images_per_post,
-                    max_images_total=options.max_images_total,
-                )
+            payload_data = summary_input.to_dict(
+                mode="compact",
+                max_images_per_post=options.max_images_per_post,
+                max_images_total=options.max_images_total,
+            )
 
-                self._update(job_id, phase="analyzing")
-                analysis = await LLMAnalysisService(
-                    config=self.config,
-                    repository=repository,
-                    llm_client=self._llm_client_factory(),
-                ).analyze(
-                    summary_input,
-                    instructions=options.instructions,
-                    max_images_per_post=options.max_images_per_post,
-                    max_images_total=options.max_images_total,
-                )
-                warnings.extend(analysis.warnings)
-                response_data = _analysis_response_data(
-                    profile=job.profile,
-                    provider=self.config.llm.provider,
-                    analysis=analysis,
-                    input_media=payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
-                )
-            else:
-                response_data = _house_only_response_data(profile=job.profile, provider=self.config.llm.provider)
-            response_data["house_ptr"] = _house_ptr_rows_to_dicts(house_ptr_rows)
-            if isinstance(response_data.get("summary"), dict):
-                response_data["summary"]["house_ptr"] = response_data["house_ptr"]
+            self._update(job_id, phase="analyzing")
+            analysis = await LLMAnalysisService(
+                config=self.config,
+                repository=repository,
+                llm_client=self._llm_client_factory(),
+            ).analyze(
+                summary_input,
+                instructions=options.instructions,
+                max_images_per_post=options.max_images_per_post,
+                max_images_total=options.max_images_total,
+            )
+            warnings.extend(analysis.warnings)
+            response_data = _analysis_response_data(
+                profile=job.profile,
+                provider=self.config.llm.provider,
+                analysis=analysis,
+                input_media=payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
+            )
 
             warning_data = _warnings_to_dicts(warnings)
             response_data["pipeline_warnings"] = warning_data
@@ -237,6 +262,91 @@ class HttpJobManager:
         finally:
             if is_inflight_leader and cache_key is not None:
                 await self._release_inflight_report(cache_key, job_id)
+            await self._run_retention(job_id)
+
+    async def run_trading_report_job(self, job_id: str, options: TradingReportJobOptions) -> None:
+        """Run a House PTR trading disclosure report without LLM analysis."""
+
+        try:
+            _validate_trading_filters(options)
+            self._mark_running(job_id, phase="refresh_check")
+            repository = self._repository_factory()
+            warnings: list[PipelineSectionWarning] = []
+            collection_result: PipelineCollectionResult | None = None
+
+            if self.config.sources.house_ptr.enabled:
+                if options.force_refresh or await self._house_ptr_refresh_needed(repository):
+                    self._update(job_id, phase="refreshing_house_ptr")
+                    run = await self._pipeline_factory().collect_collector(
+                        "house.ptr",
+                        profile="trading",
+                        raise_on_error=False,
+                    )
+                    collection_result = PipelineCollectionResult(profile="trading", runs=[run], warnings=list(run.warnings))
+                    warnings.extend(run.warnings)
+                    if run.status == "failed":
+                        warnings.append(
+                            PipelineSectionWarning(
+                                section="house_ptr",
+                                source_id="house.ptr",
+                                phase="refreshing",
+                                message=run.error or "House PTR refresh failed.",
+                            )
+                        )
+            else:
+                warnings.append(
+                    PipelineSectionWarning(
+                        section="house_ptr",
+                        source_id="house.ptr",
+                        phase="refreshing",
+                        message="House PTR source is disabled; using existing SQLite data only.",
+                    )
+                )
+
+            self._update(job_id, phase="querying")
+            transaction_start, transaction_end = _trading_date_window(options)
+            rows = await repository.read_house_ptr_trades(
+                name_contains=options.name,
+                transaction_start=transaction_start,
+                transaction_end=transaction_end,
+                limit=min(max(options.limit, 1), 100),
+            )
+            if not rows:
+                message = "No House PTR trade rows matched the trading report filters."
+                if warnings:
+                    message += " Refresh warnings: " + "; ".join(warning.message for warning in warnings)
+                raise RuntimeError(message)
+
+            warning_data = _warnings_to_dicts(warnings)
+            response_data = {
+                "report_type": "trading",
+                "summary": {"house_ptr": _house_ptr_rows_to_dicts(rows)},
+                "house_ptr": _house_ptr_rows_to_dicts(rows),
+                "filters": _trading_filter_data(options, transaction_start, transaction_end),
+                "pipeline_warnings": warning_data,
+                "failed_sections": warning_data,
+            }
+            summary_path = self._job_dir(job_id) / "summary.json"
+            self._write_json(summary_path, response_data)
+            self._update(
+                job_id,
+                phase="rendering",
+                summary_path=str(summary_path),
+                warnings=warning_data,
+                collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+            )
+            artifact_path, media_type = self._write_trading_artifact(job_id, response_data, options)
+            self._mark_succeeded(
+                job_id,
+                artifact_path=str(artifact_path),
+                artifact_media_type=media_type,
+                summary_path=str(summary_path),
+                warnings=warning_data,
+                collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+            )
+        except Exception as exc:
+            self._mark_failed(job_id, str(exc))
+        finally:
             await self._run_retention(job_id)
 
     async def run_collect_job(self, job_id: str) -> None:
@@ -264,6 +374,22 @@ class HttpJobManager:
     def _validate_profile(self, profile: str) -> None:
         if profile not in self.config.reports:
             raise KeyError(f"Unknown report profile: {profile}")
+
+    async def _house_ptr_refresh_needed(self, repository: SQLiteStorageRepository) -> bool:
+        ttl_seconds = self.config.sources.house_ptr.refresh_ttl_seconds
+        if ttl_seconds <= 0:
+            return True
+        runs = await repository.list_collection_runs(profile="trading", limit=20)
+        now = datetime.now(timezone.utc)
+        for run in runs:
+            if run.collector_id != "house.ptr" or run.status != "succeeded":
+                continue
+            finished_at = _parse_utc_datetime(run.finished_at)
+            if finished_at is None:
+                continue
+            if (now - finished_at).total_seconds() <= ttl_seconds:
+                return False
+        return True
 
     def _new_job(self, *, kind: JobKind, profile: str, mode: str, cache_key: str | None = None) -> HttpJobRecord:
         now = _utc_now()
@@ -381,8 +507,30 @@ class HttpJobManager:
             "discord": "text/markdown; charset=utf-8",
             "text": "text/plain; charset=utf-8",
         }[options.mode]
-        rendered = self._renderer_factory(options.title).render(response_data, mode=options.mode)
+        rendered = self._renderer_factory(options.title).render(response_data, mode=options.mode, detail=options.detail)
         artifact_path = self._job_dir(job_id) / f"report.{extension}"
+        artifact_path.write_text(rendered, encoding="utf-8")
+        return artifact_path, media_type
+
+    def _write_trading_artifact(
+        self,
+        job_id: str,
+        response_data: dict[str, Any],
+        options: TradingReportJobOptions,
+    ) -> tuple[Path, str]:
+        if options.mode == "json":
+            artifact_path = self._job_dir(job_id) / "summary.json"
+            return artifact_path, "application/json"
+
+        extension = {"html": "html", "markdown": "md", "discord": "md", "text": "txt"}[options.mode]
+        media_type = {
+            "html": "text/html; charset=utf-8",
+            "markdown": "text/markdown; charset=utf-8",
+            "discord": "text/markdown; charset=utf-8",
+            "text": "text/plain; charset=utf-8",
+        }[options.mode]
+        rendered = self._renderer_factory(options.title).render_trading(response_data, mode=options.mode)
+        artifact_path = self._job_dir(job_id) / f"trading-report.{extension}"
         artifact_path.write_text(rendered, encoding="utf-8")
         return artifact_path, media_type
 
@@ -541,7 +689,10 @@ class HttpJobManager:
             "version": 1,
             "profile": profile,
             "profile_config": _jsonable(self.config.reports.get(profile)),
-            "sources": _jsonable(self.config.sources),
+            "sources": {
+                "x_users": _jsonable(self.config.sources.x_users),
+                "subreddits": _jsonable(self.config.sources.subreddits),
+            },
             "collectors": _jsonable(self.config.collectors),
             "llm": {
                 "provider": self.config.llm.provider,
@@ -595,6 +746,69 @@ def _parse_utc_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _social_collector_ids(config: AppConfig, profile: str) -> list[str]:
+    collector_ids = list(config.reports[profile].collector_ids)
+    result: list[str] = []
+    for collector_id in collector_ids:
+        try:
+            source_type = source_type_for_collector_id(config, collector_id)
+        except Exception:
+            result.append(collector_id)
+            continue
+        if source_type != HOUSE_PTR_SOURCE_TYPE:
+            result.append(collector_id)
+    return result
+
+
+def _validate_trading_filters(options: TradingReportJobOptions) -> None:
+    if not any((options.name, options.start_date, options.end_date, options.days)):
+        raise ValueError("Trading report requires at least one filter: name, start_date/end_date, or days.")
+    if options.days is not None and (options.start_date or options.end_date):
+        raise ValueError("Trading report accepts either days or explicit start/end dates, not both.")
+
+
+def _trading_date_window(options: TradingReportJobOptions) -> tuple[datetime | None, datetime | None]:
+    if options.days is not None:
+        now = datetime.now(timezone.utc)
+        return now - timedelta(days=options.days), now
+    return _parse_date_filter(options.start_date, end_of_day=False), _parse_date_filter(options.end_date, end_of_day=True)
+
+
+def _parse_date_filter(value: str | None, *, end_of_day: bool) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            parsed_date = datetime.strptime(text, fmt).date()
+            return datetime.combine(parsed_date, time.max if end_of_day else time.min, tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    parsed = _parse_utc_datetime(text)
+    if parsed is None:
+        raise ValueError(f"Invalid trading report date: {value}")
+    if end_of_day and parsed.time() == time.min:
+        return datetime.combine(parsed.date(), time.max, tzinfo=timezone.utc)
+    return parsed
+
+
+def _trading_filter_data(
+    options: TradingReportJobOptions,
+    transaction_start: datetime | None,
+    transaction_end: datetime | None,
+) -> dict[str, Any]:
+    return {
+        "name": options.name,
+        "start_date": options.start_date,
+        "end_date": options.end_date,
+        "days": options.days,
+        "transaction_start": transaction_start.isoformat() if transaction_start else None,
+        "transaction_end": transaction_end.isoformat() if transaction_end else None,
+        "limit": options.limit,
+        "force_refresh": options.force_refresh,
+    }
+
+
 def _job_record_from_dict(data: dict[str, Any]) -> HttpJobRecord:
     allowed = {item.name for item in fields(HttpJobRecord)}
     return HttpJobRecord(**{key: value for key, value in data.items() if key in allowed})
@@ -646,10 +860,6 @@ def _no_social_data_message(result: PipelineCollectionResult) -> str:
     return message
 
 
-def _house_ptr_render_limit(config: AppConfig) -> int:
-    return config.sources.house_ptr.render_limit
-
-
 def _house_ptr_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -659,31 +869,21 @@ def _house_ptr_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
             "status": row.status,
             "state": row.state,
             "filing_date": row.filing_date,
+            "filing_date_utc": row.filing_date_utc,
             "pdf_url": row.pdf_url,
             "table_index": row.table_index,
             "row_index": row.row_index,
             "asset": row.asset,
             "transaction_type": row.transaction_type,
             "transaction_date": row.transaction_date,
+            "transaction_date_utc": row.transaction_date_utc,
+            "transaction_action": row.transaction_action,
             "amount": row.amount,
             "raw_cells": row.raw_cells,
             "collected_at": row.collected_at,
         }
         for row in rows
     ]
-
-
-def _house_only_response_data(*, profile: str, provider: str) -> dict[str, Any]:
-    return {
-        "profile": profile,
-        "provider": provider,
-        "model": None,
-        "summary_text": json.dumps({"x_reports": [], "reddit_report": {"overall_summary": [], "posts": []}}, ensure_ascii=False),
-        "summary": {"x_reports": [], "reddit_report": {"overall_summary": [], "posts": []}},
-        "input_media": {},
-        "metadata": {"analysis_run_id": None, "prompt_version": PROMPT_VERSION, "chunk_count": 0, "succeeded_count": 0, "failed_count": 0},
-    }
-
 
 def _analysis_response_data(
     *,

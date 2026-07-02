@@ -111,8 +111,15 @@ class StorageRepository(Protocol):
     async def existing_house_ptr_doc_ids(self, *, year: int | None = None) -> set[str]:
         """Return successfully extracted House PTR DocIDs safe to skip."""
 
-    async def read_house_ptr_trades(self, *, limit: int = 20) -> list[StoredHousePtrTradeRow]:
-        """Read recent House PTR trade rows for deterministic report rendering."""
+    async def read_house_ptr_trades(
+        self,
+        *,
+        name_contains: str | None = None,
+        transaction_start: datetime | None = None,
+        transaction_end: datetime | None = None,
+        limit: int = 20,
+    ) -> list[StoredHousePtrTradeRow]:
+        """Read House PTR trade rows for deterministic report rendering."""
 
     async def get_downloaded_media(self, remote_url: str) -> StoredDownloadedMedia | None:
         """Return downloaded media metadata by remote URL."""

@@ -6,11 +6,11 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from stock_sum.api.jobs import HttpJobManager, ReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, TradingReportJobOptions
 from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
-from stock_sum.storage.models import StoredHousePtrTradeRow, StoredXPost
+from stock_sum.storage.models import StoredCollectionRun, StoredHousePtrTradeRow, StoredXPost
 
 
 async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
@@ -95,7 +95,7 @@ async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
     assert status.warnings[0]["source_id"] == "x.missing"
 
 
-async def test_report_job_succeeds_with_house_only_data_and_skips_llm(tmp_path) -> None:
+async def test_social_report_ignores_house_only_data_and_requires_social_data(tmp_path) -> None:
     llm = FakeLLM()
     manager = HttpJobManager(
         _test_config(tmp_path),
@@ -109,6 +109,26 @@ async def test_report_job_succeeds_with_house_only_data_and_skips_llm(tmp_path) 
 
     status = manager.get_job(job.job_id)
     assert status is not None
+    assert status.status == "failed"
+    assert "no usable source data" in str(status.error)
+    assert llm.calls == 0
+
+
+async def test_trading_report_succeeds_with_house_data_and_skips_llm(tmp_path) -> None:
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[_house_row()]),
+        llm_client_factory=lambda: llm,
+    )
+    options = TradingReportJobOptions(mode="text", name="Jane", limit=20)
+    job = manager.create_trading_report_job(options)
+
+    await manager.run_trading_report_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    assert status is not None
     assert status.status == "succeeded"
     assert llm.calls == 0
     artifact = Path(status.artifact_path or "").read_text(encoding="utf-8")
@@ -119,17 +139,19 @@ async def test_report_job_succeeds_with_house_only_data_and_skips_llm(tmp_path) 
 async def test_report_job_uses_recent_cache_and_rerenders_requested_mode(tmp_path) -> None:
     pipeline = FakePipeline(_successful_collection_result())
     llm = FakeLLM()
+    renderer_calls: list[tuple[str, str, str]] = []
     manager = HttpJobManager(
         _test_config(tmp_path),
         pipeline_factory=lambda: pipeline,
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
+        renderer_factory=lambda title: FakeRenderer(title, renderer_calls),
     )
-    first_options = ReportJobOptions(mode="html")
+    first_options = ReportJobOptions(mode="html", detail="full")
     first_job = manager.create_report_job("default", first_options)
     await manager.run_report_job(first_job.job_id, first_options)
 
-    second_options = ReportJobOptions(mode="discord")
+    second_options = ReportJobOptions(mode="discord", detail="minimum")
     second_job = manager.create_report_job("default", second_options)
     await manager.run_report_job(second_job.job_id, second_options)
 
@@ -141,6 +163,8 @@ async def test_report_job_uses_recent_cache_and_rerenders_requested_mode(tmp_pat
     assert second_status.cache_age_seconds is not None
     assert second_status.artifact_path is not None
     assert second_status.artifact_path.endswith("report.md")
+    assert Path(second_status.artifact_path).read_text(encoding="utf-8") == "Market Social Digest:discord:minimum"
+    assert renderer_calls == [("Market Social Digest", "html", "full"), ("Market Social Digest", "discord", "minimum")]
     assert pipeline.calls == 1
     assert llm.calls == 1
 
@@ -282,8 +306,8 @@ async def test_identical_concurrent_report_jobs_coalesce_to_one_pipeline_run(tmp
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
     )
-    first_options = ReportJobOptions(mode="html")
-    second_options = ReportJobOptions(mode="discord")
+    first_options = ReportJobOptions(mode="html", detail="full")
+    second_options = ReportJobOptions(mode="discord", detail="minimum")
     first_job = manager.create_report_job("default", first_options)
     first_task = asyncio.create_task(manager.run_report_job(first_job.job_id, first_options))
     await asyncio.sleep(0.01)
@@ -424,13 +448,26 @@ class FakePipeline:
         self.fail = fail
         self.calls = 0
 
-    async def run_report(self, profile: str) -> PipelineCollectionResult:
+    async def run_report(self, profile: str, *, collector_ids=None) -> PipelineCollectionResult:
         self.calls += 1
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
         if self.fail:
             raise RuntimeError("pipeline failed")
         return self.result
+
+    async def collect_collector(self, collector_id: str, *, profile: str | None = None, raise_on_error: bool = True):
+        self.calls += 1
+        return CollectionRunResult(
+            run_id="house-run",
+            collector_id=collector_id,
+            source_type="house_ptr_disclosure",
+            status="succeeded",
+            collected_count=1,
+            inserted_count=1,
+            updated_count=0,
+            sqlite_path="stock_sum.sqlite3",
+        )
 
 
 class FakeRepository:
@@ -442,7 +479,21 @@ class FakeRepository:
         self.reddit_comment_analysis_rows = []
 
     async def list_collection_runs(self, *, profile: str | None = None, limit: int = 20):
-        return []
+        return [
+            StoredCollectionRun(
+                run_id="house-run",
+                profile="trading",
+                collector_id="house.ptr",
+                source_type="house_ptr_disclosure",
+                status="succeeded",
+                started_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                collected_count=1,
+                inserted_count=1,
+                updated_count=0,
+                error_text=None,
+            )
+        ]
 
     async def read_x_posts(self, *, handles=None, since_posted_at=None, collector_id=None, profile=None, since=None, limit=50):
         if not self.with_social_data:
@@ -472,7 +523,14 @@ class FakeRepository:
     async def existing_house_ptr_doc_ids(self, *, year=None):
         return set()
 
-    async def read_house_ptr_trades(self, *, limit=20):
+    async def read_house_ptr_trades(
+        self,
+        *,
+        name_contains=None,
+        transaction_start=None,
+        transaction_end=None,
+        limit=20,
+    ):
         return self.house_rows[:limit]
 
     async def start_llm_analysis_run(self, **kwargs):
@@ -545,6 +603,19 @@ class FakeLLM:
         )
 
 
+class FakeRenderer:
+    def __init__(self, title: str, calls: list[tuple[str, str, str]]) -> None:
+        self.title = title
+        self.calls = calls
+
+    def render(self, response, *, mode: str, detail: str = "minimum") -> str:
+        self.calls.append((self.title, mode, detail))
+        return f"{self.title}:{mode}:{detail}"
+
+    def render_trading(self, response, *, mode: str) -> str:
+        return f"{self.title}:{mode}:trading"
+
+
 class FakeRetentionService:
     def __init__(self) -> None:
         self.calls = 0
@@ -574,12 +645,15 @@ def _house_row() -> StoredHousePtrTradeRow:
         status="Member",
         state="CA",
         filing_date="2026-06-30",
+        filing_date_utc="2026-06-30T00:00:00+00:00",
         pdf_url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
         table_index=0,
         row_index=0,
         asset="AAPL",
         transaction_type="Purchase",
         transaction_date="2026-06-20",
+        transaction_date_utc="2026-06-20T00:00:00+00:00",
+        transaction_action="purchase",
         amount="$1,001 - $15,000",
         raw_cells=["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"],
         raw_metadata={},

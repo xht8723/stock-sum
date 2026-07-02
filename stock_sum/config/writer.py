@@ -155,6 +155,7 @@ def set_house_ptr_source(
     enabled: bool,
     year: int | None,
     render_limit: int,
+    refresh_ttl_seconds: int,
     download_concurrency: int,
     parse_concurrency: int,
     zip_url_template: str,
@@ -169,6 +170,7 @@ def set_house_ptr_source(
     source["enabled"] = enabled
     source["year"] = year or 0
     source["render_limit"] = render_limit
+    source["refresh_ttl_seconds"] = refresh_ttl_seconds
     source["download_concurrency"] = download_concurrency
     source["parse_concurrency"] = parse_concurrency
     source["zip_url_template"] = zip_url_template

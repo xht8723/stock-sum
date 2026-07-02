@@ -164,11 +164,14 @@ class StockSumHttpClient:
         *,
         profile: str,
         output_format: str,
+        detail: str = "minimum",
     ) -> StockSumArtifact:
         """Create, poll, and download one stock-sum report job."""
 
         if output_format not in SUPPORTED_FORMATS:
             raise StockSumRequestError(f"Unsupported report format: {output_format}")
+        if detail not in {"minimum", "medium", "full"}:
+            raise StockSumRequestError(f"Unsupported social report detail: {detail}")
 
         session, owns_session = await self._session()
         try:
@@ -176,6 +179,54 @@ class StockSumHttpClient:
                 session,
                 profile=profile,
                 output_format=output_format,
+                payload={"detail": detail},
+            )
+            job_id = _required_string(job, "job_id")
+            status_payload = await self._poll_until_done(session, job_id)
+            content, content_type, filename = await self._download_artifact(session, job_id, output_format)
+            return StockSumArtifact(
+                job_id=job_id,
+                filename=filename,
+                content_type=content_type,
+                content=content,
+                status=status_payload,
+            )
+        finally:
+            if owns_session:
+                await session.close()
+
+    async def run_trading_report(
+        self,
+        *,
+        output_format: str,
+        name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        days: int | None = None,
+        limit: int = 20,
+        force_refresh: bool = False,
+    ) -> StockSumArtifact:
+        """Create, poll, and download one stock-sum trading disclosure report job."""
+
+        if output_format not in SUPPORTED_FORMATS:
+            raise StockSumRequestError(f"Unsupported report format: {output_format}")
+        if not any((name, start_date, end_date, days)):
+            raise StockSumRequestError("tradingreport requires at least one filter: name, start_date/end_date, or days.")
+
+        session, owns_session = await self._session()
+        try:
+            payload = {
+                "name": name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "days": days,
+                "limit": limit,
+                "force_refresh": force_refresh,
+            }
+            job = await self._create_trading_report_job(
+                session,
+                output_format=output_format,
+                payload={key: value for key, value in payload.items() if value is not None},
             )
             job_id = _required_string(job, "job_id")
             status_payload = await self._poll_until_done(session, job_id)
@@ -268,10 +319,27 @@ class StockSumHttpClient:
         *,
         profile: str,
         output_format: str,
+        payload: dict[str, Any],
     ) -> dict[str, Any]:
-        url = f"{self.base_url}/v1/reports/{quote(profile, safe='')}/jobs/{quote(output_format, safe='')}"
+        url = f"{self.base_url}/v1/social-reports/{quote(profile, safe='')}/jobs/{quote(output_format, safe='')}"
         try:
-            async with session.post(url, json={}, headers=self._headers()) as response:
+            async with session.post(url, json=payload, headers=self._headers()) as response:
+                return await self._json_response(response, expected_status=202)
+        except StockSumCogError:
+            raise
+        except Exception as exc:
+            raise StockSumRequestError(f"Could not reach stock-sum at {self.base_url}: {exc}") from exc
+
+    async def _create_trading_report_job(
+        self,
+        session: _ClientSession,
+        *,
+        output_format: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}/v1/trading-reports/jobs/{quote(output_format, safe='')}"
+        try:
+            async with session.post(url, json=payload, headers=self._headers()) as response:
                 return await self._json_response(response, expected_status=202)
         except StockSumCogError:
             raise
@@ -365,10 +433,11 @@ class StockSumReport(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="report", description="Generate a stock-sum market report.")
+    @app_commands.command(name="socialreport", description="Generate a stock-sum social media market report.")
     @app_commands.describe(
         profile="stock-sum report profile name",
         format="report artifact format",
+        detail="how many social sentiment items to include",
         private="send the response only to you",
     )
     @app_commands.choices(
@@ -380,23 +449,112 @@ class StockSumReport(commands.Cog):
             app_commands.Choice(name="JSON", value="json"),
         ]
     )
-    async def report(
+    @app_commands.choices(
+        detail=[
+            app_commands.Choice(name="Minimum", value="minimum"),
+            app_commands.Choice(name="Medium", value="medium"),
+            app_commands.Choice(name="Full", value="full"),
+        ]
+    )
+    async def socialreport(
         self,
         interaction,
         profile: str = "default",
         format: str = "discord",
+        detail: str = "minimum",
         private: bool = False,
     ) -> None:
-        """Slash command handler for report generation."""
+        """Slash command handler for social report generation."""
 
         await interaction.response.send_message(
-            "Report is being generated, please wait a few minutes.",
+            "Social report is being generated, please wait a few minutes.",
             ephemeral=private,
         )
         try:
             artifact = await StockSumHttpClient.from_env().run_report(
                 profile=profile,
                 output_format=format,
+                detail=detail,
+            )
+        except StockSumCogError as exc:
+            await _send_report_output(interaction, _failure_message(exc), private=private)
+            return
+
+        if discord is None:
+            await _send_report_output(
+                interaction,
+                "stock-sum report is ready, but discord.py is not available.",
+                private=private,
+            )
+            return
+
+        if format == "discord":
+            report_text = artifact.content.decode("utf-8", errors="replace").strip()
+            for chunk in _split_discord_markdown(report_text):
+                await _send_report_output(interaction, chunk, private=private)
+            return
+
+        file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
+        await _send_report_output(interaction, "Report generated.", private=private, file=file)
+
+    @app_commands.command(name="tradingreport", description="Generate an official House trading disclosure report.")
+    @app_commands.describe(
+        name="case-insensitive fuzzy filer name filter",
+        start_date="transaction start date, YYYY-MM-DD",
+        end_date="transaction end date, YYYY-MM-DD",
+        days="transaction records from the last N days",
+        limit="maximum rows to return",
+        format="report artifact format",
+        private="send the response only to you",
+        force_refresh="force a House PTR refresh before querying",
+    )
+    @app_commands.choices(
+        format=[
+            app_commands.Choice(name="Discord Markdown", value="discord"),
+            app_commands.Choice(name="HTML", value="html"),
+            app_commands.Choice(name="Markdown", value="markdown"),
+            app_commands.Choice(name="Text", value="text"),
+            app_commands.Choice(name="JSON", value="json"),
+        ]
+    )
+    async def tradingreport(
+        self,
+        interaction,
+        name: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        days: int | None = None,
+        limit: int = 20,
+        format: str = "discord",
+        private: bool = False,
+        force_refresh: bool = False,
+    ) -> None:
+        """Slash command handler for House PTR trading disclosure reports."""
+
+        name_filter = name.strip() or None
+        start_filter = start_date.strip() or None
+        end_filter = end_date.strip() or None
+        if not any((name_filter, start_filter, end_filter, days)):
+            await _send_report_output(
+                interaction,
+                "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, or days.",
+                private=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "Trading disclosure report is being generated, please wait a few minutes.",
+            ephemeral=private,
+        )
+        try:
+            artifact = await StockSumHttpClient.from_env().run_trading_report(
+                output_format=format,
+                name=name_filter,
+                start_date=start_filter,
+                end_date=end_filter,
+                days=days,
+                limit=max(1, min(limit, 100)),
+                force_refresh=force_refresh,
             )
         except StockSumCogError as exc:
             await _send_report_output(interaction, _failure_message(exc), private=private)
@@ -534,6 +692,7 @@ class StockSumReport(commands.Cog):
         enabled: bool = True,
         year: int = 0,
         render_limit: int = 20,
+        refresh_ttl_seconds: int = 21600,
         download_concurrency: int = 4,
         parse_concurrency: int = 2,
     ) -> None:
@@ -544,6 +703,7 @@ class StockSumReport(commands.Cog):
             "enabled": enabled,
             "year": year,
             "render_limit": render_limit,
+            "refresh_ttl_seconds": refresh_ttl_seconds,
             "download_concurrency": download_concurrency,
             "parse_concurrency": parse_concurrency,
         }

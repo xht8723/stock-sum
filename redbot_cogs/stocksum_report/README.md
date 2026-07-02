@@ -1,7 +1,7 @@
 # stocksum_report
 
-Red Discord Bot cog that exposes `/report` and bridges to the local `stock-sum`
-HTTP server.
+Red Discord Bot cog that exposes `/socialreport` and `/tradingreport`, then
+bridges those slash commands to the local `stock-sum` HTTP server.
 
 ## Environment
 
@@ -26,12 +26,20 @@ From Red:
 Then sync slash commands with Red's slash-command management command and run:
 
 ```text
-/report profile:default
+/socialreport profile:default detail:minimum
+/tradingreport days:30
 ```
 
-The default format is Discord-specific markdown and is sent inline when it fits
-in one Discord message. Choose `html`, `markdown`, `text`, or `json` to receive
-the report as a file attachment instead.
+`/socialreport` generates X/Reddit social sentiment reports with LLM analysis.
+Its `detail` option defaults to `minimum`, which shows only high-importance
+posts. Use `medium` for high plus medium, or `full` for all social posts.
+`/tradingreport` generates official House PTR trading disclosure reports from
+SQLite without LLM analysis; it requires at least one filter such as `name`,
+`days`, or a transaction-date range.
+
+The default format for both commands is Discord-specific markdown and is sent
+inline in message chunks. Choose `html`, `markdown`, `text`, or `json` to
+receive the report as a file attachment instead.
 
 The cog polls stock-sum job status once per minute while a report is running.
 

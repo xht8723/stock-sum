@@ -55,10 +55,10 @@ async def test_client_sends_report_request_and_downloads_artifact() -> None:
     assert artifact.content == b"<html>ok</html>"
     assert session.requests[0] == (
         "POST",
-        "http://stock-sum.local/v1/reports/default/jobs/html",
+        "http://stock-sum.local/v1/social-reports/default/jobs/html",
         {
             "headers": {},
-            "json": {},
+            "json": {"detail": "minimum"},
         },
     )
     assert session.requests[1][2]["headers"] == {}
@@ -86,12 +86,52 @@ async def test_client_uses_discord_format_endpoint() -> None:
     assert artifact.filename == "stock-sum-report-job-discord.md"
     assert session.requests[0] == (
         "POST",
-        "http://stock-sum.local/v1/reports/default/jobs/discord",
+        "http://stock-sum.local/v1/social-reports/default/jobs/discord",
         {
             "headers": {},
-            "json": {},
+            "json": {"detail": "minimum"},
         },
     )
+
+
+async def test_client_sends_trading_report_request_and_downloads_artifact() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "trade-1"})],
+        get_responses=[
+            FakeResponse(200, {"job_id": "trade-1", "status": "succeeded"}),
+            FakeResponse(
+                200,
+                body=b"**Official Trading Disclosures**",
+                headers={"content-type": "text/markdown; charset=utf-8"},
+            ),
+        ],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    artifact = await client.run_trading_report(
+        output_format="discord",
+        name="Pelosi",
+        days=30,
+        limit=25,
+        force_refresh=True,
+    )
+
+    assert artifact.job_id == "trade-1"
+    assert session.requests[0] == (
+        "POST",
+        "http://stock-sum.local/v1/trading-reports/jobs/discord",
+        {
+            "headers": {},
+            "json": {"name": "Pelosi", "days": 30, "limit": 25, "force_refresh": True},
+        },
+    )
+
+
+async def test_client_rejects_trading_report_without_filter() -> None:
+    client = StockSumHttpClient(session=FakeSession(post_responses=[], get_responses=[]), poll_seconds=0)
+
+    with pytest.raises(StockSumRequestError, match="requires at least one filter"):
+        await client.run_trading_report(output_format="discord")
 
 
 async def test_client_reports_failed_job() -> None:
@@ -226,11 +266,11 @@ async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="discord", private=True)
+    await report.socialreport(interaction, profile="default", format="discord", private=True)
 
     assert interaction.response.messages == [
         {
-            "content": "Report is being generated, please wait a few minutes.",
+            "content": "Social report is being generated, please wait a few minutes.",
             "ephemeral": True,
         }
     ]
@@ -245,17 +285,19 @@ async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -
 async def test_report_command_sends_public_discord_report_directly_to_channel(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=("first paragraph\n\nsecond paragraph").encode("utf-8"))
     monkeypatch.setattr(
         "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
-        lambda: FakeStockSumClient(content=("first paragraph\n\nsecond paragraph").encode("utf-8")),
+        lambda: client,
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="discord", private=False)
+    await report.socialreport(interaction, profile="default", format="discord", detail="medium", private=False)
 
+    assert client.social_calls == [{"profile": "default", "output_format": "discord", "detail": "medium"}]
     assert interaction.response.messages == [
         {
-            "content": "Report is being generated, please wait a few minutes.",
+            "content": "Social report is being generated, please wait a few minutes.",
             "ephemeral": False,
         }
     ]
@@ -268,15 +310,17 @@ async def test_report_command_sends_public_discord_report_directly_to_channel(mo
 async def test_report_command_sends_file_for_non_discord_format(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"<html>report</html>", filename="report.html")
     monkeypatch.setattr(
         "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
-        lambda: FakeStockSumClient(content=b"<html>report</html>", filename="report.html"),
+        lambda: client,
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="html", private=False)
+    await report.socialreport(interaction, profile="default", format="html", detail="full", private=False)
 
-    assert interaction.response.messages[0]["content"] == "Report is being generated, please wait a few minutes."
+    assert client.social_calls == [{"profile": "default", "output_format": "html", "detail": "full"}]
+    assert interaction.response.messages[0]["content"] == "Social report is being generated, please wait a few minutes."
     assert interaction.followup.messages == []
     assert interaction.channel.messages == [
         {
@@ -296,9 +340,9 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.report(interaction, profile="default", format="discord", private=True)
+    await report.socialreport(interaction, profile="default", format="discord", private=True)
 
-    assert interaction.response.messages[0]["content"] == "Report is being generated, please wait a few minutes."
+    assert interaction.response.messages[0]["content"] == "Social report is being generated, please wait a few minutes."
     assert interaction.followup.messages == [
         {
             "content": "stock-sum report failed: broken",
@@ -306,6 +350,63 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
             "suppress_embeds": True,
         }
     ]
+
+
+async def test_tradingreport_command_rejects_missing_filters(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    monkeypatch.setattr(
+        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        lambda: FakeStockSumClient(content=b"unused"),
+    )
+
+    await report.tradingreport(interaction, format="discord", private=False)
+
+    assert interaction.response.messages == []
+    assert interaction.followup.messages == [
+        {
+            "content": "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, or days.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=("trade one\n\ntrade two").encode("utf-8"))
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.tradingreport(
+        interaction,
+        name="Pelosi",
+        days=30,
+        limit=25,
+        format="discord",
+        private=False,
+        force_refresh=True,
+    )
+
+    assert client.trading_calls == [
+        {
+            "output_format": "discord",
+            "name": "Pelosi",
+            "start_date": None,
+            "end_date": None,
+            "days": 30,
+            "limit": 25,
+            "force_refresh": True,
+        }
+    ]
+    assert interaction.response.messages == [
+        {
+            "content": "Trading disclosure report is being generated, please wait a few minutes.",
+            "ephemeral": False,
+        }
+    ]
+    assert interaction.channel.messages == [{"content": "trade one\n\ntrade two", "suppress_embeds": True}]
 
 
 async def test_management_command_blocks_non_owner(monkeypatch) -> None:
@@ -403,6 +504,7 @@ async def test_management_house_ptr_source_set(monkeypatch) -> None:
                 "enabled": True,
                 "year": 2026,
                 "render_limit": 15,
+                "refresh_ttl_seconds": 21600,
                 "download_concurrency": 3,
                 "parse_concurrency": 2,
             },
@@ -513,8 +615,11 @@ class FakeStockSumClient:
     def __init__(self, *, content: bytes, filename: str = "report.md") -> None:
         self.content = content
         self.filename = filename
+        self.social_calls: list[dict[str, Any]] = []
+        self.trading_calls: list[dict[str, Any]] = []
 
-    async def run_report(self, *, profile: str, output_format: str) -> StockSumArtifact:
+    async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
+        self.social_calls.append({"profile": profile, "output_format": output_format, "detail": detail})
         return StockSumArtifact(
             job_id="job-1",
             filename=self.filename,
@@ -523,9 +628,42 @@ class FakeStockSumClient:
             status={"status": "succeeded"},
         )
 
+    async def run_trading_report(
+        self,
+        *,
+        output_format: str,
+        name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        days: int | None = None,
+        limit: int = 20,
+        force_refresh: bool = False,
+    ) -> StockSumArtifact:
+        self.trading_calls.append(
+            {
+                "output_format": output_format,
+                "name": name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "days": days,
+                "limit": limit,
+                "force_refresh": force_refresh,
+            }
+        )
+        return StockSumArtifact(
+            job_id="trade-1",
+            filename=self.filename,
+            content_type="text/markdown; charset=utf-8",
+            content=self.content,
+            status={"status": "succeeded"},
+        )
+
 
 class FakeFailingStockSumClient:
-    async def run_report(self, *, profile: str, output_format: str) -> StockSumArtifact:
+    async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
+        raise StockSumRequestError("broken")
+
+    async def run_trading_report(self, **kwargs: Any) -> StockSumArtifact:
         raise StockSumRequestError("broken")
 
 

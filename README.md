@@ -247,9 +247,9 @@ stock-sum collect --collector reddit.wallstreetbets --config config.toml
 stock-sum payload build --profile default --output docs/examples/summary_input_sample.json --config config.toml --download-images --mode vision
 stock-sum llm summarize --profile default --payload docs/examples/summary_input_sample.json --output C:\tmp\stock-sum-deepseek-response.json --config config.toml
 stock-sum llm analyze --profile default --output C:\tmp\stock-sum-analysis-response.json --config config.toml
-stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode html --output C:\tmp\stock-sum-report.html
-stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode markdown --output C:\tmp\stock-sum-report.md
-stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode text --output C:\tmp\stock-sum-report.txt
+stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode html --detail minimum --output C:\tmp\stock-sum-report.html
+stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode markdown --detail medium --output C:\tmp\stock-sum-report.md
+stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode text --detail full --output C:\tmp\stock-sum-report.txt
 stock-sum run-report --profile default --config config.toml
 ```
 
@@ -285,7 +285,9 @@ paths rather than uploaded as image bytes.
 `report render` turns the LLM response JSON into final presentation artifacts.
 Use `--mode html` for a standalone visual report, `--mode markdown` for a
 portable document, `--mode discord` for Discord-friendly markdown, or
-`--mode text` for plain email/terminal output.
+`--mode text` for plain email/terminal output. Use `--detail minimum` for only
+high-importance social posts, `--detail medium` for high plus medium, and
+`--detail full` for all social posts.
 
 ## HTTP API
 
@@ -297,19 +299,35 @@ seconds, defaulting to six hours. Set it to `0` to disable report reuse.
 - `GET /health`: returns service health.
 - `GET /v1/config/effective`: returns the loaded configuration. Secret values are
   not stored in config; only environment variable names are present.
-- `POST /v1/reports/{profile}/jobs`: starts a full async report job using a
-  body `mode` field.
-- `POST /v1/reports/{profile}/jobs/{mode}`: starts a full async report job for
-  a specific output mode. Supported modes are `html`, `markdown`, `discord`,
-  `text`, and `json`.
+- `POST /v1/social-reports/{profile}/jobs`: starts an async X/Reddit social
+  report job using a body `mode` field.
+- `POST /v1/social-reports/{profile}/jobs/{mode}`: starts an async X/Reddit
+  social report job for a specific output mode.
+- `POST /v1/trading-reports/jobs`: starts an async official House PTR trading
+  disclosure report using body filters.
+- `POST /v1/trading-reports/jobs/{mode}`: starts an official House PTR trading
+  disclosure report for a specific output mode.
+- `POST /v1/reports/{profile}/jobs/{mode}`: temporary compatibility alias for
+  social reports.
 - `GET /v1/jobs/{job_id}`: checks job status.
 - `GET /v1/jobs/{job_id}/artifact`: downloads the rendered report artifact.
+
+Supported output modes are `html`, `markdown`, `discord`, `text`, and `json`.
+Social reports also accept `detail`: `minimum` renders high-importance posts,
+`medium` renders high plus medium, and `full` renders all social posts. Trading
+reports require at least one filter: `name`, `days`, or a transaction-date
+`start_date`/`end_date` range.
 
 Example:
 
 ```powershell
 curl http://127.0.0.1:8000/health
-curl -X POST http://127.0.0.1:8000/v1/reports/default/jobs/html
+curl -X POST http://127.0.0.1:8000/v1/social-reports/default/jobs/html `
+  -H "Content-Type: application/json" `
+  -d '{"detail":"minimum"}'
+curl -X POST http://127.0.0.1:8000/v1/trading-reports/jobs/markdown `
+  -H "Content-Type: application/json" `
+  -d '{"days":30,"limit":20}'
 ```
 
 The response includes a `job_id` that can be polled until the report succeeds or

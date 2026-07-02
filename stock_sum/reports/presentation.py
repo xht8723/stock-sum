@@ -8,6 +8,7 @@ from typing import Any, Literal
 import json
 
 PresentationMode = Literal["html", "markdown", "discord", "text"]
+SocialReportDetail = Literal["minimum", "medium", "full"]
 
 SECTION_TITLES = {
     "executive_summary": "Executive Summary",
@@ -30,28 +31,53 @@ class PresentationRenderer:
 
     title: str = "Market Social Digest"
 
-    def render(self, response: dict[str, Any], *, mode: str) -> str:
-        """Render a response in html, markdown, discord, or text mode."""
+    def render(self, response: dict[str, Any], *, mode: str, detail: str = "minimum") -> str:
+        """Render a social report in html, markdown, discord, or text mode."""
+
+        mode = mode.lower()
+        detail = _normalize_social_detail(detail)
+        summary = _summary_from_response(response)
+        if mode == "html":
+            return self._render_html(response, summary, detail)
+        if mode == "markdown":
+            return self._render_markdown(response, summary, detail)
+        if mode in {"discord", "discord_markdown"}:
+            return self._render_discord_markdown(response, summary, detail)
+        if mode == "text":
+            return self._render_text(response, summary, detail)
+        raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
+
+    def render_trading(self, response: dict[str, Any], *, mode: str) -> str:
+        """Render a House PTR trading report in html, markdown, discord, or text mode."""
 
         mode = mode.lower()
         summary = _summary_from_response(response)
         if mode == "html":
-            return self._render_html(response, summary)
+            return self._render_trading_html(response, summary)
         if mode == "markdown":
-            return self._render_markdown(response, summary)
+            return self._render_trading_markdown(response, summary)
         if mode in {"discord", "discord_markdown"}:
-            return self._render_discord_markdown(response, summary)
+            return self._render_trading_discord_markdown(response, summary)
         if mode == "text":
-            return self._render_text(response, summary)
+            return self._render_trading_text(response, summary)
         raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
 
-    def _render_html(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+    def _render_html(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         sections = [
             _html_pipeline_warnings(response.get("pipeline_warnings")),
-            _html_social_sentiment(summary, media_by_ref),
+            _html_social_sentiment(summary, media_by_ref, detail),
+        ]
+        return self._html_document(sections)
+
+    def _render_trading_html(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        sections = [
+            _html_pipeline_warnings(response.get("pipeline_warnings")),
             _html_house_ptr(response, summary),
         ]
+        return self._html_document(sections)
+
+    def _html_document(self, sections: list[str]) -> str:
         return "\n".join(
             [
                 "<!doctype html>",
@@ -74,35 +100,59 @@ class PresentationRenderer:
             ]
         )
 
-    def _render_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+    def _render_markdown(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
             f"# {self.title}",
             "",
             _markdown_pipeline_warnings(response.get("pipeline_warnings")),
-            _markdown_social_sentiment(summary, media_by_ref),
+            _markdown_social_sentiment(summary, media_by_ref, detail),
+        ]
+        return "\n".join(line for line in lines if line is not None).strip() + "\n"
+
+    def _render_trading_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        lines = [
+            f"# {self.title}",
+            "",
+            _markdown_pipeline_warnings(response.get("pipeline_warnings")),
             _markdown_house_ptr(response, summary),
         ]
         return "\n".join(line for line in lines if line is not None).strip() + "\n"
 
-    def _render_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+    def _render_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
             f"**{self.title}**",
             "",
             _discord_pipeline_warnings(response.get("pipeline_warnings")),
-            _discord_social_sentiment(summary, media_by_ref),
+            _discord_social_sentiment(summary, media_by_ref, detail),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
+
+    def _render_trading_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        lines = [
+            f"**{self.title}**",
+            "",
+            _discord_pipeline_warnings(response.get("pipeline_warnings")),
             _discord_house_ptr(response, summary),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
-    def _render_text(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+    def _render_text(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
             self.title.upper(),
             "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
-            _text_social_sentiment(summary, media_by_ref),
+            _text_social_sentiment(summary, media_by_ref, detail),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
+
+    def _render_trading_text(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        lines = [
+            self.title.upper(),
+            "",
+            _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_house_ptr(response, summary),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
@@ -180,10 +230,10 @@ def _warning_message(warning: dict[str, Any]) -> str:
     return _stringify_item(warning.get("message") or "Unavailable.")
 
 
-def _html_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
-    buckets = _social_items_by_importance(summary)
+def _html_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]], detail: SocialReportDetail) -> str:
+    buckets = _filtered_social_buckets(summary, detail)
     groups = []
-    for bucket, title in _importance_titles():
+    for bucket, title in _importance_titles(detail):
         items = buckets.get(bucket, [])
         if not items:
             continue
@@ -200,7 +250,7 @@ def _html_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list
                 ]
             )
         )
-    return _html_section("Social Media Sentiment", "\n".join(groups) or '<p class="empty">No social signals.</p>')
+    return _html_section("Social Media Sentiment", "\n".join(groups) or '<p class="empty">No social signals at this detail level.</p>')
 
 
 def _html_social_card(item: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
@@ -246,7 +296,7 @@ def _html_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
             f"<td>{escape(_house_value(row.get('state')))}</td>"
             f"<td>{escape(_house_value(row.get('filing_date')))}</td>"
             f"<td>{escape(_house_value(row.get('asset') or _raw_cells_preview(row)))}</td>"
-            f"<td>{escape(_house_trade_action(row.get('transaction_type')))}</td>"
+            f"<td>{escape(_house_trade_action(row.get('transaction_action') or row.get('transaction_type')))}</td>"
             f"<td>{escape(_house_value(row.get('transaction_date')))}</td>"
             f"<td>{escape(_house_value(row.get('amount')))}</td>"
             f"<td>{link}</td>"
@@ -277,12 +327,12 @@ def _html_social_badges(item: dict[str, Any]) -> str:
     return f'<div class="badges">{"".join(badges)}</div>' if badges else ""
 
 
-def _markdown_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
-    buckets = _social_items_by_importance(summary)
+def _markdown_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]], detail: SocialReportDetail) -> str:
+    buckets = _filtered_social_buckets(summary, detail)
     lines = ["## Social Media Sentiment", ""]
     if not any(buckets.values()):
-        return "\n".join([*lines, "_No social signals._", ""])
-    for bucket, title in _importance_titles():
+        return "\n".join([*lines, "_No social signals at this detail level._", ""])
+    for bucket, title in _importance_titles(detail):
         items = buckets.get(bucket, [])
         if not items:
             continue
@@ -327,7 +377,7 @@ def _markdown_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> st
         lines.append(f"- **{title or 'Unknown filer'}**")
         lines.append(f"  - Filed: {_house_value(row.get('filing_date'))}")
         lines.append(f"  - Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
-        lines.append(f"  - Action: {_house_trade_action(row.get('transaction_type'))}")
+        lines.append(f"  - Action: {_house_trade_action(row.get('transaction_action') or row.get('transaction_type'))}")
         lines.append(f"  - Trade date: {_house_value(row.get('transaction_date'))}")
         lines.append(f"  - Amount: {_house_value(row.get('amount'))}")
         if row.get("pdf_url"):
@@ -336,12 +386,12 @@ def _markdown_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> st
     return "\n".join(lines)
 
 
-def _discord_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
-    buckets = _social_items_by_importance(summary)
+def _discord_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]], detail: SocialReportDetail) -> str:
+    buckets = _filtered_social_buckets(summary, detail)
     lines = ["**Social Media Sentiment**"]
     if not any(buckets.values()):
-        return "\n".join([*lines, "_No social signals._"])
-    for bucket, title in _importance_titles():
+        return "\n".join([*lines, "_No social signals at this detail level._"])
+    for bucket, title in _importance_titles(detail):
         items = buckets.get(bucket, [])
         if not items:
             continue
@@ -392,7 +442,7 @@ def _discord_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str
             for part in (
                 f"Filed {_house_value(row.get('filing_date'))}" if row.get("filing_date") else "",
                 f"Asset {_house_value(row.get('asset') or _raw_cells_preview(row))}",
-                f"Action {_house_trade_action(row.get('transaction_type'))}" if row.get("transaction_type") else "",
+                f"Action {_house_trade_action(row.get('transaction_action') or row.get('transaction_type'))}" if row.get("transaction_action") or row.get("transaction_type") else "",
                 f"Date {_house_value(row.get('transaction_date'))}" if row.get("transaction_date") else "",
                 f"Amount {_house_value(row.get('amount'))}" if row.get("amount") else "",
             )
@@ -413,12 +463,12 @@ def _discord_linked_media(source_ref: str, media_by_ref: dict[str, list[dict[str
     return links
 
 
-def _text_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]]) -> str:
-    buckets = _social_items_by_importance(summary)
+def _text_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]], detail: SocialReportDetail) -> str:
+    buckets = _filtered_social_buckets(summary, detail)
     lines = ["SOCIAL MEDIA SENTIMENT"]
     if not any(buckets.values()):
-        return "\n".join([*lines, "  No social signals."])
-    for bucket, title in _importance_titles():
+        return "\n".join([*lines, "  No social signals at this detail level."])
+    for bucket, title in _importance_titles(detail):
         items = buckets.get(bucket, [])
         if not items:
             continue
@@ -460,7 +510,7 @@ def _text_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines.append(f"- {title or 'Unknown filer'}")
         lines.append(f"  Filed: {_house_value(row.get('filing_date'))}")
         lines.append(f"  Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
-        lines.append(f"  Action: {_house_trade_action(row.get('transaction_type'))}")
+        lines.append(f"  Action: {_house_trade_action(row.get('transaction_action') or row.get('transaction_type'))}")
         lines.append(f"  Trade date: {_house_value(row.get('transaction_date'))}")
         lines.append(f"  Amount: {_house_value(row.get('amount'))}")
         if row.get("pdf_url"):
@@ -473,6 +523,12 @@ def _social_items_by_importance(summary: dict[str, Any]) -> dict[str, list[dict[
     for item in _social_items(summary):
         buckets[_importance_bucket(item)].append(item)
     return buckets
+
+
+def _filtered_social_buckets(summary: dict[str, Any], detail: SocialReportDetail) -> dict[str, list[dict[str, Any]]]:
+    buckets = _social_items_by_importance(summary)
+    allowed = {bucket for bucket, _title in _importance_titles(detail)}
+    return {bucket: items if bucket in allowed else [] for bucket, items in buckets.items()}
 
 
 def _social_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -548,8 +604,20 @@ def _importance_bucket(item: dict[str, Any]) -> str:
     return "medium"
 
 
-def _importance_titles() -> list[tuple[str, str]]:
-    return [("high", "High Importance"), ("medium", "Medium Importance"), ("low", "Low Importance")]
+def _importance_titles(detail: SocialReportDetail = "full") -> list[tuple[str, str]]:
+    titles = [("high", "High Importance"), ("medium", "Medium Importance"), ("low", "Low Importance")]
+    if detail == "minimum":
+        return titles[:1]
+    if detail == "medium":
+        return titles[:2]
+    return titles
+
+
+def _normalize_social_detail(value: str) -> SocialReportDetail:
+    normalized = value.lower().strip()
+    if normalized in {"minimum", "medium", "full"}:
+        return normalized  # type: ignore[return-value]
+    raise PresentationRenderError(f"Unsupported social report detail: {value}")
 
 
 def _html_x_reports(value: Any, media_by_ref: dict[str, list[dict[str, Any]]]) -> str:

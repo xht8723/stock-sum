@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from stock_sum.api.jobs import HttpJobManager, ReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, TradingReportJobOptions
 from stock_sum.api.runtime_config import RuntimeConfigError, RuntimeConfigManager
 from stock_sum.config.loader import redacted_config
 from stock_sum.config.models import AppConfig
@@ -28,12 +28,14 @@ from stock_sum.retention import DataRetentionService
 
 
 ReportModePath = Literal["html", "markdown", "discord", "text", "json"]
+SocialReportDetailPath = Literal["minimum", "medium", "full"]
 
 
 class ReportJobRequest(BaseModel):
     """HTTP request body for a full report job."""
 
     mode: ReportModePath = "html"
+    detail: SocialReportDetailPath = "minimum"
     download_images: bool = False
     instructions: str | None = None
     title: str = "Market Social Digest"
@@ -94,11 +96,25 @@ class HousePtrRequest(BaseModel):
     enabled: bool = True
     year: int | None = Field(default=None, ge=0)
     render_limit: int = Field(default=20, ge=1)
+    refresh_ttl_seconds: int = Field(default=21600, ge=0)
     download_concurrency: int = Field(default=4, ge=1)
     parse_concurrency: int = Field(default=2, ge=1)
     zip_url_template: str = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
     pdf_url_template: str = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
     profile: str | None = "default"
+
+
+class TradingReportJobRequest(BaseModel):
+    """HTTP request body for a House PTR trading disclosure report."""
+
+    mode: ReportModePath = "html"
+    name: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    days: int | None = Field(default=None, ge=1)
+    limit: int = Field(default=20, ge=1, le=100)
+    title: str = "Official Trading Disclosures"
+    force_refresh: bool = False
 
 
 class LLMConfigPatchRequest(BaseModel):
@@ -182,7 +198,7 @@ def build_router(
         background_tasks: BackgroundTasks,
         request: ReportJobRequest = ReportJobRequest(),
     ) -> dict:
-        return _create_report_job(current_manager(), profile, request, background_tasks)
+        return _create_social_report_job(current_manager(), profile, request, background_tasks)
 
     @v1.post("/reports/{profile}/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
     async def create_report_job_for_mode(
@@ -191,9 +207,43 @@ def build_router(
         background_tasks: BackgroundTasks,
         request: ReportJobRequest = ReportJobRequest(),
     ) -> dict:
-        return _create_report_job(current_manager(), profile, request, background_tasks, mode=mode)
+        return _create_social_report_job(current_manager(), profile, request, background_tasks, mode=mode)
 
-    def _create_report_job(
+    @v1.post("/social-reports/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)
+    async def create_social_report_job(
+        profile: str,
+        background_tasks: BackgroundTasks,
+        request: ReportJobRequest = ReportJobRequest(),
+    ) -> dict:
+        return _create_social_report_job(current_manager(), profile, request, background_tasks)
+
+    @v1.post("/social-reports/{profile}/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
+    async def create_social_report_job_for_mode(
+        profile: str,
+        mode: ReportModePath,
+        background_tasks: BackgroundTasks,
+        request: ReportJobRequest = ReportJobRequest(),
+    ) -> dict:
+        return _create_social_report_job(current_manager(), profile, request, background_tasks, mode=mode)
+
+    @v1.post("/trading-reports/jobs", status_code=status.HTTP_202_ACCEPTED)
+    async def create_trading_report_job(
+        background_tasks: BackgroundTasks,
+        request: TradingReportJobRequest = TradingReportJobRequest(),
+    ) -> dict:
+        return _create_trading_report_job(current_manager(), request, background_tasks)
+
+    @v1.post("/trading-reports/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
+    async def create_trading_report_job_for_mode(
+        mode: ReportModePath,
+        background_tasks: BackgroundTasks,
+        request: TradingReportJobRequest = TradingReportJobRequest(),
+    ) -> dict:
+        data = request.model_dump()
+        data["mode"] = mode
+        return _create_trading_report_job(current_manager(), TradingReportJobRequest(**data), background_tasks)
+
+    def _create_social_report_job(
         manager: HttpJobManager | None,
         profile: str,
         request: ReportJobRequest,
@@ -212,6 +262,21 @@ def build_router(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         background_tasks.add_task(manager.run_report_job, job.job_id, options)
+        return _job_response(job.to_dict())
+
+    def _create_trading_report_job(
+        manager: HttpJobManager | None,
+        request: TradingReportJobRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict:
+        if manager is None:
+            raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
+        try:
+            options = TradingReportJobOptions(**request.model_dump())
+            job = manager.create_trading_report_job(options)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        background_tasks.add_task(manager.run_trading_report_job, job.job_id, options)
         return _job_response(job.to_dict())
 
     @v1.post("/collect/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)
@@ -410,6 +475,7 @@ def build_router(
                 enabled=request.enabled,
                 year=request.year,
                 render_limit=request.render_limit,
+                refresh_ttl_seconds=request.refresh_ttl_seconds,
                 download_concurrency=request.download_concurrency,
                 parse_concurrency=request.parse_concurrency,
                 zip_url_template=request.zip_url_template,

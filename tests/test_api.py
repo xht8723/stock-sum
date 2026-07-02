@@ -45,11 +45,12 @@ def test_report_job_lifecycle_and_artifact_download(tmp_path) -> None:
 
     create_response = client.post(
         "/v1/reports/default/jobs",
-        json={"mode": "html"},
+        json={"mode": "html", "detail": "medium"},
     )
 
     assert create_response.status_code == 202
     assert manager.last_report_mode == "html"
+    assert manager.last_report_detail == "medium"
     job_id = create_response.json()["job_id"]
 
     status_response = client.get(f"/v1/jobs/{job_id}")
@@ -74,6 +75,7 @@ def test_report_job_format_endpoint_sets_mode(tmp_path) -> None:
 
     assert create_response.status_code == 202
     assert manager.last_report_mode == "discord"
+    assert manager.last_report_detail == "minimum"
 
 
 def test_report_job_format_endpoint_allows_empty_body(tmp_path) -> None:
@@ -121,11 +123,13 @@ class FakeJobManager:
         self.tmp_path = tmp_path
         self.jobs: dict[str, FakeJob] = {}
         self.last_report_mode: str | None = None
+        self.last_report_detail: str | None = None
 
     def create_report_job(self, profile: str, options) -> FakeJob:
         if profile != "default":
             raise KeyError(f"Unknown report profile: {profile}")
         self.last_report_mode = options.mode
+        self.last_report_detail = options.detail
         job = FakeJob(job_id="job-1", kind="report", profile=profile)
         self.jobs[job.job_id] = job
         return job

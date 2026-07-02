@@ -130,13 +130,14 @@ class ReportPipeline:
             if not suppress_errors:
                 raise
 
-    async def run_report(self, profile: str) -> PipelineCollectionResult:
+    async def run_report(self, profile: str, *, collector_ids: list[str] | None = None) -> PipelineCollectionResult:
         """Run the collection phase for a report profile."""
 
         try:
             profile_config = self.context.config.reports[profile]
         except KeyError as exc:
             raise ConfigurationError(f"Unknown report profile: {profile}") from exc
+        active_collector_ids = collector_ids if collector_ids is not None else profile_config.collector_ids
 
         runs: list[CollectionRunResult] = []
         warnings: list[PipelineSectionWarning] = []
@@ -146,7 +147,7 @@ class ReportPipeline:
             async with semaphore:
                 return await self.collect_collector(collector_id, profile=profile, raise_on_error=False)
 
-        runs = await asyncio.gather(*(run_collector(collector_id) for collector_id in profile_config.collector_ids))
+        runs = await asyncio.gather(*(run_collector(collector_id) for collector_id in active_collector_ids))
         for run in runs:
             warnings.extend(run.warnings)
             if run.status == "failed":
