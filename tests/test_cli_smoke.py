@@ -1,6 +1,7 @@
 """CLI smoke tests."""
 
 import os
+import json
 
 from typer.testing import CliRunner
 
@@ -231,6 +232,7 @@ def test_database_reset_cancel_keeps_sqlite_file(tmp_path) -> None:
 def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     env_file = tmp_path / ".env"
+    state_file = tmp_path / ".stock-sum-state.json"
     runner = CliRunner()
 
     result = runner.invoke(
@@ -243,6 +245,8 @@ def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
             str(config_path),
             "--env-file",
             str(env_file),
+            "--state-file",
+            str(state_file),
             "--xpoz-api-key",
             "xpoz-secret",
             "--llm-api-key",
@@ -272,6 +276,9 @@ def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
     assert "DEEPSEEK_API_KEY=deepseek-secret" in env_text
     assert "deepseek-secret" not in result.output
     assert "Next steps" in result.output
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["config"] == str(config_path.resolve())
+    assert state["env_file"] == str(env_file.resolve())
 
 
 def test_setup_init_overwrites_existing_config_by_default(tmp_path) -> None:
@@ -392,6 +399,45 @@ def test_setup_reset_requires_confirmation_and_removes_targets(tmp_path) -> None
     assert not data_dir.exists()
     assert '"status": "reset"' in result.output
     assert "stock-sum setup init" in result.output
+
+
+def test_setup_reset_uses_remembered_setup_paths(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / "stock-sum.env"
+    state_file = tmp_path / ".stock-sum-state.json"
+    data_dir = tmp_path / "data"
+    runner = CliRunner()
+
+    init_result = runner.invoke(
+        app,
+        [
+            "setup",
+            "init",
+            "--yes",
+            "--config",
+            str(config_path),
+            "--env-file",
+            str(env_file),
+            "--state-file",
+            str(state_file),
+            "--xpoz-api-key",
+            "xpoz-secret",
+            "--llm-api-key",
+            "deepseek-secret",
+        ],
+    )
+    (data_dir / "http_jobs").mkdir(parents=True)
+    (data_dir / "media").mkdir()
+    (data_dir / "stock_sum.sqlite3").write_text("db", encoding="utf-8")
+
+    reset_result = runner.invoke(app, ["setup", "reset", "--state-file", str(state_file), "--yes"])
+
+    assert init_result.exit_code == 0
+    assert reset_result.exit_code == 0
+    assert not config_path.exists()
+    assert not env_file.exists()
+    assert not data_dir.exists()
+    assert not state_file.exists()
 
 
 def test_setup_reset_cancel_keeps_targets(tmp_path) -> None:

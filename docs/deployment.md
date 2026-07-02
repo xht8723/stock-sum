@@ -166,9 +166,10 @@ stock-sum setup init --config config.toml --env-file .env
 stock-sum setup check --config config.toml --env-file .env
 ```
 
-For systemd, write the same keys to `/etc/stock-sum/stock-sum.env` and point the
-service at that env file. The daemon remains non-interactive and fails fast if
-required secrets are missing.
+For systemd, keep the same default env file used by `setup init`:
+`/opt/stock-sum/app/.env`. Point both systemd and `stock-sum daemon` at that
+same file. The daemon remains non-interactive and fails fast if required secrets
+are missing.
 
 Windows PowerShell:
 
@@ -253,8 +254,8 @@ pip install .
 python -m playwright install --with-deps chromium
 ```
 
-Place `config.toml` in `/opt/stock-sum/app` and secrets in
-`/etc/stock-sum/stock-sum.env`, then create `/etc/systemd/system/stock-sum.service`:
+Place `config.toml` and `.env` in `/opt/stock-sum/app`, then create
+`/etc/systemd/system/stock-sum.service`:
 
 ```ini
 [Unit]
@@ -265,8 +266,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/stock-sum/app
-EnvironmentFile=/etc/stock-sum/stock-sum.env
-ExecStart=/opt/stock-sum/app/.venv/bin/stock-sum daemon --config /opt/stock-sum/app/config.toml --host 0.0.0.0 --port 8000
+EnvironmentFile=/opt/stock-sum/app/.env
+ExecStart=/opt/stock-sum/app/.venv/bin/stock-sum daemon --config /opt/stock-sum/app/config.toml --env-file /opt/stock-sum/app/.env --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
 

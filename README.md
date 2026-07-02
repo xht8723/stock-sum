@@ -253,9 +253,10 @@ stock-sum report render --input C:\tmp\stock-sum-deepseek-response.json --mode t
 stock-sum run-report --profile default --config config.toml
 ```
 
-`setup reset` is destructive. It prints the target config, env file, and data
-directory, then asks once for confirmation before deletion. Use `--yes` for
-non-interactive automation.
+`setup reset` is destructive. It remembers the config, env file, and data
+directory written by `setup init`, derives runtime artifact/media/SQLite paths
+from the active config when available, then asks once for confirmation before
+deletion. Use `--yes` for non-interactive automation.
 
 Fresh configs enable bundled example sources for `x.aleabitoreddit`,
 `reddit.wallstreetbets`, and `house.ptr`. Customize them through TOML or the

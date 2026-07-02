@@ -85,6 +85,8 @@ config_app.add_typer(subreddit_app, name="subreddit")
 config_app.add_typer(house_ptr_app, name="house-ptr")
 console = Console()
 
+DEFAULT_SETUP_STATE_FILE = Path(".stock-sum-state.json")
+
 
 def _parse_value(raw: str) -> Any:
     try:
@@ -176,6 +178,82 @@ def _remove_reset_target(path: Path) -> bool:
     else:
         path.unlink()
     return True
+
+
+def _resolve_path(path: Path) -> Path:
+    """Resolve a path without requiring it to already exist."""
+
+    try:
+        return path.expanduser().resolve()
+    except OSError:
+        return path.expanduser().absolute()
+
+
+def _resolve_config_path(value: str, config_path: Path) -> Path:
+    """Resolve a TOML path value relative to the config file directory."""
+
+    path = Path(value)
+    if path.is_absolute():
+        return _resolve_path(path)
+    return _resolve_path(config_path.parent / path)
+
+
+def _read_setup_state(state_file: Path) -> dict[str, str]:
+    """Read remembered non-secret setup paths."""
+
+    try:
+        return json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_setup_state(state_file: Path, *, config: Path, env_file: Path, data_dir: Path) -> None:
+    """Remember setup paths so reset targets the active install."""
+
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "config": str(_resolve_path(config)),
+                "env_file": str(_resolve_path(env_file)),
+                "data_dir": str(_resolve_path(data_dir)),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _managed_targets_from_config(config_path: Path) -> list[Path]:
+    """Return runtime output paths from the active config."""
+
+    if not config_path.exists():
+        return []
+    try:
+        settings = load_config(config_path)
+    except Exception:
+        return []
+    sqlite_path = _resolve_config_path(settings.storage.sqlite_path, config_path)
+    return [
+        _resolve_config_path(settings.server.artifact_dir, config_path),
+        _resolve_config_path(settings.media.root_dir, config_path),
+        *_sqlite_reset_targets(sqlite_path),
+    ]
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    """Deduplicate paths while preserving order."""
+
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        resolved = _resolve_path(path)
+        key = str(resolved).casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(resolved)
+    return result
 
 
 def _sqlite_reset_targets(sqlite_path: Path) -> list[Path]:
@@ -279,6 +357,7 @@ def daemon(
 def setup_init(
     config: Path = typer.Option(Path("config.toml"), "--config", "-c", help="Config TOML path to write."),
     env_file: Path = typer.Option(Path(".env"), "--env-file", help="Env file path for secrets."),
+    state_file: Path = typer.Option(DEFAULT_SETUP_STATE_FILE, "--state-file", help="Non-secret setup state path."),
     overwrite: bool = typer.Option(True, "--overwrite/--no-overwrite", help="Replace an existing config file."),
     yes: bool = typer.Option(False, "--yes", help="Accept defaults and use provided key options."),
     host: str | None = typer.Option(None, "--host", help="HTTP server host."),
@@ -339,6 +418,7 @@ def setup_init(
     env_values["XPOZ_API_KEY"] = xpoz_api_key
     env_values[descriptor.api_key_env] = llm_api_key
     write_env_file(env_file, env_values)
+    _write_setup_state(state_file, config=config, env_file=env_file, data_dir=config.parent / "data")
 
     if not yes:
         x_user = typer.prompt("First X handle to collect (blank to skip)", default=x_user or "")
@@ -367,6 +447,7 @@ def setup_init(
 
     console.print(f"Wrote config: {config}")
     console.print(f"Wrote env file: {env_file}")
+    console.print(f"Wrote setup state: {state_file}")
     console.print("Next steps:")
     console.print(f"1. Validate setup: stock-sum setup check --config {config} --env-file {env_file}")
     console.print(f"2. Start service: stock-sum daemon --config {config}")
@@ -391,14 +472,27 @@ def setup_check(
 
 @setup_app.command("reset")
 def setup_reset(
-    config: Path = typer.Option(Path("config.toml"), "--config", "-c", help="Config TOML path to remove."),
-    env_file: Path = typer.Option(Path(".env"), "--env-file", help="Env file path to remove."),
-    data_dir: Path = typer.Option(Path("data"), "--data-dir", help="Local data directory to remove."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config TOML path to remove."),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path to remove."),
+    data_dir: Path | None = typer.Option(None, "--data-dir", help="Local data directory to remove."),
+    state_file: Path = typer.Option(DEFAULT_SETUP_STATE_FILE, "--state-file", help="Non-secret setup state path."),
     yes: bool = typer.Option(False, "--yes", help="Skip interactive confirmations."),
 ) -> None:
     """Reset local stock-sum state to a clean first-run install."""
 
-    targets = [config, env_file, data_dir]
+    state = _read_setup_state(state_file)
+    config_path = config or Path(state.get("config", "config.toml"))
+    env_path = env_file or Path(state.get("env_file", ".env"))
+    data_path = data_dir or Path(state.get("data_dir", "data"))
+    targets = _unique_paths(
+        [
+            config_path,
+            env_path,
+            data_path,
+            *_managed_targets_from_config(_resolve_path(config_path)),
+            state_file,
+        ]
+    )
     console.print("[red]WARNING[/red] This will delete local stock-sum setup state.")
     console.print("Targets:")
     for target in targets:
