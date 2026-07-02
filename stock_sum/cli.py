@@ -409,10 +409,6 @@ def setup_reset(
         if not typer.confirm("Continue with reset?"):
             console.print("Reset cancelled.")
             raise typer.Exit(code=1)
-        confirmation = typer.prompt("Type RESET to confirm deletion")
-        if confirmation != "RESET":
-            console.print("Reset cancelled.")
-            raise typer.Exit(code=1)
 
     removed: list[str] = []
     for target in targets:

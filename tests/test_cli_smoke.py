@@ -359,7 +359,7 @@ def test_setup_check_reports_missing_and_present_secrets(tmp_path) -> None:
     assert "Setup check passed" in passed_result.output
 
 
-def test_setup_reset_requires_double_confirmation_and_removes_targets(tmp_path) -> None:
+def test_setup_reset_requires_confirmation_and_removes_targets(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     env_file = tmp_path / ".env"
     data_dir = tmp_path / "data"
@@ -381,7 +381,7 @@ def test_setup_reset_requires_double_confirmation_and_removes_targets(tmp_path) 
             "--data-dir",
             str(data_dir),
         ],
-        input="y\nRESET\n",
+        input="y\n",
     )
 
     assert result.exit_code == 0

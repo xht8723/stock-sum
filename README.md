@@ -254,7 +254,8 @@ stock-sum run-report --profile default --config config.toml
 ```
 
 `setup reset` is destructive. It prints the target config, env file, and data
-directory, then requires confirmation and typing `RESET` before deletion.
+directory, then asks once for confirmation before deletion. Use `--yes` for
+non-interactive automation.
 
 Fresh configs enable bundled example sources for `x.aleabitoreddit`,
 `reddit.wallstreetbets`, and `house.ptr`. Customize them through TOML or the
