@@ -53,7 +53,7 @@ class DeepSeekClient:
         timeout_seconds: int,
         temperature: float,
         max_tokens: int,
-        thinking_enabled: bool = False,
+        thinking_enabled: bool = True,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.api_key_env = api_key_env
@@ -105,6 +105,7 @@ class DeepSeekClient:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "response_format": {"type": "json_object"},
+            "thinking": {"type": "enabled" if self.thinking_enabled else "disabled"},
         }
 
         try:

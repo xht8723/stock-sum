@@ -106,7 +106,7 @@ class LLMConfig(BaseModel):
     timeout_seconds: int = Field(default=60, ge=1)
     temperature: float = Field(default=0.2, ge=0, le=2)
     max_tokens: int = Field(default=5000, ge=1)
-    thinking_enabled: bool = False
+    thinking_enabled: bool = True
     analysis_x_posts_per_chunk: int = Field(default=10, ge=1)
     analysis_max_chars_per_chunk: int = Field(default=12000, ge=1000)
     analysis_max_concurrency: int = Field(default=5, ge=1)

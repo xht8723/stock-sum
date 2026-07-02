@@ -35,7 +35,7 @@ def test_example_config_is_valid() -> None:
     assert config.llm.api_key_env == "DEEPSEEK_API_KEY"
     assert config.llm.base_url == "https://api.deepseek.com"
     assert config.llm.max_tokens == 5000
-    assert config.llm.thinking_enabled is False
+    assert config.llm.thinking_enabled is True
     assert config.llm.analysis_x_posts_per_chunk == 10
     assert config.llm.analysis_max_chars_per_chunk == 12000
     assert config.llm.analysis_max_concurrency == 5

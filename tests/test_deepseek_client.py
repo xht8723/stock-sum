@@ -29,6 +29,19 @@ def _client(transport: httpx.AsyncBaseTransport | None = None) -> DeepSeekClient
     )
 
 
+def _no_thinking_client(transport: httpx.AsyncBaseTransport | None = None) -> DeepSeekClient:
+    return DeepSeekClient(
+        api_key_env="DEEPSEEK_API_KEY",
+        base_url="https://api.deepseek.com",
+        model="deepseek-v4-flash",
+        timeout_seconds=60,
+        temperature=0.2,
+        max_tokens=3200,
+        thinking_enabled=False,
+        transport=transport,
+    )
+
+
 async def test_deepseek_client_sends_openai_format_request(monkeypatch) -> None:
     seen: dict[str, object] = {}
 
@@ -60,9 +73,30 @@ async def test_deepseek_client_sends_openai_format_request(monkeypatch) -> None:
     assert isinstance(body, dict)
     assert body["model"] == "deepseek-v4-flash"
     assert body["response_format"] == {"type": "json_object"}
+    assert body["thinking"] == {"type": "enabled"}
     assert summary.model == "deepseek-v4-flash"
     assert summary.metadata["parsed"]["executive_summary"] == ["ok"]
     assert summary.metadata["usage"]["prompt_tokens"] == 10
+
+
+async def test_deepseek_client_can_disable_thinking(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"executive_summary":["ok"]}'}, "finish_reason": "stop"}],
+            },
+        )
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "secret")
+    await _no_thinking_client(httpx.MockTransport(handler)).summarize({"sources": {}})
+
+    body = seen["body"]
+    assert isinstance(body, dict)
+    assert body["thinking"] == {"type": "disabled"}
 
 
 async def test_deepseek_client_missing_api_key_fails(monkeypatch) -> None:

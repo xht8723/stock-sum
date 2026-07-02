@@ -1,5 +1,7 @@
 """CLI smoke tests."""
 
+import os
+
 from typer.testing import CliRunner
 
 from stock_sum.core.models import CollectionRunResult
@@ -440,6 +442,33 @@ def test_daemon_reports_missing_setup_without_starting_server(tmp_path, monkeypa
     assert result.exit_code == 1
     assert "stock-sum" in result.output
     assert "setup init" in result.output
+
+
+def test_daemon_env_file_overrides_stale_process_env(tmp_path, monkeypatch) -> None:
+    import stock_sum.cli as cli
+
+    config_path = tmp_path / "config.toml"
+    env_file = tmp_path / "stock-sum.env"
+    env_file.write_text("XPOZ_API_KEY=fresh-xpoz\nDEEPSEEK_API_KEY=fresh-deepseek\n", encoding="utf-8")
+    monkeypatch.setenv("XPOZ_API_KEY", "stale-xpoz")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "stale-deepseek")
+    seen: dict[str, str | int] = {}
+
+    def fake_run(app_obj, *, host, port):
+        seen["xpoz"] = os.environ["XPOZ_API_KEY"]
+        seen["deepseek"] = os.environ["DEEPSEEK_API_KEY"]
+        seen["host"] = host
+        seen["port"] = port
+
+    monkeypatch.setattr(cli.uvicorn, "run", fake_run)
+    runner = CliRunner()
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    result = runner.invoke(app, ["daemon", "--config", str(config_path), "--env-file", str(env_file)])
+
+    assert init_result.exit_code == 0
+    assert result.exit_code == 0
+    assert seen["xpoz"] == "fresh-xpoz"
+    assert seen["deepseek"] == "fresh-deepseek"
 
 
 def test_config_profile_add_edit_delete(tmp_path) -> None:

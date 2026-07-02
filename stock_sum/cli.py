@@ -111,10 +111,10 @@ def _split_csv(value: str | None) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _load_env_file(path: Path = Path(".env")) -> None:
-    """Load simple KEY=VALUE pairs from a local env file without overriding the process."""
+def _load_env_file(path: Path = Path(".env"), *, override: bool = False) -> None:
+    """Load simple KEY=VALUE pairs from a local env file."""
 
-    load_env_file(path)
+    load_env_file(path, override=override)
 
 
 def _setup_issues(config_path: Path, env_file: Path) -> list[str]:
@@ -261,7 +261,7 @@ def daemon(
 ) -> None:
     """Run the HTTP service and scheduler host."""
 
-    _load_env_file(env_file)
+    _load_env_file(env_file, override=True)
     settings = load_config(config)
     try:
         _validate_runtime_setup(settings, env_file=env_file)
