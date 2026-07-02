@@ -512,7 +512,6 @@ async def test_management_house_ptr_source_set(monkeypatch) -> None:
         profile="default",
         enabled=True,
         year=2026,
-        render_limit=15,
         download_concurrency=3,
         parse_concurrency=2,
     )
@@ -525,7 +524,6 @@ async def test_management_house_ptr_source_set(monkeypatch) -> None:
                 "profile": "default",
                 "enabled": True,
                 "year": 2026,
-                "render_limit": 15,
                 "refresh_ttl_seconds": 21600,
                 "download_concurrency": 3,
                 "parse_concurrency": 2,

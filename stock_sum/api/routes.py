@@ -95,7 +95,6 @@ class HousePtrRequest(BaseModel):
 
     enabled: bool = True
     year: int | None = Field(default=None, ge=0)
-    render_limit: int = Field(default=20, ge=1)
     refresh_ttl_seconds: int = Field(default=21600, ge=0)
     download_concurrency: int = Field(default=4, ge=1)
     parse_concurrency: int = Field(default=2, ge=1)
@@ -474,7 +473,6 @@ def build_router(
                 path,
                 enabled=request.enabled,
                 year=request.year,
-                render_limit=request.render_limit,
                 refresh_ttl_seconds=request.refresh_ttl_seconds,
                 download_concurrency=request.download_concurrency,
                 parse_concurrency=request.parse_concurrency,

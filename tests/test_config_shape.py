@@ -53,7 +53,6 @@ def test_example_config_is_valid() -> None:
     assert config.sources.subreddits[0].comments_per_post == 10
     assert config.sources.house_ptr.enabled is True
     assert config.sources.house_ptr.year == 0
-    assert config.sources.house_ptr.render_limit == 20
     assert config.sources.house_ptr.download_concurrency == 4
     assert config.sources.house_ptr.parse_concurrency == 2
     assert config.collectors == {}

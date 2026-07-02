@@ -63,7 +63,7 @@ def test_house_ptr_source_management_hot_reloads_config(tmp_path) -> None:
     show = client.get("/v1/sources/house-ptr")
     patch = client.patch(
         "/v1/sources/house-ptr",
-        json={"enabled": False, "year": 2025, "render_limit": 12, "profile": "default"},
+        json={"enabled": False, "year": 2025, "profile": "default"},
     )
 
     assert show.status_code == 200
@@ -74,7 +74,6 @@ def test_house_ptr_source_management_hot_reloads_config(tmp_path) -> None:
     config = load_config(config_path)
     assert config.sources.house_ptr.enabled is False
     assert config.sources.house_ptr.year == 2025
-    assert config.sources.house_ptr.render_limit == 12
     assert "house.ptr" not in config.reports["default"].collector_ids
 
 

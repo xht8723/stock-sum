@@ -208,7 +208,7 @@ Use the config CLI to add, delete, or replace sources.
 ```bash
 stock-sum config x-user add aleabitoreddit --config config.toml --profile default --limit 100 --lookback-hours 24
 stock-sum config subreddit add wallstreetbets --config config.toml --profile default --limit 100 --lookback-hours 24
-stock-sum config house-ptr set --config config.toml --profile default --enabled --render-limit 20
+stock-sum config house-ptr set --config config.toml --profile default --enabled
 stock-sum collect --collector x.aleabitoreddit --config config.toml
 stock-sum collect --collector reddit.wallstreetbets --config config.toml
 stock-sum collect --collector house.ptr --config config.toml

@@ -137,7 +137,6 @@ class CollectorConfig(BaseModel):
     include_comments: bool = True
     comments_per_post: int = Field(default=10, ge=0)
     year: int | None = Field(default=None, ge=0)
-    render_limit: int = Field(default=20, ge=1)
     download_concurrency: int = Field(default=4, ge=1)
     parse_concurrency: int = Field(default=2, ge=1)
     zip_url_template: str = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
@@ -172,7 +171,6 @@ class HousePtrSourceConfig(BaseModel):
 
     enabled: bool = True
     year: int | None = Field(default=None, ge=0)
-    render_limit: int = Field(default=20, ge=1)
     refresh_ttl_seconds: int = Field(default=21600, ge=0)
     download_concurrency: int = Field(default=4, ge=1)
     parse_concurrency: int = Field(default=2, ge=1)

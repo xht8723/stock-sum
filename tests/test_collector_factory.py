@@ -28,7 +28,7 @@ def test_house_ptr_source_resolves_to_collector_config() -> None:
     config = load_config("stock_sum/config/example.toml")
 
     assert source_type_for_collector_id(config, "house.ptr") == HOUSE_PTR_SOURCE_TYPE
-    assert get_collector_config(config, "house.ptr").render_limit == 20
+    assert get_collector_config(config, "house.ptr").download_concurrency == 4
 
 
 def test_removed_scrape_creators_kind_fails_clearly() -> None:

@@ -115,7 +115,6 @@ def _house_ptr_source_to_collector_config(source: HousePtrSourceConfig) -> Colle
         kind=HOUSE_PTR_SOURCE_TYPE,
         enabled=source.enabled,
         year=source.year,
-        render_limit=source.render_limit,
         download_concurrency=source.download_concurrency,
         parse_concurrency=source.parse_concurrency,
         zip_url_template=source.zip_url_template,

@@ -131,7 +131,7 @@ stock-sum config subreddit list --config config.toml
 stock-sum config subreddit add wallstreetbets --config config.toml --profile default --sort new --limit 100 --lookback-hours 24
 stock-sum config subreddit delete wallstreetbets --config config.toml --profile default
 stock-sum config house-ptr show --config config.toml
-stock-sum config house-ptr set --config config.toml --profile default --enabled --render-limit 20
+stock-sum config house-ptr set --config config.toml --profile default --enabled
 ```
 
 For X and Reddit sources, `--limit` is the provider fetch cap. Reports keep only

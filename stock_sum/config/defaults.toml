@@ -92,7 +92,6 @@ comments_per_post = 10
 [sources.house_ptr]
 enabled = true
 year = 0
-render_limit = 20
 refresh_ttl_seconds = 21600
 download_concurrency = 4
 parse_concurrency = 2
