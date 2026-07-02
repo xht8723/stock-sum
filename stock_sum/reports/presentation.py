@@ -296,6 +296,8 @@ def _html_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
             f"<td>{escape(_house_value(row.get('state')))}</td>"
             f"<td>{escape(_house_value(row.get('filing_date')))}</td>"
             f"<td>{escape(_house_value(row.get('asset') or _raw_cells_preview(row)))}</td>"
+            f"<td>{escape(_house_asset_type(row))}</td>"
+            f"<td>{escape(_house_value(row.get('stock_ticker')))}</td>"
             f"<td>{escape(_house_trade_action(row.get('transaction_action') or row.get('transaction_type')))}</td>"
             f"<td>{escape(_house_value(row.get('transaction_date')))}</td>"
             f"<td>{escape(_house_value(row.get('amount')))}</td>"
@@ -305,7 +307,7 @@ def _html_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
     table = (
         '<div class="table-wrap"><table class="disclosures"><thead><tr>'
         "<th>Filer</th><th>Status</th><th>State</th><th>Filed</th><th>Asset</th>"
-        "<th>Action</th><th>Trade Date</th><th>Amount</th><th>Source</th>"
+        "<th>Type</th><th>Ticker</th><th>Action</th><th>Trade Date</th><th>Amount</th><th>Source</th>"
         "</tr></thead><tbody>"
         + "".join(body_rows)
         + "</tbody></table></div>"
@@ -377,6 +379,10 @@ def _markdown_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> st
         lines.append(f"- **{title or 'Unknown filer'}**")
         lines.append(f"  - Filed: {_house_value(row.get('filing_date'))}")
         lines.append(f"  - Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
+        if _house_asset_type(row):
+            lines.append(f"  - Type: {_house_asset_type(row)}")
+        if row.get("stock_ticker"):
+            lines.append(f"  - Ticker: {_house_value(row.get('stock_ticker'))}")
         lines.append(f"  - Action: {_house_trade_action(row.get('transaction_action') or row.get('transaction_type'))}")
         lines.append(f"  - Trade date: {_house_value(row.get('transaction_date'))}")
         lines.append(f"  - Amount: {_house_value(row.get('amount'))}")
@@ -442,6 +448,8 @@ def _discord_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str
             for part in (
                 f"Filed {_house_value(row.get('filing_date'))}" if row.get("filing_date") else "",
                 f"Asset {_house_value(row.get('asset') or _raw_cells_preview(row))}",
+                f"Type {_house_asset_type(row)}" if _house_asset_type(row) else "",
+                f"Ticker {_house_value(row.get('stock_ticker'))}" if row.get("stock_ticker") else "",
                 f"Action {_house_trade_action(row.get('transaction_action') or row.get('transaction_type'))}" if row.get("transaction_action") or row.get("transaction_type") else "",
                 f"Date {_house_value(row.get('transaction_date'))}" if row.get("transaction_date") else "",
                 f"Amount {_house_value(row.get('amount'))}" if row.get("amount") else "",
@@ -510,6 +518,10 @@ def _text_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines.append(f"- {title or 'Unknown filer'}")
         lines.append(f"  Filed: {_house_value(row.get('filing_date'))}")
         lines.append(f"  Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
+        if _house_asset_type(row):
+            lines.append(f"  Type: {_house_asset_type(row)}")
+        if row.get("stock_ticker"):
+            lines.append(f"  Ticker: {_house_value(row.get('stock_ticker'))}")
         lines.append(f"  Action: {_house_trade_action(row.get('transaction_action') or row.get('transaction_type'))}")
         lines.append(f"  Trade date: {_house_value(row.get('transaction_date'))}")
         lines.append(f"  Amount: {_house_value(row.get('amount'))}")
@@ -574,6 +586,14 @@ def _house_value(value: Any) -> str:
     if value in (None, "", [], {}):
         return ""
     return _stringify_item(value)
+
+
+def _house_asset_type(row: dict[str, Any]) -> str:
+    code = _house_value(row.get("asset_type_code"))
+    label = _house_value(row.get("asset_type_label"))
+    if code and label:
+        return f"{label} ({code})"
+    return label or code
 
 
 def _house_trade_action(value: Any) -> str:

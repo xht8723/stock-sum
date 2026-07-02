@@ -115,6 +115,21 @@ def test_trading_report_accepts_large_optional_limit(tmp_path) -> None:
     assert manager.last_trading_limit == 500
 
 
+def test_trading_report_accepts_asset_type_and_ticker_filters(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    response = client.post(
+        "/v1/trading-reports/jobs/discord",
+        json={"asset_type": "st", "ticker": "amzn"},
+    )
+
+    assert response.status_code == 202
+    assert manager.last_trading_asset_type == "st"
+    assert manager.last_trading_ticker == "amzn"
+
+
 @dataclass
 class FakeJob:
     job_id: str
@@ -139,6 +154,8 @@ class FakeJobManager:
         self.last_report_mode: str | None = None
         self.last_report_detail: str | None = None
         self.last_trading_limit: int | None = None
+        self.last_trading_asset_type: str | None = None
+        self.last_trading_ticker: str | None = None
 
     def create_report_job(self, profile: str, options) -> FakeJob:
         if profile != "default":
@@ -151,6 +168,8 @@ class FakeJobManager:
 
     def create_trading_report_job(self, options) -> FakeJob:
         self.last_trading_limit = options.limit
+        self.last_trading_asset_type = options.asset_type
+        self.last_trading_ticker = options.ticker
         job = FakeJob(job_id="job-trading", kind="trading_report", profile="trading")
         self.jobs[job.job_id] = job
         return job

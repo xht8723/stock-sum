@@ -35,7 +35,9 @@ Its `detail` option defaults to `minimum`, which shows only high-importance
 posts. Use `medium` for high plus medium, or `full` for all social posts.
 `/tradingreport` generates official House PTR trading disclosure reports from
 SQLite without LLM analysis; it requires at least one filter such as `name`,
-`days`, or a transaction-date range.
+`days`, a transaction-date range, `asset_type`, or `ticker`. Asset type filters
+use House codes such as `ST`, `GS`, `OI`, `CS`, and `OT`; ticker filters apply
+to `ST` stock rows.
 
 The default format for both commands is Discord-specific markdown and is sent
 inline in message chunks. Choose `html`, `markdown`, `text`, or `json` to

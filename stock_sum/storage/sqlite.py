@@ -11,7 +11,12 @@ from typing import Any
 
 import aiosqlite
 
-from stock_sum.collectors.api.house import normalize_house_date, normalize_house_name, normalize_house_transaction_action
+from stock_sum.collectors.api.house import (
+    normalize_house_date,
+    normalize_house_name,
+    normalize_house_transaction_action,
+    parse_house_asset_metadata,
+)
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 from stock_sum.storage.models import (
@@ -180,6 +185,9 @@ CREATE TABLE IF NOT EXISTS raw_house_ptr_trade_rows (
     table_index INTEGER NOT NULL,
     row_index INTEGER NOT NULL,
     asset TEXT,
+    asset_type_code TEXT,
+    asset_type_label TEXT,
+    stock_ticker TEXT,
     transaction_type TEXT,
     transaction_date TEXT,
     transaction_date_utc TEXT,
@@ -293,6 +301,9 @@ HOUSE_PTR_FILING_COLUMNS = {
 HOUSE_PTR_TRADE_COLUMNS = {
     "transaction_date_utc": "TEXT",
     "transaction_action": "TEXT",
+    "asset_type_code": "TEXT",
+    "asset_type_label": "TEXT",
+    "stock_ticker": "TEXT",
 }
 
 
@@ -301,6 +312,12 @@ async def _ensure_schema_updates(db: aiosqlite.Connection) -> None:
 
     await _ensure_columns(db, "raw_house_ptr_filings", HOUSE_PTR_FILING_COLUMNS)
     await _ensure_columns(db, "raw_house_ptr_trade_rows", HOUSE_PTR_TRADE_COLUMNS)
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_house_ptr_trade_rows_asset_type ON raw_house_ptr_trade_rows (asset_type_code)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_house_ptr_trade_rows_stock_ticker ON raw_house_ptr_trade_rows (stock_ticker)"
+    )
 
 
 async def _ensure_columns(db: aiosqlite.Connection, table: str, columns: dict[str, str]) -> None:
@@ -361,26 +378,44 @@ async def _backfill_house_ptr_normalized_columns(db: aiosqlite.Connection) -> No
 
     cursor = await db.execute(
         """
-        SELECT doc_id, table_index, row_index, transaction_type, transaction_date
+        SELECT doc_id, table_index, row_index, asset, transaction_type, transaction_date
         FROM raw_house_ptr_trade_rows
-        WHERE transaction_date_utc IS NULL OR transaction_action IS NULL
+        WHERE transaction_date_utc IS NULL
+           OR transaction_action IS NULL
+           OR asset_type_code IS NULL
+           OR asset_type_label IS NULL
+           OR asset_type_label = 'Unknown'
+           OR (asset_type_code = 'ST' AND stock_ticker IS NULL)
         """
     )
     try:
         trade_rows = await cursor.fetchall()
     finally:
         await cursor.close()
-    for doc_id, table_index, row_index, transaction_type, transaction_date in trade_rows:
+    for doc_id, table_index, row_index, asset, transaction_type, transaction_date in trade_rows:
+        asset_metadata = parse_house_asset_metadata(asset)
+        expected_label = asset_metadata["asset_type_label"]
         await db.execute(
             """
             UPDATE raw_house_ptr_trade_rows
             SET transaction_date_utc = COALESCE(transaction_date_utc, ?),
-                transaction_action = COALESCE(transaction_action, ?)
+                transaction_action = COALESCE(transaction_action, ?),
+                asset_type_code = COALESCE(asset_type_code, ?),
+                asset_type_label = CASE
+                    WHEN ? IS NOT NULL AND (asset_type_label IS NULL OR asset_type_label = 'Unknown')
+                    THEN ?
+                    ELSE asset_type_label
+                END,
+                stock_ticker = COALESCE(stock_ticker, ?)
             WHERE doc_id = ? AND table_index = ? AND row_index = ?
             """,
             (
                 normalize_house_date(transaction_date),
                 normalize_house_transaction_action(transaction_type),
+                asset_metadata["asset_type_code"],
+                expected_label,
+                expected_label,
+                asset_metadata["stock_ticker"],
                 doc_id,
                 table_index,
                 row_index,
@@ -887,6 +922,8 @@ class SQLiteStorageRepository:
         name_contains: str | None = None,
         transaction_start: datetime | None = None,
         transaction_end: datetime | None = None,
+        asset_type: str | None = None,
+        ticker: str | None = None,
         limit: int | None = None,
     ) -> list[StoredHousePtrTradeRow]:
         """Read House PTR trade rows joined with filing metadata."""
@@ -895,7 +932,8 @@ class SQLiteStorageRepository:
         query = """
             SELECT f.doc_id, f.year, COALESCE(f.display_name, f.name), f.status, f.state,
                    f.filing_date, f.filing_date_utc, f.pdf_url,
-                   r.table_index, r.row_index, r.asset, r.transaction_type, r.transaction_date,
+                   r.table_index, r.row_index, r.asset, r.asset_type_code, r.asset_type_label,
+                   r.stock_ticker, r.transaction_type, r.transaction_date,
                    r.transaction_date_utc, r.transaction_action, r.amount, r.raw_cells_json,
                    r.raw_json, f.collected_at
             FROM raw_house_ptr_trade_rows r
@@ -913,6 +951,14 @@ class SQLiteStorageRepository:
         if transaction_end is not None:
             conditions.append("r.transaction_date_utc <= ?")
             params.append(_datetime_param(transaction_end, end_of_day=True))
+        normalized_asset_type = _normalized_upper_filter(asset_type)
+        if normalized_asset_type:
+            conditions.append("UPPER(r.asset_type_code) = ?")
+            params.append(normalized_asset_type)
+        normalized_ticker = _normalized_upper_filter(ticker)
+        if normalized_ticker:
+            conditions.append("UPPER(r.stock_ticker) = ?")
+            params.append(normalized_ticker)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += """
@@ -942,14 +988,17 @@ class SQLiteStorageRepository:
                 table_index=row[8],
                 row_index=row[9],
                 asset=row[10],
-                transaction_type=row[11],
-                transaction_date=row[12],
-                transaction_date_utc=row[13],
-                transaction_action=row[14],
-                amount=row[15],
-                raw_cells=_json_list(row[16]),
-                raw_metadata=_json_obj(row[17]),
-                collected_at=row[18],
+                asset_type_code=row[11],
+                asset_type_label=row[12],
+                stock_ticker=row[13],
+                transaction_type=row[14],
+                transaction_date=row[15],
+                transaction_date_utc=row[16],
+                transaction_action=row[17],
+                amount=row[18],
+                raw_cells=_json_list(row[19]),
+                raw_metadata=_json_obj(row[20]),
+                collected_at=row[21],
             )
             for row in rows
         ]
@@ -996,6 +1045,13 @@ def _datetime_param(value: datetime | date, *, end_of_day: bool = False) -> str:
     else:
         parsed = datetime.combine(value, time.max if end_of_day else time.min)
     return _utc_datetime(parsed).isoformat()
+
+
+def _normalized_upper_filter(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().upper()
+    return normalized or None
 
 
 def _content_hash(item: RawItem) -> str:
@@ -1505,14 +1561,19 @@ async def _upsert_house_ptr_trade_row(db: aiosqlite.Connection, row: dict[str, A
     await db.execute(
         """
         INSERT INTO raw_house_ptr_trade_rows (
-            doc_id, table_index, row_index, asset, transaction_type, transaction_date,
+            doc_id, table_index, row_index, asset, asset_type_code, asset_type_label,
+            stock_ticker, transaction_type, transaction_date,
             transaction_date_utc, transaction_action, amount, raw_cells_json, raw_json
         ) VALUES (
-            :doc_id, :table_index, :row_index, :asset, :transaction_type, :transaction_date,
+            :doc_id, :table_index, :row_index, :asset, :asset_type_code, :asset_type_label,
+            :stock_ticker, :transaction_type, :transaction_date,
             :transaction_date_utc, :transaction_action, :amount, :raw_cells_json, :raw_json
         )
         ON CONFLICT (doc_id, table_index, row_index) DO UPDATE SET
             asset = excluded.asset,
+            asset_type_code = excluded.asset_type_code,
+            asset_type_label = excluded.asset_type_label,
+            stock_ticker = excluded.stock_ticker,
             transaction_type = excluded.transaction_type,
             transaction_date = excluded.transaction_date,
             transaction_date_utc = excluded.transaction_date_utc,

@@ -23,6 +23,22 @@ if TYPE_CHECKING:
 
 HOUSE_PTR_SOURCE_TYPE = "house_ptr_disclosures"
 
+HOUSE_ASSET_TYPE_LABELS = {
+    "ST": "Stocks, including ADRs",
+    "GS": "Government Securities and Agency Debt",
+    "OI": "Ownership Interest (Holding Investments)",
+    "CS": "Corporate Securities (Bonds and Notes)",
+    "OT": "Other",
+    "HN": "Hedge Funds & Private Equity Funds (non-EIF)",
+    "OP": "Options",
+    "PS": "Stock, not publicly traded",
+    "VA": "Variable Annuity",
+    "CT": "Cryptocurrency",
+    "OL": "Ownership Interest in a business where the owner is engaged in its trade or operations",
+    "RS": "Restricted Stock Units (RSUs)",
+    "AB": "Asset-Backed Securities",
+}
+
 
 @dataclass(frozen=True)
 class HousePtrFiling:
@@ -234,6 +250,7 @@ def normalize_house_ptr_tables(tables: list[list[list[str]]]) -> list[dict[str, 
                 fields = _fallback_fields_from_collapsed_row(cells) or fields
             if not fields["asset"] or not any(fields[key] for key in ("transaction_type", "transaction_date", "amount")):
                 continue
+            fields.update(parse_house_asset_metadata(fields.get("asset")))
             rows.append(
                 {
                     "table_index": table_index,
@@ -374,6 +391,27 @@ def normalize_house_transaction_action(value: str | None) -> str | None:
     if normalized.startswith("sale") or normalized.startswith("sell"):
         return "sell"
     return normalized or None
+
+
+def parse_house_asset_metadata(asset: str | None) -> dict[str, str | None]:
+    """Extract queryable House asset type and stock ticker metadata."""
+
+    if not asset:
+        return {"asset_type_code": None, "asset_type_label": None, "stock_ticker": None}
+    type_match = re.search(r"\[([A-Za-z]{2})\]\s*$", asset.strip())
+    asset_type_code = type_match.group(1).upper() if type_match else None
+    asset_type_label = HOUSE_ASSET_TYPE_LABELS.get(asset_type_code, "Unknown") if asset_type_code else None
+    stock_ticker = None
+    if asset_type_code == "ST":
+        before_type = asset[: type_match.start()].strip() if type_match else asset.strip()
+        ticker_match = re.search(r"\(([A-Za-z][A-Za-z0-9.$/\-]*)\)\s*$", before_type)
+        if ticker_match:
+            stock_ticker = ticker_match.group(1).upper()
+    return {
+        "asset_type_code": asset_type_code,
+        "asset_type_label": asset_type_label,
+        "stock_ticker": stock_ticker,
+    }
 
 
 def _local_name(tag: str) -> str:

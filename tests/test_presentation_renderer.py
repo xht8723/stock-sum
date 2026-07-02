@@ -123,7 +123,10 @@ def _house_response() -> dict:
             "state": "CA",
             "filing_date": "2026-06-30",
             "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
-            "asset": "AAPL",
+            "asset": "Apple Inc. - Common Stock (AAPL) [ST]",
+            "asset_type_code": "ST",
+            "asset_type_label": "Stocks, including ADRs",
+            "stock_ticker": "AAPL",
             "transaction_type": "Purchase",
             "transaction_date": "2026-06-20",
             "amount": "$1,001 - $15,000",
@@ -137,7 +140,10 @@ def _house_response() -> dict:
             "state": "NY",
             "filing_date": "2026-06-29",
             "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024229.pdf",
-            "asset": "MSFT",
+            "asset": "Microsoft Corporation - Common Stock (MSFT) [ST]",
+            "asset_type_code": "ST",
+            "asset_type_label": "Stocks, including ADRs",
+            "stock_ticker": "MSFT",
             "transaction_type": "S (partial)",
             "transaction_date": "2026-06-19",
             "amount": "$15,001 - $50,000",
@@ -429,18 +435,22 @@ def test_renderer_outputs_house_ptr_disclosures_in_all_modes() -> None:
     assert "Official Trading Disclosures" in html
     assert "<td>Jane Doe</td>" in html
     assert "AAPL" in html
+    assert "Stocks, including ADRs (ST)" in html
     assert ">Purchase<" in html
     assert ">Sell (partial)<" in html
     assert 'href="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf"' in html
     assert "## Official Trading Disclosures" in markdown
     assert "Action: Purchase" in markdown
+    assert "Ticker: AAPL" in markdown
     assert "Action: Sell (partial)" in markdown
     assert "[Read PDF](https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf)" in markdown
     assert "**Official Trading Disclosures**" in discord
     assert "Action Purchase" in discord
+    assert "Ticker AAPL" in discord
     assert "Action Sell (partial)" in discord
     assert "[PDF](https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf)" in discord
     assert "OFFICIAL TRADING DISCLOSURES" in text
     assert "Action: Purchase" in text
+    assert "Type: Stocks, including ADRs (ST)" in text
     assert "Action: Sell (partial)" in text
     assert "Source: https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf" in text

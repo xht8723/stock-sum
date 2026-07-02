@@ -52,6 +52,8 @@ class TradingReportJobOptions:
     start_date: str | None = None
     end_date: str | None = None
     days: int | None = None
+    asset_type: str | None = None
+    ticker: str | None = None
     limit: int | None = None
     title: str = "Official Trading Disclosures"
     force_refresh: bool = False
@@ -309,8 +311,11 @@ class HttpJobManager:
                 name_contains=options.name,
                 transaction_start=transaction_start,
                 transaction_end=transaction_end,
+                asset_type=options.asset_type,
+                ticker=options.ticker,
                 limit=options.limit,
             )
+            rows = _sort_house_ptr_rows(rows)
             if not rows:
                 message = "No House PTR trade rows matched the trading report filters."
                 if warnings:
@@ -761,8 +766,8 @@ def _social_collector_ids(config: AppConfig, profile: str) -> list[str]:
 
 
 def _validate_trading_filters(options: TradingReportJobOptions) -> None:
-    if not any((options.name, options.start_date, options.end_date, options.days)):
-        raise ValueError("Trading report requires at least one filter: name, start_date/end_date, or days.")
+    if not any((options.name, options.start_date, options.end_date, options.days, options.asset_type, options.ticker)):
+        raise ValueError("Trading report requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
     if options.days is not None and (options.start_date or options.end_date):
         raise ValueError("Trading report accepts either days or explicit start/end dates, not both.")
 
@@ -802,6 +807,8 @@ def _trading_filter_data(
         "start_date": options.start_date,
         "end_date": options.end_date,
         "days": options.days,
+        "asset_type": options.asset_type,
+        "ticker": options.ticker,
         "transaction_start": transaction_start.isoformat() if transaction_start else None,
         "transaction_end": transaction_end.isoformat() if transaction_end else None,
         "limit": options.limit,
@@ -874,6 +881,9 @@ def _house_ptr_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
             "table_index": row.table_index,
             "row_index": row.row_index,
             "asset": row.asset,
+            "asset_type_code": row.asset_type_code,
+            "asset_type_label": row.asset_type_label,
+            "stock_ticker": row.stock_ticker,
             "transaction_type": row.transaction_type,
             "transaction_date": row.transaction_date,
             "transaction_date_utc": row.transaction_date_utc,
@@ -884,6 +894,45 @@ def _house_ptr_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def _sort_house_ptr_rows(rows: list[Any]) -> list[Any]:
+    """Sort House PTR rows newest-first by transaction date for final reports."""
+
+    return sorted(rows, key=_house_ptr_row_sort_key, reverse=True)
+
+
+def _house_ptr_row_sort_key(row: Any) -> tuple[datetime, datetime, datetime, str, int, int]:
+    minimum = datetime.min.replace(tzinfo=timezone.utc)
+    transaction_at = _parse_utc_datetime(getattr(row, "transaction_date_utc", None))
+    if transaction_at is None:
+        transaction_at = _parse_simple_date(getattr(row, "transaction_date", None)) or minimum
+    filing_at = _parse_utc_datetime(getattr(row, "filing_date_utc", None))
+    if filing_at is None:
+        filing_at = _parse_simple_date(getattr(row, "filing_date", None)) or minimum
+    collected_at = _parse_utc_datetime(getattr(row, "collected_at", None)) or minimum
+    return (
+        transaction_at,
+        filing_at,
+        collected_at,
+        str(getattr(row, "doc_id", "")),
+        int(getattr(row, "table_index", 0) or 0),
+        int(getattr(row, "row_index", 0) or 0),
+    )
+
+
+def _parse_simple_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            parsed_date = datetime.strptime(text, fmt).date()
+            return datetime.combine(parsed_date, time.min, tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
 
 def _analysis_response_data(
     *,

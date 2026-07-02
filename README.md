@@ -316,8 +316,10 @@ seconds, defaulting to six hours. Set it to `0` to disable report reuse.
 Supported output modes are `html`, `markdown`, `discord`, `text`, and `json`.
 Social reports also accept `detail`: `minimum` renders high-importance posts,
 `medium` renders high plus medium, and `full` renders all social posts. Trading
-reports require at least one filter: `name`, `days`, or a transaction-date
-`start_date`/`end_date` range.
+reports require at least one filter: `name`, `days`, a transaction-date
+`start_date`/`end_date` range, `asset_type`, or `ticker`. Asset type filters use
+House codes such as `ST`, `GS`, `OI`, `CS`, and `OT`; ticker filters apply to
+`ST` stock rows.
 
 Example:
 
@@ -328,7 +330,7 @@ curl -X POST http://127.0.0.1:8000/v1/social-reports/default/jobs/html `
   -d '{"detail":"minimum"}'
 curl -X POST http://127.0.0.1:8000/v1/trading-reports/jobs/markdown `
   -H "Content-Type: application/json" `
-  -d '{"days":30}'
+  -d '{"days":30,"asset_type":"ST","ticker":"AMZN"}'
 ```
 
 The response includes a `job_id` that can be polled until the report succeeds or

@@ -446,14 +446,14 @@ async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
             "filing_date": "2026-06-30",
             "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
             "raw_xml": {"DocID": "20024228"},
-            "tables": [[["Asset", "Type", "Date", "Amount"], ["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"]]],
+            "tables": [[["Asset", "Type", "Date", "Amount"], ["Apple Inc. - Common Stock (AAPL) [ST]", "Purchase", "2026-06-20", "$1,001 - $15,000"]]],
             "trade_rows": [
                 {
                     "table_index": 0,
                     "row_index": 0,
-                    "cells": ["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"],
+                    "cells": ["Apple Inc. - Common Stock (AAPL) [ST]", "Purchase", "2026-06-20", "$1,001 - $15,000"],
                     "fields": {
-                        "asset": "AAPL",
+                        "asset": "Apple Inc. - Common Stock (AAPL) [ST]",
                         "transaction_type": "Purchase",
                         "transaction_date": "2026-06-20",
                         "amount": "$1,001 - $15,000",
@@ -474,9 +474,15 @@ async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
     trades = await repository.read_house_ptr_trades(limit=20)
     assert len(trades) == 1
     assert trades[0].name == "Jane Doe"
-    assert trades[0].asset == "AAPL"
+    assert trades[0].asset == "Apple Inc. - Common Stock (AAPL) [ST]"
+    assert trades[0].asset_type_code == "ST"
+    assert trades[0].asset_type_label == "Stocks, including ADRs"
+    assert trades[0].stock_ticker == "AAPL"
     assert trades[0].transaction_type == "Purchase"
-    assert trades[0].raw_cells[0] == "AAPL"
+    assert trades[0].raw_cells[0] == "Apple Inc. - Common Stock (AAPL) [ST]"
+    assert [trade.doc_id for trade in await repository.read_house_ptr_trades(asset_type="st")] == ["20024228"]
+    assert [trade.doc_id for trade in await repository.read_house_ptr_trades(ticker="aapl")] == ["20024228"]
+    assert await repository.read_house_ptr_trades(asset_type="GS") == []
 
 
 async def test_failed_house_ptr_extractions_are_not_skipped(tmp_path) -> None:

@@ -137,6 +137,9 @@ class StoredHousePtrTradeRow:
     table_index: int
     row_index: int
     asset: str | None
+    asset_type_code: str | None
+    asset_type_label: str | None
+    stock_ticker: str | None
     transaction_type: str | None
     transaction_date: str | None
     transaction_date_utc: str | None

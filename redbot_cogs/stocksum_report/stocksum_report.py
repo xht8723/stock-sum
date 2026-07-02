@@ -203,6 +203,8 @@ class StockSumHttpClient:
         start_date: str | None = None,
         end_date: str | None = None,
         days: int | None = None,
+        asset_type: str | None = None,
+        ticker: str | None = None,
         limit: int | None = None,
         force_refresh: bool = False,
     ) -> StockSumArtifact:
@@ -210,8 +212,8 @@ class StockSumHttpClient:
 
         if output_format not in SUPPORTED_FORMATS:
             raise StockSumRequestError(f"Unsupported report format: {output_format}")
-        if not any((name, start_date, end_date, days)):
-            raise StockSumRequestError("tradingreport requires at least one filter: name, start_date/end_date, or days.")
+        if not any((name, start_date, end_date, days, asset_type, ticker)):
+            raise StockSumRequestError("tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
 
         session, owns_session = await self._session()
         try:
@@ -220,6 +222,8 @@ class StockSumHttpClient:
                 "start_date": start_date,
                 "end_date": end_date,
                 "days": days,
+                "asset_type": asset_type,
+                "ticker": ticker,
                 "limit": limit,
                 "force_refresh": force_refresh,
             }
@@ -503,6 +507,8 @@ class StockSumReport(commands.Cog):
         start_date="transaction start date, YYYY-MM-DD",
         end_date="transaction end date, YYYY-MM-DD",
         days="transaction records from the last N days",
+        asset_type="House asset type code, e.g. ST, GS, OI, CS, OT",
+        ticker="stock ticker for ST rows, e.g. AMZN",
         limit="optional maximum rows to return",
         format="report artifact format",
         private="send the response only to you",
@@ -524,6 +530,8 @@ class StockSumReport(commands.Cog):
         start_date: str = "",
         end_date: str = "",
         days: int | None = None,
+        asset_type: str = "",
+        ticker: str = "",
         limit: int | None = None,
         format: str = "discord",
         private: bool = False,
@@ -534,10 +542,12 @@ class StockSumReport(commands.Cog):
         name_filter = name.strip() or None
         start_filter = start_date.strip() or None
         end_filter = end_date.strip() or None
-        if not any((name_filter, start_filter, end_filter, days)):
+        asset_type_filter = asset_type.strip().upper() or None
+        ticker_filter = ticker.strip().upper() or None
+        if not any((name_filter, start_filter, end_filter, days, asset_type_filter, ticker_filter)):
             await _send_report_output(
                 interaction,
-                "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, or days.",
+                "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
                 private=True,
             )
             return
@@ -553,6 +563,8 @@ class StockSumReport(commands.Cog):
                 start_date=start_filter,
                 end_date=end_filter,
                 days=days,
+                asset_type=asset_type_filter,
+                ticker=ticker_filter,
                 limit=limit if limit is None else max(1, limit),
                 force_refresh=force_refresh,
             )

@@ -10,6 +10,7 @@ from stock_sum.collectors.api.house import (
     HousePtrFiling,
     house_ptr_raw_item,
     normalize_house_ptr_tables,
+    parse_house_asset_metadata,
     parse_house_ptr_zip,
 )
 from stock_sum.config.models import CollectorConfig
@@ -132,9 +133,42 @@ def test_normalize_house_ptr_tables_extracts_display_fields() -> None:
 
     assert rows[0]["fields"] == {
         "asset": "MSFT",
+        "asset_type_code": None,
+        "asset_type_label": None,
+        "stock_ticker": None,
         "transaction_type": "Sale",
         "transaction_date": "2026-06-01",
         "amount": "$15,001 - $50,000",
+    }
+
+
+def test_parse_house_asset_metadata_extracts_stock_type_and_ticker() -> None:
+    metadata = parse_house_asset_metadata("Amazon.com, Inc. - Common Stock (AMZN) [ST]")
+
+    assert metadata == {
+        "asset_type_code": "ST",
+        "asset_type_label": "Stocks, including ADRs",
+        "stock_ticker": "AMZN",
+    }
+    assert parse_house_asset_metadata("AT&T Inc. Depositary Shares (T$A) [ST]")["stock_ticker"] == "T$A"
+    assert parse_house_asset_metadata("Berkshire Hathaway Inc. New Common Stock (BRK.B) [ST]")["stock_ticker"] == "BRK.B"
+
+
+def test_parse_house_asset_metadata_preserves_non_stock_and_unknown_codes() -> None:
+    assert parse_house_asset_metadata("US Treasury Note 3.5% DUE 01/31/28 (91282CGH8) [GS]") == {
+        "asset_type_code": "GS",
+        "asset_type_label": "Government Securities and Agency Debt",
+        "stock_ticker": None,
+    }
+    assert parse_house_asset_metadata("Microsoft Corporation - Common Stock (MSFT) [OP]") == {
+        "asset_type_code": "OP",
+        "asset_type_label": "Options",
+        "stock_ticker": None,
+    }
+    assert parse_house_asset_metadata("SBA Communications Corporation -") == {
+        "asset_type_code": None,
+        "asset_type_label": None,
+        "stock_ticker": None,
     }
 
 
@@ -165,12 +199,18 @@ def test_normalize_house_ptr_tables_recovers_collapsed_pdf_rows() -> None:
 
     assert rows[0]["fields"] == {
         "asset": "American Water Works Company, Inc. Common Stock (AWK) [ST]",
+        "asset_type_code": "ST",
+        "asset_type_label": "Stocks, including ADRs",
+        "stock_ticker": "AWK",
         "transaction_type": "S",
         "transaction_date": "01/14/2026",
         "amount": "$50,001 - $100,000",
     }
     assert rows[1]["fields"] == {
         "asset": "Ferguson Enterprises Inc. Common Stock (FERG) [ST]",
+        "asset_type_code": "ST",
+        "asset_type_label": "Stocks, including ADRs",
+        "stock_ticker": "FERG",
         "transaction_type": "P",
         "transaction_date": "12/12/2025",
         "amount": "$15,001 - $50,000",

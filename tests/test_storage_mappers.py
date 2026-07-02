@@ -121,7 +121,7 @@ def test_house_ptr_filing_maps_to_source_tables() -> None:
                     "row_index": 0,
                     "cells": ["AAPL", "Purchase"],
                     "fields": {
-                        "asset": "AAPL",
+                        "asset": "Apple Inc. - Common Stock (AAPL) [ST]",
                         "transaction_type": "Purchase",
                         "transaction_date": "2026-06-20",
                         "amount": "$1,001 - $15,000",
@@ -138,7 +138,10 @@ def test_house_ptr_filing_maps_to_source_tables() -> None:
     assert mapped.table == "raw_house_ptr_filings"
     assert mapped.key == ("20024228",)
     assert mapped.row["name"] == "Jane Doe"
-    assert mapped.media_rows[0]["asset"] == "AAPL"
+    assert mapped.media_rows[0]["asset"] == "Apple Inc. - Common Stock (AAPL) [ST]"
+    assert mapped.media_rows[0]["asset_type_code"] == "ST"
+    assert mapped.media_rows[0]["asset_type_label"] == "Stocks, including ADRs"
+    assert mapped.media_rows[0]["stock_ticker"] == "AAPL"
     assert json.loads(mapped.media_rows[0]["raw_cells_json"]) == ["AAPL", "Purchase"]
 
 

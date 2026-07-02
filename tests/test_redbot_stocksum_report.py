@@ -112,6 +112,8 @@ async def test_client_sends_trading_report_request_and_downloads_artifact() -> N
         output_format="discord",
         name="Pelosi",
         days=30,
+        asset_type="ST",
+        ticker="AMZN",
         limit=25,
         force_refresh=True,
     )
@@ -122,7 +124,7 @@ async def test_client_sends_trading_report_request_and_downloads_artifact() -> N
         "http://stock-sum.local/v1/trading-reports/jobs/discord",
         {
             "headers": {},
-            "json": {"name": "Pelosi", "days": 30, "limit": 25, "force_refresh": True},
+            "json": {"name": "Pelosi", "days": 30, "asset_type": "ST", "ticker": "AMZN", "limit": 25, "force_refresh": True},
         },
     )
 
@@ -387,7 +389,7 @@ async def test_tradingreport_command_rejects_missing_filters(monkeypatch) -> Non
     assert interaction.response.messages == []
     assert interaction.followup.messages == [
         {
-            "content": "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, or days.",
+            "content": "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
             "ephemeral": True,
             "suppress_embeds": True,
         }
@@ -405,6 +407,8 @@ async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
         interaction,
         name="Pelosi",
         days=30,
+        asset_type="st",
+        ticker="amzn",
         limit=25,
         format="discord",
         private=False,
@@ -418,6 +422,8 @@ async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
             "start_date": None,
             "end_date": None,
             "days": 30,
+            "asset_type": "ST",
+            "ticker": "AMZN",
             "limit": 25,
             "force_refresh": True,
         }
@@ -656,6 +662,8 @@ class FakeStockSumClient:
         start_date: str | None = None,
         end_date: str | None = None,
         days: int | None = None,
+        asset_type: str | None = None,
+        ticker: str | None = None,
         limit: int | None = None,
         force_refresh: bool = False,
     ) -> StockSumArtifact:
@@ -666,6 +674,8 @@ class FakeStockSumClient:
                 "start_date": start_date,
                 "end_date": end_date,
                 "days": days,
+                "asset_type": asset_type,
+                "ticker": ticker,
                 "limit": limit,
                 "force_refresh": force_refresh,
             }

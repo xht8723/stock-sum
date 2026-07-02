@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from typing import Any
 import json
 
-from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE, normalize_house_date, normalize_house_name, normalize_house_transaction_action
+from stock_sum.collectors.api.house import (
+    HOUSE_PTR_SOURCE_TYPE,
+    normalize_house_date,
+    normalize_house_name,
+    normalize_house_transaction_action,
+    parse_house_asset_metadata,
+)
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
 from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import RawItem
@@ -154,12 +160,16 @@ def _map_house_ptr_filing(item: RawItem) -> MappedRawItem:
         if not isinstance(row, dict):
             continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        asset_metadata = parse_house_asset_metadata(fields.get("asset"))
         trade_rows.append(
             {
                 "doc_id": item.source_id,
                 "table_index": row.get("table_index", 0),
                 "row_index": row.get("row_index", 0),
                 "asset": fields.get("asset"),
+                "asset_type_code": fields.get("asset_type_code") or asset_metadata["asset_type_code"],
+                "asset_type_label": fields.get("asset_type_label") or asset_metadata["asset_type_label"],
+                "stock_ticker": fields.get("stock_ticker") or asset_metadata["stock_ticker"],
                 "transaction_type": fields.get("transaction_type"),
                 "transaction_date": fields.get("transaction_date"),
                 "transaction_date_utc": normalize_house_date(fields.get("transaction_date")),

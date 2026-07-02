@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -134,6 +135,55 @@ async def test_trading_report_succeeds_with_house_data_and_skips_llm(tmp_path) -
     artifact = Path(status.artifact_path or "").read_text(encoding="utf-8")
     assert "OFFICIAL TRADING DISCLOSURES" in artifact
     assert "Jane Doe" in artifact
+
+
+async def test_trading_report_filters_by_asset_type_and_ticker(tmp_path) -> None:
+    repository = FakeRepository(
+        with_social_data=False,
+        house_rows=[
+            _house_row(doc_id="amzn", asset="Amazon.com, Inc. - Common Stock (AMZN) [ST]", asset_type_code="ST", stock_ticker="AMZN"),
+            _house_row(doc_id="bond", asset="US Treasury Note [GS]", asset_type_code="GS", stock_ticker=None),
+        ],
+    )
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: repository,
+        llm_client_factory=lambda: FakeLLM(),
+    )
+    options = TradingReportJobOptions(mode="json", asset_type="st", ticker="amzn")
+    job = manager.create_trading_report_job(options)
+
+    await manager.run_trading_report_job(job.job_id, options)
+
+    assert repository.last_house_filters["asset_type"] == "st"
+    assert repository.last_house_filters["ticker"] == "amzn"
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["house_ptr"][0]["asset_type_code"] == "ST"
+    assert summary["house_ptr"][0]["stock_ticker"] == "AMZN"
+
+
+async def test_trading_report_sorts_rows_by_transaction_date(tmp_path) -> None:
+    old_row = _house_row(doc_id="old", asset="OLD", transaction_date="2026-06-01")
+    new_row = _house_row(doc_id="new", asset="NEW", transaction_date="2026-06-30")
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[old_row, new_row]),
+        llm_client_factory=lambda: FakeLLM(),
+    )
+    options = TradingReportJobOptions(mode="json", days=90)
+    job = manager.create_trading_report_job(options)
+
+    await manager.run_trading_report_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    assert status.status == "succeeded"
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    assert [row["asset"] for row in summary["house_ptr"]] == ["NEW", "OLD"]
 
 
 async def test_report_job_uses_recent_cache_and_rerenders_requested_mode(tmp_path) -> None:
@@ -477,6 +527,7 @@ class FakeRepository:
         self.x_analysis_rows = []
         self.reddit_post_analysis_rows = []
         self.reddit_comment_analysis_rows = []
+        self.last_house_filters = {}
 
     async def list_collection_runs(self, *, profile: str | None = None, limit: int = 20):
         return [
@@ -529,9 +580,17 @@ class FakeRepository:
         name_contains=None,
         transaction_start=None,
         transaction_end=None,
+        asset_type=None,
+        ticker=None,
         limit=None,
     ):
-        return self.house_rows if limit is None else self.house_rows[:limit]
+        self.last_house_filters = {"asset_type": asset_type, "ticker": ticker}
+        rows = list(self.house_rows)
+        if asset_type:
+            rows = [row for row in rows if (row.asset_type_code or "").upper() == asset_type.upper()]
+        if ticker:
+            rows = [row for row in rows if (row.stock_ticker or "").upper() == ticker.upper()]
+        return rows if limit is None else rows[:limit]
 
     async def start_llm_analysis_run(self, **kwargs):
         return None
@@ -637,9 +696,20 @@ def _successful_collection_result() -> PipelineCollectionResult:
     return PipelineCollectionResult(profile="default", runs=[], warnings=[])
 
 
-def _house_row() -> StoredHousePtrTradeRow:
+def _house_row(
+    *,
+    doc_id: str = "20024228",
+    asset: str = "AAPL",
+    asset_type_code: str | None = None,
+    stock_ticker: str | None = None,
+    transaction_date: str = "2026-06-20",
+) -> StoredHousePtrTradeRow:
+    if asset_type_code is None and asset.endswith("[ST]"):
+        asset_type_code = "ST"
+    if stock_ticker is None and asset_type_code == "ST":
+        stock_ticker = "AAPL"
     return StoredHousePtrTradeRow(
-        doc_id="20024228",
+        doc_id=doc_id,
         year=2026,
         name="Jane Doe",
         status="Member",
@@ -649,10 +719,13 @@ def _house_row() -> StoredHousePtrTradeRow:
         pdf_url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
         table_index=0,
         row_index=0,
-        asset="AAPL",
+        asset=asset,
+        asset_type_code=asset_type_code,
+        asset_type_label="Stocks, including ADRs" if asset_type_code == "ST" else None,
+        stock_ticker=stock_ticker,
         transaction_type="Purchase",
-        transaction_date="2026-06-20",
-        transaction_date_utc="2026-06-20T00:00:00+00:00",
+        transaction_date=transaction_date,
+        transaction_date_utc=f"{transaction_date}T00:00:00+00:00",
         transaction_action="purchase",
         amount="$1,001 - $15,000",
         raw_cells=["AAPL", "Purchase", "2026-06-20", "$1,001 - $15,000"],
