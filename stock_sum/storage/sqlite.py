@@ -887,7 +887,7 @@ class SQLiteStorageRepository:
         name_contains: str | None = None,
         transaction_start: datetime | None = None,
         transaction_end: datetime | None = None,
-        limit: int = 20,
+        limit: int | None = None,
     ) -> list[StoredHousePtrTradeRow]:
         """Read House PTR trade rows joined with filing metadata."""
 
@@ -919,9 +919,10 @@ class SQLiteStorageRepository:
             ORDER BY COALESCE(r.transaction_date_utc, f.filing_date_utc, f.collected_at) DESC,
                      f.collected_at DESC,
                      f.doc_id DESC, r.table_index ASC, r.row_index ASC
-            LIMIT ?
         """
-        params.append(limit)
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         async with aiosqlite.connect(self.sqlite_path) as db:
             cursor = await db.execute(query, params)
             try:

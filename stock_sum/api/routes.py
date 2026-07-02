@@ -112,7 +112,7 @@ class TradingReportJobRequest(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     days: int | None = Field(default=None, ge=1)
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int | None = Field(default=None, ge=1)
     title: str = "Official Trading Disclosures"
     force_refresh: bool = False
 

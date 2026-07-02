@@ -328,7 +328,7 @@ curl -X POST http://127.0.0.1:8000/v1/social-reports/default/jobs/html `
   -d '{"detail":"minimum"}'
 curl -X POST http://127.0.0.1:8000/v1/trading-reports/jobs/markdown `
   -H "Content-Type: application/json" `
-  -d '{"days":30,"limit":20}'
+  -d '{"days":30}'
 ```
 
 The response includes a `job_id` that can be polled until the report succeeds or

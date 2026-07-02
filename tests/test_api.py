@@ -101,6 +101,20 @@ def test_missing_profile_returns_404(tmp_path) -> None:
     assert response.status_code == 404
 
 
+def test_trading_report_accepts_large_optional_limit(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    response = client.post(
+        "/v1/trading-reports/jobs/discord",
+        json={"days": 30, "limit": 500},
+    )
+
+    assert response.status_code == 202
+    assert manager.last_trading_limit == 500
+
+
 @dataclass
 class FakeJob:
     job_id: str
@@ -124,6 +138,7 @@ class FakeJobManager:
         self.jobs: dict[str, FakeJob] = {}
         self.last_report_mode: str | None = None
         self.last_report_detail: str | None = None
+        self.last_trading_limit: int | None = None
 
     def create_report_job(self, profile: str, options) -> FakeJob:
         if profile != "default":
@@ -131,6 +146,12 @@ class FakeJobManager:
         self.last_report_mode = options.mode
         self.last_report_detail = options.detail
         job = FakeJob(job_id="job-1", kind="report", profile=profile)
+        self.jobs[job.job_id] = job
+        return job
+
+    def create_trading_report_job(self, options) -> FakeJob:
+        self.last_trading_limit = options.limit
+        job = FakeJob(job_id="job-trading", kind="trading_report", profile="trading")
         self.jobs[job.job_id] = job
         return job
 
@@ -154,6 +175,18 @@ class FakeJobManager:
         job.phase = "succeeded"
         job.artifact_path = str(artifact)
         job.artifact_media_type = "text/html; charset=utf-8"
+        job.summary_path = str(summary)
+
+    async def run_trading_report_job(self, job_id: str, options) -> None:
+        artifact = self.tmp_path / "trading-report.md"
+        artifact.write_text("fake trading report", encoding="utf-8")
+        summary = self.tmp_path / "trading-summary.json"
+        summary.write_text('{"summary":{"house_ptr":[]}}', encoding="utf-8")
+        job = self.jobs[job_id]
+        job.status = "succeeded"
+        job.phase = "succeeded"
+        job.artifact_path = str(artifact)
+        job.artifact_media_type = "text/markdown; charset=utf-8"
         job.summary_path = str(summary)
 
     async def run_collect_job(self, job_id: str) -> None:

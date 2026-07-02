@@ -117,7 +117,7 @@ class StorageRepository(Protocol):
         name_contains: str | None = None,
         transaction_start: datetime | None = None,
         transaction_end: datetime | None = None,
-        limit: int = 20,
+        limit: int | None = None,
     ) -> list[StoredHousePtrTradeRow]:
         """Read House PTR trade rows for deterministic report rendering."""
 

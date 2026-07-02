@@ -127,6 +127,28 @@ async def test_client_sends_trading_report_request_and_downloads_artifact() -> N
     )
 
 
+async def test_client_omits_trading_limit_by_default() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "trade-2"})],
+        get_responses=[
+            FakeResponse(200, {"job_id": "trade-2", "status": "succeeded"}),
+            FakeResponse(200, body=b"trades", headers={"content-type": "text/markdown; charset=utf-8"}),
+        ],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    await client.run_trading_report(output_format="discord", days=30)
+
+    assert session.requests[0] == (
+        "POST",
+        "http://stock-sum.local/v1/trading-reports/jobs/discord",
+        {
+            "headers": {},
+            "json": {"days": 30, "force_refresh": False},
+        },
+    )
+
+
 async def test_client_rejects_trading_report_without_filter() -> None:
     client = StockSumHttpClient(session=FakeSession(post_responses=[], get_responses=[]), poll_seconds=0)
 
@@ -636,7 +658,7 @@ class FakeStockSumClient:
         start_date: str | None = None,
         end_date: str | None = None,
         days: int | None = None,
-        limit: int = 20,
+        limit: int | None = None,
         force_refresh: bool = False,
     ) -> StockSumArtifact:
         self.trading_calls.append(

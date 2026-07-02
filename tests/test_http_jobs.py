@@ -122,7 +122,7 @@ async def test_trading_report_succeeds_with_house_data_and_skips_llm(tmp_path) -
         repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[_house_row()]),
         llm_client_factory=lambda: llm,
     )
-    options = TradingReportJobOptions(mode="text", name="Jane", limit=20)
+    options = TradingReportJobOptions(mode="text", name="Jane")
     job = manager.create_trading_report_job(options)
 
     await manager.run_trading_report_job(job.job_id, options)
@@ -529,9 +529,9 @@ class FakeRepository:
         name_contains=None,
         transaction_start=None,
         transaction_end=None,
-        limit=20,
+        limit=None,
     ):
-        return self.house_rows[:limit]
+        return self.house_rows if limit is None else self.house_rows[:limit]
 
     async def start_llm_analysis_run(self, **kwargs):
         return None

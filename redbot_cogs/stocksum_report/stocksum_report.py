@@ -203,7 +203,7 @@ class StockSumHttpClient:
         start_date: str | None = None,
         end_date: str | None = None,
         days: int | None = None,
-        limit: int = 20,
+        limit: int | None = None,
         force_refresh: bool = False,
     ) -> StockSumArtifact:
         """Create, poll, and download one stock-sum trading disclosure report job."""
@@ -503,7 +503,7 @@ class StockSumReport(commands.Cog):
         start_date="transaction start date, YYYY-MM-DD",
         end_date="transaction end date, YYYY-MM-DD",
         days="transaction records from the last N days",
-        limit="maximum rows to return",
+        limit="optional maximum rows to return",
         format="report artifact format",
         private="send the response only to you",
         force_refresh="force a House PTR refresh before querying",
@@ -524,7 +524,7 @@ class StockSumReport(commands.Cog):
         start_date: str = "",
         end_date: str = "",
         days: int | None = None,
-        limit: int = 20,
+        limit: int | None = None,
         format: str = "discord",
         private: bool = False,
         force_refresh: bool = False,
@@ -553,7 +553,7 @@ class StockSumReport(commands.Cog):
                 start_date=start_filter,
                 end_date=end_filter,
                 days=days,
-                limit=max(1, min(limit, 100)),
+                limit=limit if limit is None else max(1, limit),
                 force_refresh=force_refresh,
             )
         except StockSumCogError as exc:

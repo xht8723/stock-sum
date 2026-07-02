@@ -52,7 +52,7 @@ class TradingReportJobOptions:
     start_date: str | None = None
     end_date: str | None = None
     days: int | None = None
-    limit: int = 20
+    limit: int | None = None
     title: str = "Official Trading Disclosures"
     force_refresh: bool = False
 
@@ -309,7 +309,7 @@ class HttpJobManager:
                 name_contains=options.name,
                 transaction_start=transaction_start,
                 transaction_end=transaction_end,
-                limit=min(max(options.limit, 1), 100),
+                limit=options.limit,
             )
             if not rows:
                 message = "No House PTR trade rows matched the trading report filters."
