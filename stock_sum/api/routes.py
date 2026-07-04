@@ -603,12 +603,18 @@ def build_router(
     @v1.get("/retention/status", dependencies=management_dependencies)
     async def retention_status() -> dict[str, Any]:
         active = _require_config(current_config())
-        return (await DataRetentionService(active).status()).to_dict()
+        data = (await DataRetentionService(active).status()).to_dict()
+        return _with_memory_status(data, current_manager())
 
     @v1.post("/retention/prune", dependencies=management_dependencies)
     async def retention_prune(request: RetentionPruneRequest) -> dict[str, Any]:
         active = _require_config(current_config())
-        return (await DataRetentionService(active).prune(dry_run=request.dry_run)).to_dict()
+        data = (await DataRetentionService(active).prune(dry_run=request.dry_run)).to_dict()
+        manager = current_manager()
+        if manager is not None:
+            evicted = manager._refresh_memory_status()
+            return _with_memory_status(data, manager, evicted_in_memory_jobs=evicted)
+        return data
 
     router.include_router(v1)
     return router
@@ -675,6 +681,19 @@ def _job_response(data: dict) -> dict:
     data.pop("artifact_path", None)
     data.pop("summary_path", None)
     return data
+
+
+def _with_memory_status(
+    data: dict[str, Any],
+    manager: HttpJobManager | None,
+    *,
+    evicted_in_memory_jobs: int | None = None,
+) -> dict[str, Any]:
+    if manager is None:
+        return data
+    result = dict(data)
+    result.update(manager.memory_status(evicted_in_memory_jobs=evicted_in_memory_jobs))
+    return result
 
 
 def _read_job_json(path: str) -> dict:

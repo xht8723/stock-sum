@@ -119,8 +119,11 @@ def test_setup_check_and_retention_endpoints(tmp_path) -> None:
     assert setup.json()["status"] in {"ok", "issues"}
     assert retention.status_code == 200
     assert "bytes_before" in retention.json()
+    assert retention.json()["in_memory_jobs"] == 0
+    assert retention.json()["max_in_memory_jobs"] == 200
     assert prune.status_code == 200
     assert prune.json()["dry_run"] is True
+    assert prune.json()["evicted_in_memory_jobs"] == 0
 
 
 def _management_client(tmp_path: Path):

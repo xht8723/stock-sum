@@ -538,6 +538,92 @@ async def test_coalesced_report_job_runs_retention_after_writing_artifact(tmp_pa
     assert retention.calls == 2
 
 
+async def test_completed_jobs_older_than_retention_are_evicted_from_memory_and_reload_from_disk(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = HttpJobManager(config)
+    job = manager.create_collect_job("default")
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    status.status = "succeeded"
+    status.phase = "succeeded"
+    status.finished_at = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    status.artifact_path = str(tmp_path / "artifact.json")
+    manager._save(status)
+
+    evicted = manager._refresh_memory_status()
+
+    assert evicted == 1
+    assert job.job_id not in manager._jobs
+    reloaded = manager.get_job(job.job_id)
+    assert reloaded is not None
+    assert reloaded.job_id == job.job_id
+    assert reloaded.in_memory_jobs == 1
+
+
+async def test_in_memory_job_cap_evicts_oldest_finished_jobs_and_keeps_active_jobs(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = HttpJobManager(config)
+    finished_ids: list[str] = []
+    for index in range(4):
+        job = manager.create_collect_job("default")
+        status = manager.get_job(job.job_id)
+        assert status is not None
+        status.status = "succeeded"
+        status.phase = "succeeded"
+        status.finished_at = (datetime.now(timezone.utc) - timedelta(minutes=10 - index)).isoformat()
+        status.artifact_path = str(tmp_path / f"artifact-{index}.json")
+        manager._save(status)
+        finished_ids.append(job.job_id)
+    running = manager.create_collect_job("default")
+    manager._mark_running(running.job_id, phase="running")
+    manager.config = config.model_copy(update={"server": config.server.model_copy(update={"max_in_memory_jobs": 3})})
+
+    evicted = manager._refresh_memory_status(protected_job_ids={running.job_id})
+
+    assert evicted == 2
+    assert running.job_id in manager._jobs
+    assert finished_ids[0] not in manager._jobs
+    assert len(manager._jobs) == 3
+
+
+async def test_inflight_leader_is_preserved_when_memory_cache_is_pruned(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    config = config.model_copy(update={"server": config.server.model_copy(update={"max_in_memory_jobs": 1})})
+    manager = HttpJobManager(config)
+    leader = manager.create_report_job("default", ReportJobOptions(mode="html"))
+    old = manager.create_collect_job("default")
+    old_status = manager.get_job(old.job_id)
+    assert old_status is not None
+    old_status.status = "succeeded"
+    old_status.phase = "succeeded"
+    old_status.finished_at = datetime.now(timezone.utc).isoformat()
+    manager._save(old_status)
+    is_leader, _ = await manager._join_or_register_inflight_report(leader.job_id, leader.cache_key)
+    assert is_leader is True
+
+    manager._refresh_memory_status()
+
+    assert leader.job_id in manager._jobs
+    assert old.job_id not in manager._jobs
+
+
+async def test_completed_memory_record_is_evicted_when_status_file_is_deleted(tmp_path) -> None:
+    manager = HttpJobManager(_test_config(tmp_path))
+    job = manager.create_collect_job("default")
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    status.status = "succeeded"
+    status.phase = "succeeded"
+    status.finished_at = datetime.now(timezone.utc).isoformat()
+    manager._save(status)
+    (manager._job_dir(job.job_id) / "status.json").unlink()
+
+    evicted = manager._refresh_memory_status()
+
+    assert evicted == 1
+    assert job.job_id not in manager._jobs
+
+
 class FakePipeline:
     def __init__(self, result: PipelineCollectionResult, *, delay_seconds: float = 0, fail: bool = False) -> None:
         self.result = result

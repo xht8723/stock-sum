@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from stock_sum.config.models import AppConfig, LLMConfig, ReportProfileConfig, StorageConfig
+from stock_sum.config.models import AppConfig, LLMConfig, ReportInputConfig, ReportProfileConfig, StorageConfig
 from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.storage.models import (
     StoredCollectionRun,
@@ -18,6 +18,10 @@ def _iso(hours_ago: int) -> str:
 
 
 class FakeSummaryRepository:
+    def __init__(self) -> None:
+        self.x_read_calls = []
+        self.reddit_read_calls = []
+
     async def list_collection_runs(self, *, profile=None, limit=None):
         return [
             StoredCollectionRun(
@@ -38,6 +42,7 @@ class FakeSummaryRepository:
     async def read_x_posts(self, *, handles=None, since_posted_at=None, limit=None):
         assert handles == ["alpha"]
         assert since_posted_at is not None
+        self.x_read_calls.append({"handles": handles, "since_posted_at": since_posted_at, "limit": limit})
         return [
             StoredXPost(
                 status_id="1",
@@ -85,6 +90,7 @@ class FakeSummaryRepository:
     async def read_reddit_posts(self, *, subreddits=None, since_posted_at=None, limit=None):
         assert subreddits == ["bets"]
         assert since_posted_at is not None
+        self.reddit_read_calls.append({"subreddits": subreddits, "since_posted_at": since_posted_at, "limit": limit})
         return [
             StoredRedditPost(
                 post_id="abc",
@@ -125,6 +131,20 @@ class FakeSummaryRepository:
                         depth=0,
                         raw_metadata={},
                         collected_at="2026-06-27T00:00:02+00:00",
+                    ),
+                    StoredRedditComment(
+                        comment_id="c2",
+                        post_id="abc",
+                        parent_id="t3_abc",
+                        author="commenter",
+                        body="newer comment body",
+                        score=2,
+                        ups=2,
+                        url="https://reddit.example/comment2",
+                        created_at_text=_iso(0),
+                        depth=0,
+                        raw_metadata={},
+                        collected_at="2026-06-27T00:00:03+00:00",
                     )
                 ],
             ),
@@ -165,7 +185,8 @@ def _config(tmp_path) -> AppConfig:
 
 
 async def test_summary_input_groups_sources_and_links_reddit_comments(tmp_path) -> None:
-    builder = SummaryInputBuilder(config=_config(tmp_path), repository=FakeSummaryRepository())
+    repository = FakeSummaryRepository()
+    builder = SummaryInputBuilder(config=_config(tmp_path), repository=repository)
 
     payload = await builder.build(profile="default", download_images=False)
     data = payload.to_dict()
@@ -178,6 +199,8 @@ async def test_summary_input_groups_sources_and_links_reddit_comments(tmp_path) 
     assert data["reddit"][0]["posts"][0]["post_id"] == "abc"
     assert data["reddit"][0]["posts"][0]["comments"][0]["post_id"] == "abc"
     assert "raw" not in data["reddit"][0]["posts"][0]["media"][0]["source_metadata"]
+    assert repository.x_read_calls[0]["limit"] == 100
+    assert repository.reddit_read_calls[0]["limit"] == 100
 
 
 async def test_summary_input_compact_mode_uses_shared_media_map_and_drops_redundancy(tmp_path) -> None:
@@ -220,4 +243,27 @@ async def test_summary_input_vision_mode_adds_ordered_attachments(tmp_path) -> N
             "remote_url": "https://cdn.example/x.jpg",
         }
     ]
+
+
+async def test_summary_input_caps_posts_and_comments_per_source(tmp_path) -> None:
+    config = _config(tmp_path).model_copy(
+        update={
+            "report_input": ReportInputConfig(
+                max_x_posts_per_source=1,
+                max_reddit_posts_per_source=1,
+                max_reddit_comments_per_post=1,
+            )
+        }
+    )
+    repository = FakeSummaryRepository()
+    builder = SummaryInputBuilder(config=config, repository=repository)
+
+    payload = await builder.build(profile="default", download_images=False)
+    data = payload.to_dict()
+
+    assert repository.x_read_calls[0]["limit"] == 1
+    assert repository.reddit_read_calls[0]["limit"] == 1
+    assert [post["status_id"] for post in data["x"][0]["posts"]] == ["1"]
+    assert [post["post_id"] for post in data["reddit"][0]["posts"]] == ["abc"]
+    assert [comment["comment_id"] for comment in data["reddit"][0]["posts"][0]["comments"]] == ["c2"]
 

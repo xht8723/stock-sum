@@ -1,7 +1,7 @@
 [service]
 name = "stock-sum"
 timezone = "UTC"
-collector_concurrency = 3
+collector_concurrency = 1
 
 [server]
 host = "127.0.0.1"
@@ -10,6 +10,7 @@ blacklisted_ips = []
 management_allow_remote = false
 artifact_dir = "data/http_jobs"
 job_retention_hours = 24
+max_in_memory_jobs = 200
 report_cache_ttl_seconds = 21600
 coalesce_inflight_reports = true
 
@@ -19,14 +20,19 @@ sqlite_path = "data/stock_sum.sqlite3"
 [media]
 download_enabled = false
 root_dir = "data/media"
-max_bytes = 5000000
+max_bytes = 1000000
 timeout_seconds = 20
 allowed_content_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 [retention]
 enabled = true
-max_total_bytes = 2147483648
+max_total_bytes = 268435456
 prune_after_pipeline = true
+
+[report_input]
+max_x_posts_per_source = 100
+max_reddit_posts_per_source = 100
+max_reddit_comments_per_post = 10
 
 [models_dev]
 api_url = "https://models.dev/api.json"
@@ -51,7 +57,7 @@ scroll_pause_ms = 1200
 api_key_env = "XPOZ_API_KEY"
 server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
-max_concurrent_requests = 2
+max_concurrent_requests = 1
 
 [llm]
 provider = "deepseek"
@@ -64,7 +70,7 @@ max_tokens = 5000
 thinking_enabled = true
 analysis_x_posts_per_chunk = 10
 analysis_max_chars_per_chunk = 12000
-analysis_max_concurrency = 5
+analysis_max_concurrency = 1
 
 [reports.default]
 timezone = "UTC"

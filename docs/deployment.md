@@ -100,7 +100,10 @@ Edit `config.toml` for the deployment. The most common values to change are:
 ```toml
 [service]
 timezone = "America/Vancouver"
-collector_concurrency = 3
+collector_concurrency = 1
+
+[server]
+max_in_memory_jobs = 200
 
 [storage]
 sqlite_path = "data/stock_sum.sqlite3"
@@ -115,14 +118,22 @@ timeout_seconds = 30
 api_key_env = "XPOZ_API_KEY"
 server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
-max_concurrent_requests = 2
+max_concurrent_requests = 1
 
 [llm]
 provider = "deepseek"
 model = "deepseek-v4-flash"
 api_key_env = "DEEPSEEK_API_KEY"
 base_url = "https://api.deepseek.com"
-analysis_max_concurrency = 5
+analysis_max_concurrency = 1
+
+[retention]
+max_total_bytes = 268435456
+
+[report_input]
+max_x_posts_per_source = 100
+max_reddit_posts_per_source = 100
+max_reddit_comments_per_post = 10
 ```
 
 Validate the file:
@@ -500,8 +511,10 @@ you can block exact client IPs with `[server].blacklisted_ips`.
 Successful report jobs are reused for `[server].report_cache_ttl_seconds`
 seconds, defaulting to `21600`; set it to `0` when every request should force a
 fresh collection and LLM run.
-Managed runtime data is also capped by `[retention].max_total_bytes`, defaulting
-to `2147483648` bytes. Cleanup runs after report/collection jobs and prunes
+Completed HTTP job metadata is also bounded in memory by
+`[server].max_in_memory_jobs`, while retained status files remain reloadable from
+disk. Managed runtime data is capped by `[retention].max_total_bytes`, defaulting
+to `268435456` bytes. Cleanup runs after report/collection jobs and prunes
 oldest HTTP artifacts and downloaded media. SQLite source history and provider
 response archives are intentionally excluded from this cap. Use `stock-sum
 retention status` and `stock-sum retention prune --dry-run` to inspect usage

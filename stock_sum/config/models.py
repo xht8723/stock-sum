@@ -12,7 +12,7 @@ class ServiceConfig(BaseModel):
 
     name: str = "stock-sum"
     timezone: str = "UTC"
-    collector_concurrency: int = Field(default=3, ge=1)
+    collector_concurrency: int = Field(default=1, ge=1)
 
 
 class ServerConfig(BaseModel):
@@ -24,6 +24,7 @@ class ServerConfig(BaseModel):
     management_allow_remote: bool = False
     artifact_dir: str = "data/http_jobs"
     job_retention_hours: int = Field(default=24, ge=1)
+    max_in_memory_jobs: int = Field(default=200, ge=1)
     report_cache_ttl_seconds: int = Field(default=21600, ge=0)
     coalesce_inflight_reports: bool = True
 
@@ -39,7 +40,7 @@ class MediaConfig(BaseModel):
 
     download_enabled: bool = False
     root_dir: str = "data/media"
-    max_bytes: int = Field(default=5_000_000, ge=1)
+    max_bytes: int = Field(default=1_000_000, ge=1)
     timeout_seconds: int = Field(default=20, ge=1)
     allowed_content_types: list[str] = Field(default_factory=lambda: ["image/jpeg", "image/png", "image/gif", "image/webp"])
 
@@ -48,8 +49,16 @@ class RetentionConfig(BaseModel):
     """Runtime data retention and disk usage limits."""
 
     enabled: bool = True
-    max_total_bytes: int = Field(default=2_147_483_648, ge=1)
+    max_total_bytes: int = Field(default=268_435_456, ge=1)
     prune_after_pipeline: bool = True
+
+
+class ReportInputConfig(BaseModel):
+    """Limits for building in-memory report input payloads."""
+
+    max_x_posts_per_source: int = Field(default=100, ge=1)
+    max_reddit_posts_per_source: int = Field(default=100, ge=1)
+    max_reddit_comments_per_post: int = Field(default=10, ge=0)
 
 
 class ModelsDevConfig(BaseModel):
@@ -87,7 +96,7 @@ class XpozProviderConfig(BaseModel):
     api_key_env: str = "XPOZ_API_KEY"
     server_url: str = "https://mcp.xpoz.ai/mcp"
     timeout_seconds: int = Field(default=60, ge=1)
-    max_concurrent_requests: int = Field(default=2, ge=1)
+    max_concurrent_requests: int = Field(default=1, ge=1)
 
 
 class ProvidersConfig(BaseModel):
@@ -109,7 +118,7 @@ class LLMConfig(BaseModel):
     thinking_enabled: bool = True
     analysis_x_posts_per_chunk: int = Field(default=10, ge=1)
     analysis_max_chars_per_chunk: int = Field(default=12000, ge=1000)
-    analysis_max_concurrency: int = Field(default=5, ge=1)
+    analysis_max_concurrency: int = Field(default=1, ge=1)
 
 
 class ReportProfileConfig(BaseModel):
@@ -237,6 +246,7 @@ class AppConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    report_input: ReportInputConfig = Field(default_factory=ReportInputConfig)
     models_dev: ModelsDevConfig = Field(default_factory=ModelsDevConfig)
     playwright: PlaywrightConfig = Field(default_factory=PlaywrightConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)

@@ -110,6 +110,10 @@ class HttpJobRecord:
     coalesced_from_job_id: str | None = None
     coalesced_wait_seconds: int | None = None
     cleanup_result: dict[str, Any] | None = None
+    in_memory_jobs: int | None = None
+    inflight_reports: int | None = None
+    max_in_memory_jobs: int | None = None
+    evicted_in_memory_jobs: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe representation."""
@@ -164,6 +168,7 @@ class HttpJobManager:
             cache_key=self._report_cache_key(profile, options),
         )
         self._save(record)
+        self._refresh_memory_status(record.job_id)
         return record
 
     def create_trading_report_job(self, options: TradingReportJobOptions) -> HttpJobRecord:
@@ -176,6 +181,7 @@ class HttpJobManager:
             mode=options.mode,
         )
         self._save(record)
+        self._refresh_memory_status(record.job_id)
         return record
 
     def create_13f_report_job(self, options: Sec13FReportJobOptions) -> HttpJobRecord:
@@ -188,6 +194,7 @@ class HttpJobManager:
             mode=options.mode,
         )
         self._save(record)
+        self._refresh_memory_status(record.job_id)
         return record
 
     def create_collect_job(self, profile: str) -> HttpJobRecord:
@@ -196,6 +203,7 @@ class HttpJobManager:
         self._validate_profile(profile)
         record = self._new_job(kind="collect", profile=profile, mode="json")
         self._save(record)
+        self._refresh_memory_status(record.job_id)
         return record
 
     def get_job(self, job_id: str) -> HttpJobRecord | None:
@@ -209,7 +217,20 @@ class HttpJobManager:
         data = json.loads(path.read_text(encoding="utf-8"))
         record = _job_record_from_dict(data)
         self._jobs[job_id] = record
+        self._refresh_memory_status(job_id)
         return record
+
+    def memory_status(self, *, evicted_in_memory_jobs: int | None = None) -> dict[str, int]:
+        """Return memory-bound job cache counters for status payloads."""
+
+        data = {
+            "in_memory_jobs": len(self._jobs),
+            "inflight_reports": len(self._inflight_reports),
+            "max_in_memory_jobs": self.config.server.max_in_memory_jobs,
+        }
+        if evicted_in_memory_jobs is not None:
+            data["evicted_in_memory_jobs"] = evicted_in_memory_jobs
+        return data
 
     async def run_report_job(self, job_id: str, options: ReportJobOptions) -> None:
         """Run social collection, payload assembly, LLM summarization, and rendering."""
@@ -301,6 +322,7 @@ class HttpJobManager:
             if is_inflight_leader and cache_key is not None:
                 await self._release_inflight_report(cache_key, job_id)
             await self._run_retention(job_id)
+            self._refresh_memory_status(job_id)
 
     async def run_trading_report_job(self, job_id: str, options: TradingReportJobOptions) -> None:
         """Run a House PTR trading disclosure report without LLM analysis."""
@@ -389,6 +411,7 @@ class HttpJobManager:
             self._mark_failed(job_id, str(exc))
         finally:
             await self._run_retention(job_id)
+            self._refresh_memory_status(job_id)
 
     async def run_13f_report_job(self, job_id: str, options: Sec13FReportJobOptions) -> None:
         """Run an SEC 13F holdings report without LLM analysis."""
@@ -487,6 +510,7 @@ class HttpJobManager:
             self._mark_failed(job_id, str(exc))
         finally:
             await self._run_retention(job_id)
+            self._refresh_memory_status(job_id)
 
     async def run_collect_job(self, job_id: str) -> None:
         """Run collection-only job and persist its JSON artifact."""
@@ -509,6 +533,7 @@ class HttpJobManager:
             self._mark_failed(job_id, str(exc))
         finally:
             await self._run_retention(job_id)
+            self._refresh_memory_status(job_id)
 
     def _validate_profile(self, profile: str) -> None:
         if profile not in self.config.reports:
@@ -617,7 +642,9 @@ class HttpJobManager:
             summary = await self._retention_service_factory().prune(
                 protected_paths=[self._job_dir(job_id)],
             )
-            self._update(job_id, cleanup_result=summary.to_dict())
+            cleanup_result = summary.to_dict()
+            cleanup_result.update(self.memory_status(evicted_in_memory_jobs=0))
+            self._update(job_id, cleanup_result=cleanup_result)
         except Exception as exc:
             self._update(
                 job_id,
@@ -633,6 +660,7 @@ class HttpJobManager:
                     "sqlite_rows_deleted": 0,
                     "errors": [str(exc)],
                     "over_limit": False,
+                    **self.memory_status(evicted_in_memory_jobs=0),
                 },
             )
 
@@ -897,6 +925,58 @@ class HttpJobManager:
         self._jobs[record.job_id] = record
         self._write_json(self._job_dir(record.job_id) / "status.json", record.to_dict())
 
+    def _refresh_memory_status(
+        self,
+        current_job_id: str | None = None,
+        *,
+        protected_job_ids: set[str] | None = None,
+    ) -> int:
+        protected = set(protected_job_ids or set())
+        if current_job_id:
+            protected.add(current_job_id)
+        evicted = self._prune_in_memory_jobs(protected_job_ids=protected)
+        if current_job_id and current_job_id in self._jobs:
+            job = self._jobs[current_job_id]
+            stats = self.memory_status(evicted_in_memory_jobs=evicted)
+            job.in_memory_jobs = stats["in_memory_jobs"]
+            job.inflight_reports = stats["inflight_reports"]
+            job.max_in_memory_jobs = stats["max_in_memory_jobs"]
+            job.evicted_in_memory_jobs = stats["evicted_in_memory_jobs"]
+            if isinstance(job.cleanup_result, dict):
+                job.cleanup_result.update(stats)
+            self._save(job)
+        return evicted
+
+    def _prune_in_memory_jobs(self, *, protected_job_ids: set[str] | None = None) -> int:
+        protected = set(protected_job_ids or set())
+        protected.update(report.leader_job_id for report in self._inflight_reports.values())
+        evicted = 0
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=self.config.server.job_retention_hours)
+
+        for job_id, record in list(self._jobs.items()):
+            if job_id in protected or record.status in {"queued", "running"}:
+                continue
+            status_path = self._job_dir(job_id) / "status.json"
+            if not status_path.exists() or _job_sort_datetime(record) < cutoff:
+                del self._jobs[job_id]
+                evicted += 1
+
+        overflow = len(self._jobs) - self.config.server.max_in_memory_jobs
+        if overflow <= 0:
+            return evicted
+
+        candidates = [
+            record
+            for record in self._jobs.values()
+            if record.job_id not in protected and record.status not in {"queued", "running"}
+        ]
+        candidates.sort(key=_job_sort_datetime)
+        for record in candidates[:overflow]:
+            if record.job_id in self._jobs:
+                del self._jobs[record.job_id]
+                evicted += 1
+        return evicted
+
     @staticmethod
     def _read_json(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -921,6 +1001,15 @@ def _parse_utc_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _job_sort_datetime(record: HttpJobRecord) -> datetime:
+    return (
+        _parse_utc_datetime(record.finished_at)
+        or _parse_utc_datetime(record.updated_at)
+        or _parse_utc_datetime(record.created_at)
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
 
 
 def _social_collector_ids(config: AppConfig, profile: str) -> list[str]:

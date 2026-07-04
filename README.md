@@ -135,17 +135,20 @@ stock-sum config house-ptr set --config config.toml --profile default --enabled
 ```
 
 For X and Reddit sources, `--limit` is the provider fetch cap. Reports keep only
-posts inside `--lookback-hours`, defaulting to the last 24 hours.
+posts inside `--lookback-hours`, defaulting to the last 24 hours, and cap report
+payload assembly with `[report_input]` limits.
 
 Important configuration sections:
 
 - `[service]`: service name, default timezone, and collector concurrency.
 - `[server]`: local HTTP host, port, artifact directory, six-hour report cache,
-  and exact IP blacklist.
+  bounded in-memory job cache, and exact IP blacklist.
 - `[storage]`: SQLite database path.
-- `[retention]`: generated artifact/media cleanup behavior. Defaults to a 2GB
+- `[retention]`: generated artifact/media cleanup behavior. Defaults to a 256MB
   cap across HTTP job artifacts and downloaded media; collected SQLite source
   history is preserved.
+- `[report_input]`: per-source X/Reddit post caps and per-post Reddit comment
+  caps used while building LLM/report payloads.
 - `[models_dev]`: external model catalog URL, cache path, and refresh interval.
 - `[playwright]`: browser automation defaults for future site-specific browser
   collectors.
@@ -200,7 +203,7 @@ The TOML config stores only the variable name:
 api_key_env = "XPOZ_API_KEY"
 server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
-max_concurrent_requests = 2
+max_concurrent_requests = 1
 ```
 
 Xpoz collection always requests fresh provider data because market reports are
@@ -299,6 +302,10 @@ Start the daemon, then use these endpoints. The local API is open to any
 non-blacklisted client; configure exact IP blocks with `[server].blacklisted_ips`.
 Successful report jobs are cached for `[server].report_cache_ttl_seconds`
 seconds, defaulting to six hours. Set it to `0` to disable report reuse.
+Completed job metadata is kept in memory only as a bounded hot cache. The daemon
+uses `[server].job_retention_hours` and `[server].max_in_memory_jobs` to evict old
+finished records from memory; persisted `status.json` files remain the fallback
+for `/v1/jobs/{job_id}` while retained on disk.
 
 - `GET /health`: returns service health.
 - `GET /v1/config/effective`: returns the loaded configuration. Secret values are
@@ -356,7 +363,7 @@ config, env files, artifacts, or downloaded media.
 
 `stock-sum` prunes managed runtime data after report and collection pipeline
 runs when `[retention].enabled` and `[retention].prune_after_pipeline` are true.
-The default cap is `2147483648` bytes across `[server].artifact_dir` and
+The default cap is `268435456` bytes across `[server].artifact_dir` and
 `[media].root_dir`. SQLite source history and provider response archives are not
 counted against this cap.
 
@@ -370,6 +377,35 @@ Cleanup deletes oldest HTTP job artifacts first, then downloaded media and the
 matching `downloaded_media` cache rows. It does not prune collection runs,
 source rows, source indexes, or provider response archives. The current HTTP job
 artifact is protected while cleanup runs so API clients can still download it.
+
+For a 1GB RAM VM, keep these low-memory settings unless the service has measured
+headroom:
+
+```toml
+[service]
+collector_concurrency = 1
+
+[server]
+max_in_memory_jobs = 200
+
+[media]
+download_enabled = false
+max_bytes = 1000000
+
+[retention]
+max_total_bytes = 268435456
+
+[report_input]
+max_x_posts_per_source = 100
+max_reddit_posts_per_source = 100
+max_reddit_comments_per_post = 10
+
+[providers.xpoz]
+max_concurrent_requests = 1
+
+[llm]
+analysis_max_concurrency = 1
+```
 
 ## Docker quick start
 

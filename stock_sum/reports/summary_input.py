@@ -51,16 +51,8 @@ class SummaryInputBuilder:
         should_download = self.config.media.download_enabled if download_images is None else download_images
         download_errors: list[dict[str, str]] = []
 
-        x_posts = await self.repository.read_x_posts(
-            handles=source_windows.handles or None,
-            since_posted_at=source_windows.earliest_x_cutoff,
-        )
-        reddit_posts = await self.repository.read_reddit_posts(
-            subreddits=source_windows.subreddits or None,
-            since_posted_at=source_windows.earliest_reddit_cutoff,
-        )
-        x_posts = [post for post in x_posts if source_windows.includes_x(post)]
-        reddit_posts = [post for post in reddit_posts if source_windows.includes_reddit(post)]
+        x_posts = await self._read_x_posts(source_windows)
+        reddit_posts = await self._read_reddit_posts(source_windows)
 
         x_sections = await self._x_sections(
             x_posts,
@@ -87,6 +79,32 @@ class SummaryInputBuilder:
                 "source_windows": source_windows.metadata,
             },
         )
+
+    async def _read_x_posts(self, source_windows: "_SourceWindows") -> list[StoredXPost]:
+        limit = self.config.report_input.max_x_posts_per_source
+        posts: list[StoredXPost] = []
+        for handle in source_windows.handles:
+            source_posts = await self.repository.read_x_posts(
+                handles=[handle],
+                since_posted_at=source_windows.x_cutoffs.get(handle),
+                limit=limit,
+            )
+            source_posts = [post for post in source_posts if source_windows.includes_x(post)]
+            posts.extend(_most_recent(source_posts, key=lambda post: post.posted_at_text, limit=limit))
+        return posts
+
+    async def _read_reddit_posts(self, source_windows: "_SourceWindows") -> list[StoredRedditPost]:
+        limit = self.config.report_input.max_reddit_posts_per_source
+        posts: list[StoredRedditPost] = []
+        for subreddit in source_windows.subreddits:
+            source_posts = await self.repository.read_reddit_posts(
+                subreddits=[subreddit],
+                since_posted_at=source_windows.reddit_cutoffs.get(subreddit),
+                limit=limit,
+            )
+            source_posts = [post for post in source_posts if source_windows.includes_reddit(post)]
+            posts.extend(_most_recent(source_posts, key=lambda post: post.created_at_text, limit=limit))
+        return posts
 
     async def _x_sections(
         self,
@@ -168,7 +186,11 @@ class SummaryInputBuilder:
                             created_at_text=comment.created_at_text,
                             depth=comment.depth,
                         )
-                        for comment in post.comments
+                        for comment in _most_recent(
+                            post.comments,
+                            key=lambda comment: comment.created_at_text,
+                            limit=self.config.report_input.max_reddit_comments_per_post,
+                        )
                     ],
                 )
             )
@@ -306,6 +328,16 @@ def _parse_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _most_recent(items: list[Any], *, key, limit: int) -> list[Any]:
+    if limit <= 0:
+        return []
+    return sorted(
+        items,
+        key=lambda item: _parse_datetime(key(item)) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )[:limit]
 
 
 def _summary_media_asset(asset: StoredMediaAsset) -> SummaryMediaAsset:
