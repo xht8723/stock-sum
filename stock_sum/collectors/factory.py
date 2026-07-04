@@ -9,6 +9,7 @@ from stock_sum.collectors.api.xpoz import (
     XpozXUserTimelineCollector,
 )
 from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE, HousePtrDisclosureCollector
+from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID, SEC_13F_SOURCE_TYPE, Sec13FDatasetCollector, sec_13f_source_to_collector_config
 from stock_sum.collectors.base import Collector
 from stock_sum.config.models import AppConfig, CollectorConfig, HousePtrSourceConfig, RedditSubredditSourceConfig, XUserSourceConfig
 from stock_sum.core.errors import ConfigurationError
@@ -67,6 +68,12 @@ def build_collector(config: AppConfig, collector_id: str) -> Collector:
             collector_id=collector_id,
             collector_config=collector_config,
         )
+    if collector_config.kind == SEC_13F_SOURCE_TYPE:
+        return Sec13FDatasetCollector(
+            collector_id=collector_id,
+            collector_config=collector_config,
+            source_config=config.sources.sec_13f,
+        )
 
     raise ConfigurationError(f"No collector implementation registered for kind: {collector_config.kind}")
 
@@ -82,6 +89,8 @@ def _get_source_list_collector_config(config: AppConfig, group: str, name: str) 
                 return _reddit_source_to_collector_config(source)
     if group == "house" and name == "ptr":
         return _house_ptr_source_to_collector_config(config.sources.house_ptr)
+    if f"{group}.{name}" == SEC_13F_COLLECTOR_ID:
+        return sec_13f_source_to_collector_config(config.sources.sec_13f)
     return None
 
 

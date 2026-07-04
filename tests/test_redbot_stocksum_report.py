@@ -437,6 +437,58 @@ async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
     assert interaction.channel.messages == [{"content": "trade one\n\ntrade two", "suppress_embeds": True}]
 
 
+async def test_13freport_command_sends_discord_report(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=("holding one\n\nholding two").encode("utf-8"))
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.thirteenfreport(
+        interaction,
+        manager="Berkshire",
+        issuer="nvidia",
+        cik="1067983",
+        cusip="67066g104",
+        put_call="call",
+        period_start="2026-01-01",
+        period_end="2026-03-31",
+        min_value=1000,
+        limit=25,
+        format="discord",
+        private=False,
+        force_refresh=True,
+    )
+
+    assert client.sec_13f_calls == [
+        {
+            "output_format": "discord",
+            "manager": "Berkshire",
+            "issuer": "nvidia",
+            "cik": "1067983",
+            "accession_number": None,
+            "cusip": "67066G104",
+            "figi": None,
+            "put_call": "CALL",
+            "period_start": "2026-01-01",
+            "period_end": "2026-03-31",
+            "filing_start": None,
+            "filing_end": None,
+            "min_value": 1000,
+            "min_shares": None,
+            "limit": 25,
+            "force_refresh": True,
+        }
+    ]
+    assert interaction.response.messages == [
+        {
+            "content": "SEC 13F report is being generated, please wait a few minutes.",
+            "ephemeral": False,
+        }
+    ]
+    assert interaction.channel.messages == [{"content": "holding one\n\nholding two", "suppress_embeds": True}]
+
+
 async def test_management_command_blocks_non_owner(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=False))
@@ -643,6 +695,7 @@ class FakeStockSumClient:
         self.filename = filename
         self.social_calls: list[dict[str, Any]] = []
         self.trading_calls: list[dict[str, Any]] = []
+        self.sec_13f_calls: list[dict[str, Any]] = []
 
     async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
         self.social_calls.append({"profile": profile, "output_format": output_format, "detail": detail})
@@ -688,12 +741,25 @@ class FakeStockSumClient:
             status={"status": "succeeded"},
         )
 
+    async def run_13f_report(self, **kwargs: Any) -> StockSumArtifact:
+        self.sec_13f_calls.append(kwargs)
+        return StockSumArtifact(
+            job_id="13f-1",
+            filename=self.filename,
+            content_type="text/markdown; charset=utf-8",
+            content=self.content,
+            status={"status": "succeeded"},
+        )
+
 
 class FakeFailingStockSumClient:
     async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
         raise StockSumRequestError("broken")
 
     async def run_trading_report(self, **kwargs: Any) -> StockSumArtifact:
+        raise StockSumRequestError("broken")
+
+    async def run_13f_report(self, **kwargs: Any) -> StockSumArtifact:
         raise StockSumRequestError("broken")
 
 

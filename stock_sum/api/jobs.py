@@ -13,6 +13,7 @@ import json
 
 from stock_sum.config.models import AppConfig
 from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
+from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID, SEC_13F_SOURCE_TYPE
 from stock_sum.collectors.factory import source_type_for_collector_id
 from stock_sum.core.context import RuntimeContext
 from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
@@ -26,7 +27,7 @@ from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.storage.sqlite import SQLiteStorageRepository
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
-JobKind = Literal["report", "trading_report", "collect"]
+JobKind = Literal["report", "trading_report", "13f_report", "collect"]
 ReportMode = Literal["html", "markdown", "discord", "text", "json"]
 
 
@@ -56,6 +57,29 @@ class TradingReportJobOptions:
     ticker: str | None = None
     limit: int | None = None
     title: str = "Official Trading Disclosures"
+    force_refresh: bool = False
+
+
+@dataclass(frozen=True)
+class Sec13FReportJobOptions:
+    """Options for an SEC 13F holdings report job."""
+
+    mode: ReportMode = "html"
+    manager: str | None = None
+    cik: str | None = None
+    accession_number: str | None = None
+    issuer: str | None = None
+    cusip: str | None = None
+    figi: str | None = None
+    put_call: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    filing_start: str | None = None
+    filing_end: str | None = None
+    min_value: int | None = None
+    min_shares: int | None = None
+    limit: int = 20
+    title: str = "SEC 13F Holdings"
     force_refresh: bool = False
 
 
@@ -149,6 +173,18 @@ class HttpJobManager:
         record = self._new_job(
             kind="trading_report",
             profile="trading",
+            mode=options.mode,
+        )
+        self._save(record)
+        return record
+
+    def create_13f_report_job(self, options: Sec13FReportJobOptions) -> HttpJobRecord:
+        """Create a queued SEC 13F holdings report job."""
+
+        _validate_13f_filters(options)
+        record = self._new_job(
+            kind="13f_report",
+            profile="13f",
             mode=options.mode,
         )
         self._save(record)
@@ -354,6 +390,104 @@ class HttpJobManager:
         finally:
             await self._run_retention(job_id)
 
+    async def run_13f_report_job(self, job_id: str, options: Sec13FReportJobOptions) -> None:
+        """Run an SEC 13F holdings report without LLM analysis."""
+
+        try:
+            _validate_13f_filters(options)
+            self._mark_running(job_id, phase="refresh_check")
+            repository = self._repository_factory()
+            warnings: list[PipelineSectionWarning] = []
+            collection_result: PipelineCollectionResult | None = None
+
+            if self.config.sources.sec_13f.enabled:
+                if options.force_refresh or await self._sec_13f_refresh_needed(repository):
+                    self._update(job_id, phase="refreshing_sec_13f")
+                    run = await self._pipeline_factory().collect_collector(
+                        SEC_13F_COLLECTOR_ID,
+                        profile="13f",
+                        raise_on_error=False,
+                    )
+                    collection_result = PipelineCollectionResult(profile="13f", runs=[run], warnings=list(run.warnings))
+                    warnings.extend(run.warnings)
+                    if run.status == "failed":
+                        warnings.append(
+                            PipelineSectionWarning(
+                                section="sec_13f",
+                                source_id=SEC_13F_COLLECTOR_ID,
+                                phase="refreshing",
+                                message=run.error or "SEC 13F refresh failed.",
+                            )
+                        )
+            else:
+                warnings.append(
+                    PipelineSectionWarning(
+                        section="sec_13f",
+                        source_id=SEC_13F_COLLECTOR_ID,
+                        phase="refreshing",
+                        message="SEC 13F source is disabled; using existing SQLite data only.",
+                    )
+                )
+
+            self._update(job_id, phase="querying")
+            period_start = _parse_date_filter(options.period_start, end_of_day=False)
+            period_end = _parse_date_filter(options.period_end, end_of_day=True)
+            filing_start = _parse_date_filter(options.filing_start, end_of_day=False)
+            filing_end = _parse_date_filter(options.filing_end, end_of_day=True)
+            rows = await repository.read_sec_13f_holdings(
+                manager=options.manager,
+                cik=options.cik,
+                accession_number=options.accession_number,
+                issuer=options.issuer,
+                cusip=options.cusip,
+                figi=options.figi,
+                put_call=options.put_call,
+                period_start=period_start,
+                period_end=period_end,
+                filing_start=filing_start,
+                filing_end=filing_end,
+                min_value=options.min_value,
+                min_shares=options.min_shares,
+                limit=options.limit,
+            )
+            if not rows:
+                message = "No SEC 13F holdings matched the report filters."
+                if warnings:
+                    message += " Refresh warnings: " + "; ".join(warning.message for warning in warnings)
+                raise RuntimeError(message)
+
+            warning_data = _warnings_to_dicts(warnings)
+            response_data = {
+                "report_type": "sec_13f",
+                "summary": {"sec_13f": _sec_13f_rows_to_dicts(rows)},
+                "sec_13f": _sec_13f_rows_to_dicts(rows),
+                "filters": _sec_13f_filter_data(options, period_start, period_end, filing_start, filing_end),
+                "pipeline_warnings": warning_data,
+                "failed_sections": warning_data,
+            }
+            summary_path = self._job_dir(job_id) / "summary.json"
+            self._write_json(summary_path, response_data)
+            self._update(
+                job_id,
+                phase="rendering",
+                summary_path=str(summary_path),
+                warnings=warning_data,
+                collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+            )
+            artifact_path, media_type = self._write_13f_artifact(job_id, response_data, options)
+            self._mark_succeeded(
+                job_id,
+                artifact_path=str(artifact_path),
+                artifact_media_type=media_type,
+                summary_path=str(summary_path),
+                warnings=warning_data,
+                collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+            )
+        except Exception as exc:
+            self._mark_failed(job_id, str(exc))
+        finally:
+            await self._run_retention(job_id)
+
     async def run_collect_job(self, job_id: str) -> None:
         """Run collection-only job and persist its JSON artifact."""
 
@@ -388,6 +522,22 @@ class HttpJobManager:
         now = datetime.now(timezone.utc)
         for run in runs:
             if run.collector_id != "house.ptr" or run.status != "succeeded":
+                continue
+            finished_at = _parse_utc_datetime(run.finished_at)
+            if finished_at is None:
+                continue
+            if (now - finished_at).total_seconds() <= ttl_seconds:
+                return False
+        return True
+
+    async def _sec_13f_refresh_needed(self, repository: SQLiteStorageRepository) -> bool:
+        ttl_seconds = self.config.sources.sec_13f.refresh_ttl_seconds
+        if ttl_seconds <= 0:
+            return True
+        runs = await repository.list_collection_runs(profile="13f", limit=20)
+        now = datetime.now(timezone.utc)
+        for run in runs:
+            if run.collector_id != SEC_13F_COLLECTOR_ID or run.status != "succeeded":
                 continue
             finished_at = _parse_utc_datetime(run.finished_at)
             if finished_at is None:
@@ -536,6 +686,28 @@ class HttpJobManager:
         }[options.mode]
         rendered = self._renderer_factory(options.title).render_trading(response_data, mode=options.mode)
         artifact_path = self._job_dir(job_id) / f"trading-report.{extension}"
+        artifact_path.write_text(rendered, encoding="utf-8")
+        return artifact_path, media_type
+
+    def _write_13f_artifact(
+        self,
+        job_id: str,
+        response_data: dict[str, Any],
+        options: Sec13FReportJobOptions,
+    ) -> tuple[Path, str]:
+        if options.mode == "json":
+            artifact_path = self._job_dir(job_id) / "summary.json"
+            return artifact_path, "application/json"
+
+        extension = {"html": "html", "markdown": "md", "discord": "md", "text": "txt"}[options.mode]
+        media_type = {
+            "html": "text/html; charset=utf-8",
+            "markdown": "text/markdown; charset=utf-8",
+            "discord": "text/markdown; charset=utf-8",
+            "text": "text/plain; charset=utf-8",
+        }[options.mode]
+        rendered = self._renderer_factory(options.title).render_13f(response_data, mode=options.mode)
+        artifact_path = self._job_dir(job_id) / f"13f-report.{extension}"
         artifact_path.write_text(rendered, encoding="utf-8")
         return artifact_path, media_type
 
@@ -760,7 +932,7 @@ def _social_collector_ids(config: AppConfig, profile: str) -> list[str]:
         except Exception:
             result.append(collector_id)
             continue
-        if source_type != HOUSE_PTR_SOURCE_TYPE:
+        if source_type not in {HOUSE_PTR_SOURCE_TYPE, SEC_13F_SOURCE_TYPE}:
             result.append(collector_id)
     return result
 
@@ -770,6 +942,30 @@ def _validate_trading_filters(options: TradingReportJobOptions) -> None:
         raise ValueError("Trading report requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
     if options.days is not None and (options.start_date or options.end_date):
         raise ValueError("Trading report accepts either days or explicit start/end dates, not both.")
+
+
+def _validate_13f_filters(options: Sec13FReportJobOptions) -> None:
+    has_filter = any(
+        (
+            options.manager,
+            options.cik,
+            options.accession_number,
+            options.issuer,
+            options.cusip,
+            options.figi,
+            options.put_call,
+            options.period_start,
+            options.period_end,
+            options.filing_start,
+            options.filing_end,
+            options.min_value is not None,
+            options.min_shares is not None,
+        )
+    )
+    if not has_filter:
+        raise ValueError("13F report requires at least one filter: manager, issuer, CIK, accession, CUSIP, FIGI, date, value, or shares.")
+    if options.limit < 1 or options.limit > 100:
+        raise ValueError("13F report limit must be between 1 and 100.")
 
 
 def _trading_date_window(options: TradingReportJobOptions) -> tuple[datetime | None, datetime | None]:
@@ -811,6 +1007,32 @@ def _trading_filter_data(
         "ticker": options.ticker,
         "transaction_start": transaction_start.isoformat() if transaction_start else None,
         "transaction_end": transaction_end.isoformat() if transaction_end else None,
+        "limit": options.limit,
+        "force_refresh": options.force_refresh,
+    }
+
+
+def _sec_13f_filter_data(
+    options: Sec13FReportJobOptions,
+    period_start: datetime | None,
+    period_end: datetime | None,
+    filing_start: datetime | None,
+    filing_end: datetime | None,
+) -> dict[str, Any]:
+    return {
+        "manager": options.manager,
+        "cik": options.cik,
+        "accession_number": options.accession_number,
+        "issuer": options.issuer,
+        "cusip": options.cusip,
+        "figi": options.figi,
+        "put_call": options.put_call,
+        "period_start": period_start.date().isoformat() if period_start else None,
+        "period_end": period_end.date().isoformat() if period_end else None,
+        "filing_start": filing_start.date().isoformat() if filing_start else None,
+        "filing_end": filing_end.date().isoformat() if filing_end else None,
+        "min_value": options.min_value,
+        "min_shares": options.min_shares,
         "limit": options.limit,
         "force_refresh": options.force_refresh,
     }
@@ -891,6 +1113,38 @@ def _house_ptr_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
             "amount": row.amount,
             "raw_cells": row.raw_cells,
             "collected_at": row.collected_at,
+        }
+        for row in rows
+    ]
+
+
+def _sec_13f_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "dataset_id": row.dataset_id,
+            "dataset_label": row.dataset_label,
+            "accession_number": row.accession_number,
+            "cik": row.cik,
+            "manager_name": row.manager_name,
+            "filing_date": row.filing_date,
+            "filing_date_utc": row.filing_date_utc,
+            "period_of_report": row.period_of_report,
+            "period_of_report_utc": row.period_of_report_utc,
+            "info_table_sk": row.info_table_sk,
+            "issuer": row.issuer,
+            "title_of_class": row.title_of_class,
+            "cusip": row.cusip,
+            "figi": row.figi,
+            "value": row.value,
+            "ssh_prn_amt": row.ssh_prn_amt,
+            "ssh_prn_type": row.ssh_prn_type,
+            "put_call": row.put_call,
+            "investment_discretion": row.investment_discretion,
+            "other_manager": row.other_manager,
+            "voting_auth_sole": row.voting_auth_sole,
+            "voting_auth_shared": row.voting_auth_shared,
+            "voting_auth_none": row.voting_auth_none,
+            "filing_url": row.filing_url,
         }
         for row in rows
     ]

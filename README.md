@@ -160,6 +160,8 @@ Important configuration sections:
   collector ID `reddit.<subreddit>`.
 - `[sources.house_ptr]`: official House PTR disclosure source. It resolves to
   collector ID `house.ptr`.
+- `[sources.sec_13f]`: official SEC Form 13F quarterly dataset source. It
+  resolves to collector ID `sec.13f` and feeds `/13freport`.
 - `[collectors.*.*]`: generic future collector definitions.
 - `[delivery.email.*]` and `[delivery.whatsapp.*]`: delivery definitions.
 

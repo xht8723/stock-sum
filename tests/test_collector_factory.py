@@ -1,6 +1,7 @@
 """Collector factory tests."""
 
 from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
+from stock_sum.collectors.api.sec_13f import SEC_13F_SOURCE_TYPE
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
 import pytest
 
@@ -29,6 +30,13 @@ def test_house_ptr_source_resolves_to_collector_config() -> None:
 
     assert source_type_for_collector_id(config, "house.ptr") == HOUSE_PTR_SOURCE_TYPE
     assert get_collector_config(config, "house.ptr").download_concurrency == 4
+
+
+def test_sec_13f_source_resolves_to_collector_config() -> None:
+    config = load_config("stock_sum/config/example.toml")
+
+    assert source_type_for_collector_id(config, "sec.13f") == SEC_13F_SOURCE_TYPE
+    assert get_collector_config(config, "sec.13f").kind == SEC_13F_SOURCE_TYPE
 
 
 def test_removed_scrape_creators_kind_fails_clearly() -> None:

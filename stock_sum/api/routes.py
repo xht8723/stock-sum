@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, TradingReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, Sec13FReportJobOptions, TradingReportJobOptions
 from stock_sum.api.runtime_config import RuntimeConfigError, RuntimeConfigManager
 from stock_sum.config.loader import redacted_config
 from stock_sum.config.models import AppConfig
@@ -115,6 +115,28 @@ class TradingReportJobRequest(BaseModel):
     ticker: str | None = None
     limit: int | None = Field(default=None, ge=1)
     title: str = "Official Trading Disclosures"
+    force_refresh: bool = False
+
+
+class Sec13FReportJobRequest(BaseModel):
+    """HTTP request body for an SEC 13F holdings report."""
+
+    mode: ReportModePath = "html"
+    manager: str | None = None
+    cik: str | None = None
+    accession_number: str | None = None
+    issuer: str | None = None
+    cusip: str | None = None
+    figi: str | None = None
+    put_call: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    filing_start: str | None = None
+    filing_end: str | None = None
+    min_value: int | None = Field(default=None, ge=0)
+    min_shares: int | None = Field(default=None, ge=0)
+    limit: int = Field(default=20, ge=1, le=100)
+    title: str = "SEC 13F Holdings"
     force_refresh: bool = False
 
 
@@ -244,6 +266,23 @@ def build_router(
         data["mode"] = mode
         return _create_trading_report_job(current_manager(), TradingReportJobRequest(**data), background_tasks)
 
+    @v1.post("/13f-reports/jobs", status_code=status.HTTP_202_ACCEPTED)
+    async def create_13f_report_job(
+        background_tasks: BackgroundTasks,
+        request: Sec13FReportJobRequest = Sec13FReportJobRequest(),
+    ) -> dict:
+        return _create_13f_report_job(current_manager(), request, background_tasks)
+
+    @v1.post("/13f-reports/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
+    async def create_13f_report_job_for_mode(
+        mode: ReportModePath,
+        background_tasks: BackgroundTasks,
+        request: Sec13FReportJobRequest = Sec13FReportJobRequest(),
+    ) -> dict:
+        data = request.model_dump()
+        data["mode"] = mode
+        return _create_13f_report_job(current_manager(), Sec13FReportJobRequest(**data), background_tasks)
+
     def _create_social_report_job(
         manager: HttpJobManager | None,
         profile: str,
@@ -278,6 +317,21 @@ def build_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         background_tasks.add_task(manager.run_trading_report_job, job.job_id, options)
+        return _job_response(job.to_dict())
+
+    def _create_13f_report_job(
+        manager: HttpJobManager | None,
+        request: Sec13FReportJobRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict:
+        if manager is None:
+            raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
+        try:
+            options = Sec13FReportJobOptions(**request.model_dump())
+            job = manager.create_13f_report_job(options)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        background_tasks.add_task(manager.run_13f_report_job, job.job_id, options)
         return _job_response(job.to_dict())
 
     @v1.post("/collect/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)

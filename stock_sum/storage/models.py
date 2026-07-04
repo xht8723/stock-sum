@@ -148,3 +148,34 @@ class StoredHousePtrTradeRow:
     raw_cells: list[str]
     raw_metadata: dict[str, Any]
     collected_at: str
+
+
+@dataclass(frozen=True)
+class StoredSec13FHolding:
+    """Stored SEC 13F holding row joined with filer metadata."""
+
+    dataset_id: str
+    dataset_label: str | None
+    accession_number: str
+    cik: str | None
+    manager_name: str | None
+    filing_date: str | None
+    filing_date_utc: str | None
+    period_of_report: str | None
+    period_of_report_utc: str | None
+    info_table_sk: str
+    issuer: str | None
+    title_of_class: str | None
+    cusip: str | None
+    figi: str | None
+    value: int | None
+    ssh_prn_amt: int | None
+    ssh_prn_type: str | None
+    put_call: str | None
+    investment_discretion: str | None
+    other_manager: str | None
+    voting_auth_sole: int | None
+    voting_auth_shared: int | None
+    voting_auth_none: int | None
+    filing_url: str | None
+    raw_metadata: dict[str, Any]

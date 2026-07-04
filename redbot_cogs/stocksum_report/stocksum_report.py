@@ -246,6 +246,71 @@ class StockSumHttpClient:
             if owns_session:
                 await session.close()
 
+    async def run_13f_report(
+        self,
+        *,
+        output_format: str,
+        manager: str | None = None,
+        cik: str | None = None,
+        accession_number: str | None = None,
+        issuer: str | None = None,
+        cusip: str | None = None,
+        figi: str | None = None,
+        put_call: str | None = None,
+        period_start: str | None = None,
+        period_end: str | None = None,
+        filing_start: str | None = None,
+        filing_end: str | None = None,
+        min_value: int | None = None,
+        min_shares: int | None = None,
+        limit: int = 20,
+        force_refresh: bool = False,
+    ) -> StockSumArtifact:
+        """Create, poll, and download one SEC 13F holdings report job."""
+
+        if output_format not in SUPPORTED_FORMATS:
+            raise StockSumRequestError(f"Unsupported report format: {output_format}")
+        if not any((manager, cik, accession_number, issuer, cusip, figi, put_call, period_start, period_end, filing_start, filing_end, min_value is not None, min_shares is not None)):
+            raise StockSumRequestError("13freport requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.")
+
+        session, owns_session = await self._session()
+        try:
+            payload = {
+                "manager": manager,
+                "cik": cik,
+                "accession_number": accession_number,
+                "issuer": issuer,
+                "cusip": cusip,
+                "figi": figi,
+                "put_call": put_call,
+                "period_start": period_start,
+                "period_end": period_end,
+                "filing_start": filing_start,
+                "filing_end": filing_end,
+                "min_value": min_value,
+                "min_shares": min_shares,
+                "limit": max(1, min(100, limit)),
+                "force_refresh": force_refresh,
+            }
+            job = await self._create_13f_report_job(
+                session,
+                output_format=output_format,
+                payload={key: value for key, value in payload.items() if value is not None},
+            )
+            job_id = _required_string(job, "job_id")
+            status_payload = await self._poll_until_done(session, job_id)
+            content, content_type, filename = await self._download_artifact(session, job_id, output_format)
+            return StockSumArtifact(
+                job_id=job_id,
+                filename=filename,
+                content_type=content_type,
+                content=content,
+                status=status_payload,
+            )
+        finally:
+            if owns_session:
+                await session.close()
+
     async def run_collect_profile(self, *, profile: str) -> dict[str, Any]:
         """Create and poll a collection-only job for one profile."""
 
@@ -342,6 +407,22 @@ class StockSumHttpClient:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         url = f"{self.base_url}/v1/trading-reports/jobs/{quote(output_format, safe='')}"
+        try:
+            async with session.post(url, json=payload, headers=self._headers()) as response:
+                return await self._json_response(response, expected_status=202)
+        except StockSumCogError:
+            raise
+        except Exception as exc:
+            raise StockSumRequestError(f"Could not reach stock-sum at {self.base_url}: {exc}") from exc
+
+    async def _create_13f_report_job(
+        self,
+        session: _ClientSession,
+        *,
+        output_format: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}/v1/13f-reports/jobs/{quote(output_format, safe='')}"
         try:
             async with session.post(url, json=payload, headers=self._headers()) as response:
                 return await self._json_response(response, expected_status=202)
@@ -566,6 +647,125 @@ class StockSumReport(commands.Cog):
                 asset_type=asset_type_filter,
                 ticker=ticker_filter,
                 limit=limit if limit is None else max(1, limit),
+                force_refresh=force_refresh,
+            )
+        except StockSumCogError as exc:
+            await _send_report_output(interaction, _failure_message(exc), private=private)
+            return
+
+        if discord is None:
+            await _send_report_output(
+                interaction,
+                "stock-sum report is ready, but discord.py is not available.",
+                private=private,
+            )
+            return
+
+        if format == "discord":
+            report_text = artifact.content.decode("utf-8", errors="replace").strip()
+            for chunk in _split_discord_markdown(report_text):
+                await _send_report_output(interaction, chunk, private=private)
+            return
+
+        file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
+        await _send_report_output(interaction, "Report generated.", private=private, file=file)
+
+    @app_commands.command(name="13freport", description="Generate an SEC 13F holdings report.")
+    @app_commands.describe(
+        manager="case-insensitive filing manager name filter",
+        issuer="case-insensitive issuer name filter",
+        cik="manager CIK",
+        accession_number="SEC accession number",
+        cusip="security CUSIP",
+        figi="security FIGI",
+        put_call="PUT or CALL",
+        period_start="period-of-report start date, YYYY-MM-DD",
+        period_end="period-of-report end date, YYYY-MM-DD",
+        filing_start="filing start date, YYYY-MM-DD",
+        filing_end="filing end date, YYYY-MM-DD",
+        min_value="minimum reported holding value",
+        min_shares="minimum shares/principal amount",
+        limit="maximum rows to return, 1-100",
+        format="report artifact format",
+        private="send the response only to you",
+        force_refresh="force latest SEC 13F dataset refresh before querying",
+    )
+    @app_commands.choices(
+        format=[
+            app_commands.Choice(name="Discord Markdown", value="discord"),
+            app_commands.Choice(name="HTML", value="html"),
+            app_commands.Choice(name="Markdown", value="markdown"),
+            app_commands.Choice(name="Text", value="text"),
+            app_commands.Choice(name="JSON", value="json"),
+        ],
+        put_call=[
+            app_commands.Choice(name="PUT", value="PUT"),
+            app_commands.Choice(name="CALL", value="CALL"),
+        ],
+    )
+    async def thirteenfreport(
+        self,
+        interaction,
+        manager: str = "",
+        issuer: str = "",
+        cik: str = "",
+        accession_number: str = "",
+        cusip: str = "",
+        figi: str = "",
+        put_call: str = "",
+        period_start: str = "",
+        period_end: str = "",
+        filing_start: str = "",
+        filing_end: str = "",
+        min_value: int | None = None,
+        min_shares: int | None = None,
+        limit: int = 20,
+        format: str = "discord",
+        private: bool = False,
+        force_refresh: bool = False,
+    ) -> None:
+        """Slash command handler for SEC 13F holdings reports."""
+
+        manager_filter = manager.strip() or None
+        issuer_filter = issuer.strip() or None
+        cik_filter = cik.strip() or None
+        accession_filter = accession_number.strip() or None
+        cusip_filter = cusip.strip().upper() or None
+        figi_filter = figi.strip().upper() or None
+        put_call_filter = put_call.strip().upper() or None
+        period_start_filter = period_start.strip() or None
+        period_end_filter = period_end.strip() or None
+        filing_start_filter = filing_start.strip() or None
+        filing_end_filter = filing_end.strip() or None
+        if not any((manager_filter, issuer_filter, cik_filter, accession_filter, cusip_filter, figi_filter, put_call_filter, period_start_filter, period_end_filter, filing_start_filter, filing_end_filter, min_value is not None, min_shares is not None)):
+            await _send_report_output(
+                interaction,
+                "stock-sum report failed: 13freport requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.",
+                private=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "SEC 13F report is being generated, please wait a few minutes.",
+            ephemeral=private,
+        )
+        try:
+            artifact = await StockSumHttpClient.from_env().run_13f_report(
+                output_format=format,
+                manager=manager_filter,
+                issuer=issuer_filter,
+                cik=cik_filter,
+                accession_number=accession_filter,
+                cusip=cusip_filter,
+                figi=figi_filter,
+                put_call=put_call_filter,
+                period_start=period_start_filter,
+                period_end=period_end_filter,
+                filing_start=filing_start_filter,
+                filing_end=filing_end_filter,
+                min_value=min_value,
+                min_shares=min_shares,
+                limit=limit,
                 force_refresh=force_refresh,
             )
         except StockSumCogError as exc:

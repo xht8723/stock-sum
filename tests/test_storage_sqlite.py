@@ -485,6 +485,77 @@ async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
     assert await repository.read_house_ptr_trades(asset_type="GS") == []
 
 
+async def test_save_and_read_sec_13f_holdings(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    item = RawItem(
+        source_id="2026-march-april-may-13f-test",
+        source_type="sec_13f_dataset",
+        url="https://www.sec.gov/files/test.zip",
+        text="2026 March April May 13F",
+        metadata={
+            "entity_type": "sec_13f_dataset",
+            "dataset_id": "2026-march-april-may-13f-test",
+            "label": "2026 March April May 13F",
+            "download_url": "https://www.sec.gov/files/test.zip",
+            "sha256": "abc",
+            "byte_size": 100,
+            "row_counts": {"submissions": 1, "coverpages": 1, "info_tables": 1},
+            "rows_by_table": {
+                "submissions": [
+                    {
+                        "ACCESSION_NUMBER": "0001234567-26-000001",
+                        "FILING_DATE": "31-MAY-2026",
+                        "SUBMISSIONTYPE": "13F-HR",
+                        "CIK": "0001067983",
+                        "PERIODOFREPORT": "31-MAR-2026",
+                    }
+                ],
+                "coverpages": [
+                    {
+                        "ACCESSION_NUMBER": "0001234567-26-000001",
+                        "FILINGMANAGER_NAME": "Berkshire Hathaway Inc",
+                        "REPORTTYPE": "13F HOLDINGS REPORT",
+                    }
+                ],
+                "info_tables": [
+                    {
+                        "ACCESSION_NUMBER": "0001234567-26-000001",
+                        "INFOTABLE_SK": "1",
+                        "NAMEOFISSUER": "NVIDIA CORP",
+                        "TITLEOFCLASS": "COM",
+                        "CUSIP": "67066G104",
+                        "FIGI": "BBG000BBJQV0",
+                        "VALUE": "1000",
+                        "SSHPRNAMT": "50",
+                        "SSHPRNAMTTYPE": "SH",
+                        "PUTCALL": "CALL",
+                        "INVESTMENTDISCRETION": "SOLE",
+                        "VOTING_AUTH_SOLE": "50",
+                        "VOTING_AUTH_SHARED": "0",
+                        "VOTING_AUTH_NONE": "0",
+                    }
+                ],
+            },
+        },
+    )
+
+    first = await repository.save_raw_items([item])
+    second = await repository.save_raw_items([item])
+    holdings = await repository.read_sec_13f_holdings(manager="berkshire", issuer="nvidia", cusip="67066g104", limit=20)
+
+    assert first.inserted_count == 1
+    assert second.updated_count == 1
+    assert len(holdings) == 1
+    assert holdings[0].manager_name == "Berkshire Hathaway Inc"
+    assert holdings[0].issuer == "NVIDIA CORP"
+    assert holdings[0].filing_date_utc == "2026-05-31"
+    assert holdings[0].period_of_report_utc == "2026-03-31"
+    assert holdings[0].value == 1000
+    assert holdings[0].ssh_prn_amt == 50
+    assert "Archives/edgar/data/1067983" in (holdings[0].filing_url or "")
+
+
 async def test_failed_house_ptr_extractions_are_not_skipped(tmp_path) -> None:
     db_path = tmp_path / "storage.sqlite3"
     repository = SQLiteStorageRepository(db_path)

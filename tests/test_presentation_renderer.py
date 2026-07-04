@@ -454,3 +454,47 @@ def test_renderer_outputs_house_ptr_disclosures_in_all_modes() -> None:
     assert "Type: Stocks, including ADRs (ST)" in text
     assert "Action: Sell (partial)" in text
     assert "Source: https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf" in text
+
+
+def test_renderer_outputs_sec_13f_holdings_in_all_modes() -> None:
+    response = {
+        "summary": {
+            "sec_13f": [
+                {
+                    "manager_name": "Berkshire Hathaway Inc",
+                    "period_of_report": "31-MAR-2026",
+                    "filing_date": "31-MAY-2026",
+                    "issuer": "NVIDIA CORP",
+                    "title_of_class": "COM",
+                    "cusip": "67066G104",
+                    "figi": "BBG000BBJQV0",
+                    "value": 1000,
+                    "ssh_prn_amt": 50,
+                    "ssh_prn_type": "SH",
+                    "put_call": "CALL",
+                    "investment_discretion": "SOLE",
+                    "voting_auth_sole": 50,
+                    "voting_auth_shared": 0,
+                    "voting_auth_none": 0,
+                    "accession_number": "0001234567-26-000001",
+                    "filing_url": "https://www.sec.gov/Archives/edgar/data/1234567/000123456726000001/0001234567-26-000001.txt",
+                }
+            ]
+        }
+    }
+
+    html = PresentationRenderer("SEC 13F Holdings").render_13f(response, mode="html")
+    markdown = PresentationRenderer("SEC 13F Holdings").render_13f(response, mode="markdown")
+    discord = PresentationRenderer("SEC 13F Holdings").render_13f(response, mode="discord")
+    text = PresentationRenderer("SEC 13F Holdings").render_13f(response, mode="text")
+
+    assert "SEC 13F Holdings" in html
+    assert "<td>Berkshire Hathaway Inc</td>" in html
+    assert "NVIDIA CORP" in html
+    assert "1,000" in html
+    assert "## SEC 13F Holdings" in markdown
+    assert "[0001234567-26-000001](https://www.sec.gov/Archives/edgar/data/1234567/000123456726000001/0001234567-26-000001.txt)" in markdown
+    assert "**SEC 13F Holdings**" in discord
+    assert "[Filing](https://www.sec.gov/Archives/edgar/data/1234567/000123456726000001/0001234567-26-000001.txt)" in discord
+    assert "SEC 13F HOLDINGS" in text
+    assert "Value: 1,000" in text

@@ -62,6 +62,21 @@ class PresentationRenderer:
             return self._render_trading_text(response, summary)
         raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
 
+    def render_13f(self, response: dict[str, Any], *, mode: str) -> str:
+        """Render an SEC 13F holdings report in html, markdown, discord, or text mode."""
+
+        mode = mode.lower()
+        summary = _summary_from_response(response)
+        if mode == "html":
+            return self._render_13f_html(response, summary)
+        if mode == "markdown":
+            return self._render_13f_markdown(response, summary)
+        if mode in {"discord", "discord_markdown"}:
+            return self._render_13f_discord_markdown(response, summary)
+        if mode == "text":
+            return self._render_13f_text(response, summary)
+        raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
+
     def _render_html(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         sections = [
@@ -74,6 +89,13 @@ class PresentationRenderer:
         sections = [
             _html_pipeline_warnings(response.get("pipeline_warnings")),
             _html_house_ptr(response, summary),
+        ]
+        return self._html_document(sections)
+
+    def _render_13f_html(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        sections = [
+            _html_pipeline_warnings(response.get("pipeline_warnings")),
+            _html_sec_13f(response, summary),
         ]
         return self._html_document(sections)
 
@@ -119,6 +141,15 @@ class PresentationRenderer:
         ]
         return "\n".join(line for line in lines if line is not None).strip() + "\n"
 
+    def _render_13f_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        lines = [
+            f"# {self.title}",
+            "",
+            _markdown_pipeline_warnings(response.get("pipeline_warnings")),
+            _markdown_sec_13f(response, summary),
+        ]
+        return "\n".join(line for line in lines if line is not None).strip() + "\n"
+
     def _render_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
@@ -138,6 +169,15 @@ class PresentationRenderer:
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
+    def _render_13f_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        lines = [
+            f"**{self.title}**",
+            "",
+            _discord_pipeline_warnings(response.get("pipeline_warnings")),
+            _discord_sec_13f(response, summary),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
+
     def _render_text(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
@@ -154,6 +194,15 @@ class PresentationRenderer:
             "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_house_ptr(response, summary),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
+
+    def _render_13f_text(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
+        lines = [
+            self.title.upper(),
+            "",
+            _text_pipeline_warnings(response.get("pipeline_warnings")),
+            _text_sec_13f(response, summary),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
@@ -315,6 +364,42 @@ def _html_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
     return _html_section("Official Trading Disclosures", table)
 
 
+def _html_sec_13f(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _sec_13f_items(response, summary)
+    if not rows:
+        return _html_section("SEC 13F Holdings", '<p class="empty">No SEC 13F holdings matched this query.</p>')
+    body_rows = []
+    for row in rows:
+        source = f'<a href="{escape(str(row.get("filing_url")), quote=True)}" rel="noreferrer">Filing</a>' if row.get("filing_url") else ""
+        body_rows.append(
+            "<tr>"
+            f"<td>{escape(_stringify_item(row.get('manager_name') or 'Unknown'))}</td>"
+            f"<td>{escape(_sec_value(row.get('period_of_report')))}</td>"
+            f"<td>{escape(_sec_value(row.get('filing_date')))}</td>"
+            f"<td>{escape(_sec_value(row.get('issuer')))}</td>"
+            f"<td>{escape(_sec_value(row.get('title_of_class')))}</td>"
+            f"<td>{escape(_sec_value(row.get('cusip')))}</td>"
+            f"<td>{escape(_sec_value(row.get('figi')))}</td>"
+            f"<td>{escape(_format_int(row.get('value')))}</td>"
+            f"<td>{escape(_format_int(row.get('ssh_prn_amt')))} {escape(_sec_value(row.get('ssh_prn_type')))}</td>"
+            f"<td>{escape(_sec_value(row.get('put_call')))}</td>"
+            f"<td>{escape(_sec_value(row.get('investment_discretion')))}</td>"
+            f"<td>{escape(_sec_voting(row))}</td>"
+            f"<td>{escape(_sec_value(row.get('accession_number')))} {source}</td>"
+            "</tr>"
+        )
+    table = (
+        '<div class="table-wrap"><table class="disclosures"><thead><tr>'
+        "<th>Manager</th><th>Period</th><th>Filed</th><th>Issuer</th><th>Class</th>"
+        "<th>CUSIP</th><th>FIGI</th><th>Value</th><th>Shares/PRN</th><th>Put/Call</th>"
+        "<th>Discretion</th><th>Voting</th><th>Accession</th>"
+        "</tr></thead><tbody>"
+        + "".join(body_rows)
+        + "</tbody></table></div>"
+    )
+    return _html_section("SEC 13F Holdings", table)
+
+
 def _html_social_badges(item: dict[str, Any]) -> str:
     badges = []
     label = item.get("source_label")
@@ -392,6 +477,29 @@ def _markdown_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> st
     return "\n".join(lines)
 
 
+def _markdown_sec_13f(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _sec_13f_items(response, summary)
+    lines = ["## SEC 13F Holdings", ""]
+    if not rows:
+        return "\n".join([*lines, "_No SEC 13F holdings matched this query._", ""])
+    for row in rows:
+        lines.append(f"- **{_sec_value(row.get('manager_name')) or 'Unknown manager'}**")
+        lines.append(f"  - Holding: {_sec_value(row.get('issuer'))} / {_sec_value(row.get('title_of_class'))}")
+        lines.append(f"  - Period/filed: {_sec_value(row.get('period_of_report'))} / {_sec_value(row.get('filing_date'))}")
+        lines.append(f"  - CUSIP/FIGI: {_sec_value(row.get('cusip'))} / {_sec_value(row.get('figi'))}")
+        lines.append(f"  - Value: {_format_int(row.get('value'))}; Shares/PRN: {_format_int(row.get('ssh_prn_amt'))} {_sec_value(row.get('ssh_prn_type'))}")
+        if row.get("put_call") or row.get("investment_discretion"):
+            lines.append(f"  - Put/Call and discretion: {_sec_value(row.get('put_call'))} / {_sec_value(row.get('investment_discretion'))}")
+        lines.append(f"  - Voting: {_sec_voting(row)}")
+        accession = _sec_value(row.get("accession_number"))
+        if row.get("filing_url"):
+            lines.append(f"  - Source: [{accession or 'SEC filing'}]({row['filing_url']})")
+        elif accession:
+            lines.append(f"  - Accession: {accession}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _discord_social_sentiment(summary: dict[str, Any], media_by_ref: dict[str, list[dict[str, Any]]], detail: SocialReportDetail) -> str:
     buckets = _filtered_social_buckets(summary, detail)
     lines = ["**Social Media Sentiment**"]
@@ -458,6 +566,30 @@ def _discord_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str
         )
         source = f" [PDF]({row['pdf_url']})" if row.get("pdf_url") else ""
         lines.append(f"- **{title or 'Unknown filer'}**: {detail}{source}")
+    return "\n".join(lines)
+
+
+def _discord_sec_13f(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _sec_13f_items(response, summary)
+    lines = ["**SEC 13F Holdings**"]
+    if not rows:
+        return "\n".join([*lines, "_No SEC 13F holdings matched this query._"])
+    for row in rows:
+        title = f"{_sec_value(row.get('manager_name')) or 'Unknown manager'} · {_sec_value(row.get('issuer'))}"
+        details = " · ".join(
+            part
+            for part in (
+                f"Period {_sec_value(row.get('period_of_report'))}" if row.get("period_of_report") else "",
+                f"Filed {_sec_value(row.get('filing_date'))}" if row.get("filing_date") else "",
+                f"CUSIP {_sec_value(row.get('cusip'))}" if row.get("cusip") else "",
+                f"Value {_format_int(row.get('value'))}" if row.get("value") is not None else "",
+                f"Shares {_format_int(row.get('ssh_prn_amt'))} {_sec_value(row.get('ssh_prn_type'))}" if row.get("ssh_prn_amt") is not None else "",
+                f"Put/Call {_sec_value(row.get('put_call'))}" if row.get("put_call") else "",
+            )
+            if part
+        )
+        source = f" [Filing]({row['filing_url']})" if row.get("filing_url") else ""
+        lines.append(f"- **{title}**: {details}{source}")
     return "\n".join(lines)
 
 
@@ -530,6 +662,25 @@ def _text_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _text_sec_13f(response: dict[str, Any], summary: dict[str, Any]) -> str:
+    rows = _sec_13f_items(response, summary)
+    lines = ["SEC 13F HOLDINGS"]
+    if not rows:
+        return "\n".join([*lines, "  No SEC 13F holdings matched this query."])
+    for row in rows:
+        lines.append(f"- {_sec_value(row.get('manager_name')) or 'Unknown manager'}")
+        lines.append(f"  Holding: {_sec_value(row.get('issuer'))} / {_sec_value(row.get('title_of_class'))}")
+        lines.append(f"  Period/filed: {_sec_value(row.get('period_of_report'))} / {_sec_value(row.get('filing_date'))}")
+        lines.append(f"  CUSIP/FIGI: {_sec_value(row.get('cusip'))} / {_sec_value(row.get('figi'))}")
+        lines.append(f"  Value: {_format_int(row.get('value'))}; Shares/PRN: {_format_int(row.get('ssh_prn_amt'))} {_sec_value(row.get('ssh_prn_type'))}")
+        if row.get("put_call") or row.get("investment_discretion"):
+            lines.append(f"  Put/Call and discretion: {_sec_value(row.get('put_call'))} / {_sec_value(row.get('investment_discretion'))}")
+        lines.append(f"  Voting: {_sec_voting(row)}")
+        if row.get("filing_url"):
+            lines.append(f"  Source: {row['filing_url']}")
+    return "\n".join(lines)
+
+
 def _social_items_by_importance(summary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     buckets: dict[str, list[dict[str, Any]]] = {"high": [], "medium": [], "low": []}
     for item in _social_items(summary):
@@ -577,6 +728,11 @@ def _house_ptr_items(response: dict[str, Any], summary: dict[str, Any]) -> list[
     return [item for item in _as_list(value) if isinstance(item, dict)]
 
 
+def _sec_13f_items(response: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
+    value = response.get("sec_13f") or summary.get("sec_13f")
+    return [item for item in _as_list(value) if isinstance(item, dict)]
+
+
 def _raw_cells_preview(row: dict[str, Any]) -> str:
     cells = [str(item).strip() for item in _as_list(row.get("raw_cells")) if str(item).strip()]
     return " | ".join(cells[:4])
@@ -606,6 +762,30 @@ def _house_trade_action(value: Any) -> str:
             return "Sell (partial)"
         return "Sell"
     return text
+
+
+def _sec_value(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    return _stringify_item(value)
+
+
+def _format_int(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return _stringify_item(value)
+
+
+def _sec_voting(row: dict[str, Any]) -> str:
+    parts = []
+    for label, key in (("sole", "voting_auth_sole"), ("shared", "voting_auth_shared"), ("none", "voting_auth_none")):
+        value = row.get(key)
+        if value not in (None, ""):
+            parts.append(f"{label} {_format_int(value)}")
+    return ", ".join(parts)
 
 
 def _importance_bucket(item: dict[str, Any]) -> str:

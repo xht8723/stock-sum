@@ -98,6 +98,13 @@ parse_concurrency = 2
 zip_url_template = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
 pdf_url_template = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
 
+[sources.sec_13f]
+enabled = true
+page_url = "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
+refresh_ttl_seconds = 21600
+download_timeout_seconds = 120
+user_agent = "stock-sum/0.1 contact@example.com"
+
 [delivery.email.primary]
 kind = "email"
 enabled = false

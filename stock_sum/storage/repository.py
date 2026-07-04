@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult, Report, Summary
-from stock_sum.storage.models import StoredCollectionRun, StoredDownloadedMedia, StoredHousePtrTradeRow, StoredRedditPost, StoredXPost
+from stock_sum.storage.models import StoredCollectionRun, StoredDownloadedMedia, StoredHousePtrTradeRow, StoredRedditPost, StoredSec13FHolding, StoredXPost
 
 
 @runtime_checkable
@@ -122,6 +122,26 @@ class StorageRepository(Protocol):
         limit: int | None = None,
     ) -> list[StoredHousePtrTradeRow]:
         """Read House PTR trade rows for deterministic report rendering."""
+
+    async def read_sec_13f_holdings(
+        self,
+        *,
+        manager: str | None = None,
+        cik: str | None = None,
+        accession_number: str | None = None,
+        issuer: str | None = None,
+        cusip: str | None = None,
+        figi: str | None = None,
+        put_call: str | None = None,
+        period_start: datetime | None = None,
+        period_end: datetime | None = None,
+        filing_start: datetime | None = None,
+        filing_end: datetime | None = None,
+        min_value: int | None = None,
+        min_shares: int | None = None,
+        limit: int | None = 20,
+    ) -> list[StoredSec13FHolding]:
+        """Read SEC 13F holdings for deterministic report rendering."""
 
     async def get_downloaded_media(self, remote_url: str) -> StoredDownloadedMedia | None:
         """Return downloaded media metadata by remote URL."""

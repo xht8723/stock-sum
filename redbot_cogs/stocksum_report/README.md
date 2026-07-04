@@ -1,7 +1,8 @@
 # stocksum_report
 
-Red Discord Bot cog that exposes `/socialreport` and `/tradingreport`, then
-bridges those slash commands to the local `stock-sum` HTTP server.
+Red Discord Bot cog that exposes `/socialreport`, `/tradingreport`, and
+`/13freport`, then bridges those slash commands to the local `stock-sum` HTTP
+server.
 
 ## Environment
 
@@ -28,6 +29,7 @@ Then sync slash commands with Red's slash-command management command and run:
 ```text
 /socialreport profile:default detail:minimum
 /tradingreport days:30
+/13freport issuer:NVIDIA
 ```
 
 `/socialreport` generates X/Reddit social sentiment reports with LLM analysis.
@@ -38,8 +40,12 @@ SQLite without LLM analysis; it requires at least one filter such as `name`,
 `days`, a transaction-date range, `asset_type`, or `ticker`. Asset type filters
 use House codes such as `ST`, `GS`, `OI`, `CS`, and `OT`; ticker filters apply
 to `ST` stock rows.
+`/13freport` generates official SEC Form 13F holdings reports from the latest
+quarterly SEC dataset in SQLite without LLM analysis. It requires at least one
+filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
+`min_value`, or `min_shares`.
 
-The default format for both commands is Discord-specific markdown and is sent
+The default format for report commands is Discord-specific markdown and is sent
 inline in message chunks. Choose `html`, `markdown`, `text`, or `json` to
 receive the report as a file attachment instead.
 

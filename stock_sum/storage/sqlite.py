@@ -17,6 +17,7 @@ from stock_sum.collectors.api.house import (
     normalize_house_transaction_action,
     parse_house_asset_metadata,
 )
+from stock_sum.collectors.api.sec_13f import normalize_sec_name, sec_filing_url
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 from stock_sum.storage.models import (
@@ -26,6 +27,7 @@ from stock_sum.storage.models import (
     StoredMediaAsset,
     StoredRedditComment,
     StoredRedditPost,
+    StoredSec13FHolding,
     StoredXPost,
 )
 
@@ -206,6 +208,113 @@ ON raw_house_ptr_filings (name_normalized);
 
 CREATE INDEX IF NOT EXISTS idx_house_ptr_trade_rows_transaction_date
 ON raw_house_ptr_trade_rows (transaction_date_utc);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_datasets (
+    dataset_id TEXT PRIMARY KEY,
+    label TEXT,
+    download_url TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    byte_size INTEGER,
+    row_counts_json TEXT NOT NULL,
+    downloaded_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_submissions (
+    dataset_id TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    filing_date TEXT,
+    filing_date_utc TEXT,
+    submission_type TEXT,
+    cik TEXT,
+    period_of_report TEXT,
+    period_of_report_utc TEXT,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, accession_number)
+);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_coverpages (
+    dataset_id TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    manager_name TEXT,
+    manager_name_normalized TEXT,
+    report_type TEXT,
+    form_13f_file_number TEXT,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, accession_number)
+);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_other_managers (
+    dataset_id TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, accession_number, row_key)
+);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_signatures (
+    dataset_id TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, accession_number)
+);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_summary_pages (
+    dataset_id TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, accession_number)
+);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_other_managers2 (
+    dataset_id TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, accession_number, row_key)
+);
+
+CREATE TABLE IF NOT EXISTS raw_sec_13f_info_tables (
+    dataset_id TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    info_table_sk TEXT NOT NULL,
+    issuer TEXT,
+    issuer_normalized TEXT,
+    title_of_class TEXT,
+    cusip TEXT,
+    figi TEXT,
+    value INTEGER,
+    ssh_prn_amt INTEGER,
+    ssh_prn_type TEXT,
+    put_call TEXT,
+    investment_discretion TEXT,
+    other_manager TEXT,
+    voting_auth_sole INTEGER,
+    voting_auth_shared INTEGER,
+    voting_auth_none INTEGER,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY (dataset_id, accession_number, info_table_sk)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sec_13f_submissions_period
+ON raw_sec_13f_submissions (period_of_report_utc, filing_date_utc);
+
+CREATE INDEX IF NOT EXISTS idx_sec_13f_submissions_cik
+ON raw_sec_13f_submissions (cik);
+
+CREATE INDEX IF NOT EXISTS idx_sec_13f_coverpages_manager
+ON raw_sec_13f_coverpages (manager_name_normalized);
+
+CREATE INDEX IF NOT EXISTS idx_sec_13f_info_issuer
+ON raw_sec_13f_info_tables (issuer_normalized);
+
+CREATE INDEX IF NOT EXISTS idx_sec_13f_info_cusip
+ON raw_sec_13f_info_tables (cusip);
+
+CREATE INDEX IF NOT EXISTS idx_sec_13f_info_figi
+ON raw_sec_13f_info_tables (figi);
+
+CREATE INDEX IF NOT EXISTS idx_sec_13f_info_value
+ON raw_sec_13f_info_tables (value);
 
 CREATE TABLE IF NOT EXISTS llm_analysis_runs (
     analysis_run_id TEXT PRIMARY KEY,
@@ -1003,6 +1112,138 @@ class SQLiteStorageRepository:
             for row in rows
         ]
 
+    async def read_sec_13f_holdings(
+        self,
+        *,
+        manager: str | None = None,
+        cik: str | None = None,
+        accession_number: str | None = None,
+        issuer: str | None = None,
+        cusip: str | None = None,
+        figi: str | None = None,
+        put_call: str | None = None,
+        period_start: datetime | None = None,
+        period_end: datetime | None = None,
+        filing_start: datetime | None = None,
+        filing_end: datetime | None = None,
+        min_value: int | None = None,
+        min_shares: int | None = None,
+        limit: int | None = 20,
+    ) -> list[StoredSec13FHolding]:
+        """Read SEC 13F holdings joined with submission and cover page metadata."""
+
+        await self.initialize()
+        query = """
+            SELECT i.dataset_id, d.label, i.accession_number, s.cik, c.manager_name,
+                   s.filing_date, s.filing_date_utc, s.period_of_report, s.period_of_report_utc,
+                   i.info_table_sk, i.issuer, i.title_of_class, i.cusip, i.figi, i.value,
+                   i.ssh_prn_amt, i.ssh_prn_type, i.put_call, i.investment_discretion,
+                   i.other_manager, i.voting_auth_sole, i.voting_auth_shared, i.voting_auth_none,
+                   i.raw_json
+            FROM raw_sec_13f_info_tables i
+            JOIN raw_sec_13f_datasets d ON d.dataset_id = i.dataset_id
+            LEFT JOIN raw_sec_13f_submissions s
+                ON s.dataset_id = i.dataset_id AND s.accession_number = i.accession_number
+            LEFT JOIN raw_sec_13f_coverpages c
+                ON c.dataset_id = i.dataset_id AND c.accession_number = i.accession_number
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+        manager_filter = normalize_sec_name(manager)
+        if manager_filter:
+            conditions.append("c.manager_name_normalized LIKE ?")
+            params.append(f"%{manager_filter}%")
+        cik_filter = str(cik or "").strip().lstrip("0")
+        if cik_filter:
+            conditions.append("LTRIM(s.cik, '0') = ?")
+            params.append(cik_filter)
+        accession_filter = str(accession_number or "").strip()
+        if accession_filter:
+            conditions.append("i.accession_number = ?")
+            params.append(accession_filter)
+        issuer_filter = normalize_sec_name(issuer)
+        if issuer_filter:
+            conditions.append("i.issuer_normalized LIKE ?")
+            params.append(f"%{issuer_filter}%")
+        normalized_cusip = _normalized_upper_filter(cusip)
+        if normalized_cusip:
+            conditions.append("UPPER(i.cusip) = ?")
+            params.append(normalized_cusip)
+        normalized_figi = _normalized_upper_filter(figi)
+        if normalized_figi:
+            conditions.append("UPPER(i.figi) = ?")
+            params.append(normalized_figi)
+        normalized_put_call = _normalized_upper_filter(put_call)
+        if normalized_put_call:
+            conditions.append("UPPER(i.put_call) = ?")
+            params.append(normalized_put_call)
+        if period_start is not None:
+            conditions.append("s.period_of_report_utc >= ?")
+            params.append(_date_param(period_start))
+        if period_end is not None:
+            conditions.append("s.period_of_report_utc <= ?")
+            params.append(_date_param(period_end))
+        if filing_start is not None:
+            conditions.append("s.filing_date_utc >= ?")
+            params.append(_date_param(filing_start))
+        if filing_end is not None:
+            conditions.append("s.filing_date_utc <= ?")
+            params.append(_date_param(filing_end))
+        if min_value is not None:
+            conditions.append("i.value >= ?")
+            params.append(min_value)
+        if min_shares is not None:
+            conditions.append("i.ssh_prn_amt >= ?")
+            params.append(min_shares)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += """
+            ORDER BY COALESCE(s.period_of_report_utc, '') DESC,
+                     COALESCE(s.filing_date_utc, '') DESC,
+                     COALESCE(i.value, 0) DESC,
+                     i.accession_number DESC,
+                     CAST(i.info_table_sk AS INTEGER) ASC
+        """
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            cursor = await db.execute(query, params)
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return [
+            StoredSec13FHolding(
+                dataset_id=row[0],
+                dataset_label=row[1],
+                accession_number=row[2],
+                cik=row[3],
+                manager_name=row[4],
+                filing_date=row[5],
+                filing_date_utc=row[6],
+                period_of_report=row[7],
+                period_of_report_utc=row[8],
+                info_table_sk=row[9],
+                issuer=row[10],
+                title_of_class=row[11],
+                cusip=row[12],
+                figi=row[13],
+                value=row[14],
+                ssh_prn_amt=row[15],
+                ssh_prn_type=row[16],
+                put_call=row[17],
+                investment_discretion=row[18],
+                other_manager=row[19],
+                voting_auth_sole=row[20],
+                voting_auth_shared=row[21],
+                voting_auth_none=row[22],
+                filing_url=sec_filing_url(row[3], row[2]),
+                raw_metadata=_json_obj(row[23]),
+            )
+            for row in rows
+        ]
+
     async def get_downloaded_media(self, remote_url: str) -> StoredDownloadedMedia | None:
         """Return downloaded media metadata by remote URL."""
 
@@ -1045,6 +1286,12 @@ def _datetime_param(value: datetime | date, *, end_of_day: bool = False) -> str:
     else:
         parsed = datetime.combine(value, time.max if end_of_day else time.min)
     return _utc_datetime(parsed).isoformat()
+
+
+def _date_param(value: datetime | date) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    return value.isoformat()
 
 
 def _normalized_upper_filter(value: str | None) -> str | None:
@@ -1359,6 +1606,8 @@ async def _mapped_row_exists(db: aiosqlite.Connection, item: MappedRawItem) -> b
         query = "SELECT 1 FROM raw_reddit_comments WHERE post_id = ? AND comment_id = ?"
     elif item.table == "raw_house_ptr_filings":
         query = "SELECT 1 FROM raw_house_ptr_filings WHERE doc_id = ?"
+    elif item.table == "raw_sec_13f_datasets":
+        query = "SELECT 1 FROM raw_sec_13f_datasets WHERE dataset_id = ?"
     else:
         raise ValueError(f"Unsupported mapped table: {item.table}")
     cursor = await db.execute(query, item.key)
@@ -1387,6 +1636,11 @@ async def _upsert_mapped_item(db: aiosqlite.Connection, item: MappedRawItem) -> 
         await _delete_house_ptr_trade_rows(db, item.row["doc_id"])
         for trade_row in item.media_rows:
             await _upsert_house_ptr_trade_row(db, trade_row)
+        return
+    if item.table == "raw_sec_13f_datasets":
+        await _upsert_sec_13f_dataset(db, item.row)
+        await _delete_sec_13f_dataset_rows(db, item.row["dataset_id"])
+        await _upsert_sec_13f_child_rows(db, item.media_rows)
         return
     raise ValueError(f"Unsupported mapped table: {item.table}")
 
@@ -1584,6 +1838,252 @@ async def _upsert_house_ptr_trade_row(db: aiosqlite.Connection, row: dict[str, A
         """,
         row,
     )
+
+
+async def _upsert_sec_13f_dataset(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        INSERT INTO raw_sec_13f_datasets (
+            dataset_id, label, download_url, sha256, byte_size, row_counts_json, downloaded_at
+        ) VALUES (
+            :dataset_id, :label, :download_url, :sha256, :byte_size, :row_counts_json, :downloaded_at
+        )
+        ON CONFLICT (dataset_id) DO UPDATE SET
+            label = excluded.label,
+            download_url = excluded.download_url,
+            sha256 = excluded.sha256,
+            byte_size = excluded.byte_size,
+            row_counts_json = excluded.row_counts_json,
+            downloaded_at = excluded.downloaded_at
+        """,
+        row,
+    )
+
+
+async def _delete_sec_13f_dataset_rows(db: aiosqlite.Connection, dataset_id: str) -> None:
+    for table in (
+        "raw_sec_13f_submissions",
+        "raw_sec_13f_coverpages",
+        "raw_sec_13f_other_managers",
+        "raw_sec_13f_signatures",
+        "raw_sec_13f_summary_pages",
+        "raw_sec_13f_other_managers2",
+        "raw_sec_13f_info_tables",
+    ):
+        await db.execute(f"DELETE FROM {table} WHERE dataset_id = ?", (dataset_id,))
+
+
+async def _upsert_sec_13f_child_row(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    table_name = row.get("table_name")
+    if table_name == "submissions":
+        await db.execute(
+            """
+            INSERT INTO raw_sec_13f_submissions (
+                dataset_id, accession_number, filing_date, filing_date_utc, submission_type,
+                cik, period_of_report, period_of_report_utc, raw_json
+            ) VALUES (
+                :dataset_id, :accession_number, :filing_date, :filing_date_utc, :submission_type,
+                :cik, :period_of_report, :period_of_report_utc, :raw_json
+            )
+            ON CONFLICT (dataset_id, accession_number) DO UPDATE SET
+                filing_date = excluded.filing_date,
+                filing_date_utc = excluded.filing_date_utc,
+                submission_type = excluded.submission_type,
+                cik = excluded.cik,
+                period_of_report = excluded.period_of_report,
+                period_of_report_utc = excluded.period_of_report_utc,
+                raw_json = excluded.raw_json
+            """,
+            row,
+        )
+        return
+    if table_name == "coverpages":
+        await db.execute(
+            """
+            INSERT INTO raw_sec_13f_coverpages (
+                dataset_id, accession_number, manager_name, manager_name_normalized,
+                report_type, form_13f_file_number, raw_json
+            ) VALUES (
+                :dataset_id, :accession_number, :manager_name, :manager_name_normalized,
+                :report_type, :form_13f_file_number, :raw_json
+            )
+            ON CONFLICT (dataset_id, accession_number) DO UPDATE SET
+                manager_name = excluded.manager_name,
+                manager_name_normalized = excluded.manager_name_normalized,
+                report_type = excluded.report_type,
+                form_13f_file_number = excluded.form_13f_file_number,
+                raw_json = excluded.raw_json
+            """,
+            row,
+        )
+        return
+    if table_name == "info_tables":
+        await db.execute(
+            """
+            INSERT INTO raw_sec_13f_info_tables (
+                dataset_id, accession_number, info_table_sk, issuer, issuer_normalized,
+                title_of_class, cusip, figi, value, ssh_prn_amt, ssh_prn_type, put_call,
+                investment_discretion, other_manager, voting_auth_sole, voting_auth_shared,
+                voting_auth_none, raw_json
+            ) VALUES (
+                :dataset_id, :accession_number, :info_table_sk, :issuer, :issuer_normalized,
+                :title_of_class, :cusip, :figi, :value, :ssh_prn_amt, :ssh_prn_type, :put_call,
+                :investment_discretion, :other_manager, :voting_auth_sole, :voting_auth_shared,
+                :voting_auth_none, :raw_json
+            )
+            ON CONFLICT (dataset_id, accession_number, info_table_sk) DO UPDATE SET
+                issuer = excluded.issuer,
+                issuer_normalized = excluded.issuer_normalized,
+                title_of_class = excluded.title_of_class,
+                cusip = excluded.cusip,
+                figi = excluded.figi,
+                value = excluded.value,
+                ssh_prn_amt = excluded.ssh_prn_amt,
+                ssh_prn_type = excluded.ssh_prn_type,
+                put_call = excluded.put_call,
+                investment_discretion = excluded.investment_discretion,
+                other_manager = excluded.other_manager,
+                voting_auth_sole = excluded.voting_auth_sole,
+                voting_auth_shared = excluded.voting_auth_shared,
+                voting_auth_none = excluded.voting_auth_none,
+                raw_json = excluded.raw_json
+            """,
+            row,
+        )
+        return
+    if table_name in {"other_managers", "other_managers2"}:
+        table = "raw_sec_13f_other_managers" if table_name == "other_managers" else "raw_sec_13f_other_managers2"
+        await db.execute(
+            f"""
+            INSERT INTO {table} (dataset_id, accession_number, row_key, raw_json)
+            VALUES (:dataset_id, :accession_number, :row_key, :raw_json)
+            ON CONFLICT (dataset_id, accession_number, row_key) DO UPDATE SET
+                raw_json = excluded.raw_json
+            """,
+            {**row, "row_key": _sec_13f_row_key(row)},
+        )
+        return
+    if table_name in {"signatures", "summary_pages"}:
+        table = "raw_sec_13f_signatures" if table_name == "signatures" else "raw_sec_13f_summary_pages"
+        await db.execute(
+            f"""
+            INSERT INTO {table} (dataset_id, accession_number, raw_json)
+            VALUES (:dataset_id, :accession_number, :raw_json)
+            ON CONFLICT (dataset_id, accession_number) DO UPDATE SET
+                raw_json = excluded.raw_json
+            """,
+            row,
+        )
+        return
+
+
+async def _upsert_sec_13f_child_rows(db: aiosqlite.Connection, rows: list[dict[str, Any]]) -> None:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(str(row.get("table_name")), []).append(row)
+
+    if groups.get("submissions"):
+        await db.executemany(
+            """
+            INSERT INTO raw_sec_13f_submissions (
+                dataset_id, accession_number, filing_date, filing_date_utc, submission_type,
+                cik, period_of_report, period_of_report_utc, raw_json
+            ) VALUES (
+                :dataset_id, :accession_number, :filing_date, :filing_date_utc, :submission_type,
+                :cik, :period_of_report, :period_of_report_utc, :raw_json
+            )
+            ON CONFLICT (dataset_id, accession_number) DO UPDATE SET
+                filing_date = excluded.filing_date,
+                filing_date_utc = excluded.filing_date_utc,
+                submission_type = excluded.submission_type,
+                cik = excluded.cik,
+                period_of_report = excluded.period_of_report,
+                period_of_report_utc = excluded.period_of_report_utc,
+                raw_json = excluded.raw_json
+            """,
+            groups["submissions"],
+        )
+    if groups.get("coverpages"):
+        await db.executemany(
+            """
+            INSERT INTO raw_sec_13f_coverpages (
+                dataset_id, accession_number, manager_name, manager_name_normalized,
+                report_type, form_13f_file_number, raw_json
+            ) VALUES (
+                :dataset_id, :accession_number, :manager_name, :manager_name_normalized,
+                :report_type, :form_13f_file_number, :raw_json
+            )
+            ON CONFLICT (dataset_id, accession_number) DO UPDATE SET
+                manager_name = excluded.manager_name,
+                manager_name_normalized = excluded.manager_name_normalized,
+                report_type = excluded.report_type,
+                form_13f_file_number = excluded.form_13f_file_number,
+                raw_json = excluded.raw_json
+            """,
+            groups["coverpages"],
+        )
+    if groups.get("info_tables"):
+        await db.executemany(
+            """
+            INSERT INTO raw_sec_13f_info_tables (
+                dataset_id, accession_number, info_table_sk, issuer, issuer_normalized,
+                title_of_class, cusip, figi, value, ssh_prn_amt, ssh_prn_type, put_call,
+                investment_discretion, other_manager, voting_auth_sole, voting_auth_shared,
+                voting_auth_none, raw_json
+            ) VALUES (
+                :dataset_id, :accession_number, :info_table_sk, :issuer, :issuer_normalized,
+                :title_of_class, :cusip, :figi, :value, :ssh_prn_amt, :ssh_prn_type, :put_call,
+                :investment_discretion, :other_manager, :voting_auth_sole, :voting_auth_shared,
+                :voting_auth_none, :raw_json
+            )
+            ON CONFLICT (dataset_id, accession_number, info_table_sk) DO UPDATE SET
+                issuer = excluded.issuer,
+                issuer_normalized = excluded.issuer_normalized,
+                title_of_class = excluded.title_of_class,
+                cusip = excluded.cusip,
+                figi = excluded.figi,
+                value = excluded.value,
+                ssh_prn_amt = excluded.ssh_prn_amt,
+                ssh_prn_type = excluded.ssh_prn_type,
+                put_call = excluded.put_call,
+                investment_discretion = excluded.investment_discretion,
+                other_manager = excluded.other_manager,
+                voting_auth_sole = excluded.voting_auth_sole,
+                voting_auth_shared = excluded.voting_auth_shared,
+                voting_auth_none = excluded.voting_auth_none,
+                raw_json = excluded.raw_json
+            """,
+            groups["info_tables"],
+        )
+    for table_name, sql_table in (("other_managers", "raw_sec_13f_other_managers"), ("other_managers2", "raw_sec_13f_other_managers2")):
+        if groups.get(table_name):
+            prepared = [{**row, "row_key": _sec_13f_row_key(row)} for row in groups[table_name]]
+            await db.executemany(
+                f"""
+                INSERT INTO {sql_table} (dataset_id, accession_number, row_key, raw_json)
+                VALUES (:dataset_id, :accession_number, :row_key, :raw_json)
+                ON CONFLICT (dataset_id, accession_number, row_key) DO UPDATE SET
+                    raw_json = excluded.raw_json
+                """,
+                prepared,
+            )
+    for table_name, sql_table in (("signatures", "raw_sec_13f_signatures"), ("summary_pages", "raw_sec_13f_summary_pages")):
+        if groups.get(table_name):
+            await db.executemany(
+                f"""
+                INSERT INTO {sql_table} (dataset_id, accession_number, raw_json)
+                VALUES (:dataset_id, :accession_number, :raw_json)
+                ON CONFLICT (dataset_id, accession_number) DO UPDATE SET
+                    raw_json = excluded.raw_json
+                """,
+                groups[table_name],
+            )
+
+
+def _sec_13f_row_key(row: dict[str, Any]) -> str:
+    raw_json_text = str(row.get("raw_json") or "")
+    digest = hashlib.sha256(raw_json_text.encode("utf-8")).hexdigest()[:16]
+    return str(row.get("info_table_sk") or digest)
 
 
 async def _upsert_index_row(db: aiosqlite.Connection, item: RawItem) -> None:

@@ -7,11 +7,11 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, TradingReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, Sec13FReportJobOptions, TradingReportJobOptions
 from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
-from stock_sum.storage.models import StoredCollectionRun, StoredHousePtrTradeRow, StoredXPost
+from stock_sum.storage.models import StoredCollectionRun, StoredHousePtrTradeRow, StoredSec13FHolding, StoredXPost
 
 
 async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
@@ -163,6 +163,53 @@ async def test_trading_report_filters_by_asset_type_and_ticker(tmp_path) -> None
     summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
     assert summary["house_ptr"][0]["asset_type_code"] == "ST"
     assert summary["house_ptr"][0]["stock_ticker"] == "AMZN"
+
+
+async def test_13f_report_job_renders_matching_holdings_without_llm(tmp_path) -> None:
+    row = StoredSec13FHolding(
+        dataset_id="dataset-1",
+        dataset_label="2026 March April May 13F",
+        accession_number="0001234567-26-000001",
+        cik="0001067983",
+        manager_name="Berkshire Hathaway Inc",
+        filing_date="31-MAY-2026",
+        filing_date_utc="2026-05-31",
+        period_of_report="31-MAR-2026",
+        period_of_report_utc="2026-03-31",
+        info_table_sk="1",
+        issuer="NVIDIA CORP",
+        title_of_class="COM",
+        cusip="67066G104",
+        figi="BBG000BBJQV0",
+        value=1000,
+        ssh_prn_amt=50,
+        ssh_prn_type="SH",
+        put_call="CALL",
+        investment_discretion="SOLE",
+        other_manager=None,
+        voting_auth_sole=50,
+        voting_auth_shared=0,
+        voting_auth_none=0,
+        filing_url="https://www.sec.gov/Archives/edgar/data/1067983/000123456726000001/0001234567-26-000001.txt",
+        raw_metadata={},
+    )
+    repository = FakeRepository(with_social_data=False, sec_13f_rows=[row])
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        repository_factory=lambda: repository,
+        llm_client_factory=lambda: (_ for _ in ()).throw(AssertionError("LLM should not be used")),
+    )
+    options = Sec13FReportJobOptions(mode="json", issuer="nvidia", limit=20)
+    job = manager.create_13f_report_job(options)
+
+    await manager.run_13f_report_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    assert status.status == "succeeded"
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["sec_13f"][0]["issuer"] == "NVIDIA CORP"
+    assert repository.last_sec_13f_filters["issuer"] == "nvidia"
 
 
 async def test_trading_report_sorts_rows_by_transaction_date(tmp_path) -> None:
@@ -521,15 +568,33 @@ class FakePipeline:
 
 
 class FakeRepository:
-    def __init__(self, *, with_social_data: bool, house_rows=None) -> None:
+    def __init__(self, *, with_social_data: bool, house_rows=None, sec_13f_rows=None) -> None:
         self.with_social_data = with_social_data
         self.house_rows = house_rows or []
+        self.sec_13f_rows = sec_13f_rows or []
         self.x_analysis_rows = []
         self.reddit_post_analysis_rows = []
         self.reddit_comment_analysis_rows = []
         self.last_house_filters = {}
+        self.last_sec_13f_filters = {}
 
     async def list_collection_runs(self, *, profile: str | None = None, limit: int = 20):
+        if profile == "13f":
+            return [
+                StoredCollectionRun(
+                    run_id="sec-run",
+                    profile="13f",
+                    collector_id="sec.13f",
+                    source_type="sec_13f_dataset",
+                    status="succeeded",
+                    started_at=datetime.now(timezone.utc).isoformat(),
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                    collected_count=1,
+                    inserted_count=1,
+                    updated_count=0,
+                    error_text=None,
+                )
+            ]
         return [
             StoredCollectionRun(
                 run_id="house-run",
@@ -591,6 +656,34 @@ class FakeRepository:
         if ticker:
             rows = [row for row in rows if (row.stock_ticker or "").upper() == ticker.upper()]
         return rows if limit is None else rows[:limit]
+
+    async def read_sec_13f_holdings(
+        self,
+        *,
+        manager=None,
+        cik=None,
+        accession_number=None,
+        issuer=None,
+        cusip=None,
+        figi=None,
+        put_call=None,
+        period_start=None,
+        period_end=None,
+        filing_start=None,
+        filing_end=None,
+        min_value=None,
+        min_shares=None,
+        limit=20,
+    ):
+        self.last_sec_13f_filters = {"manager": manager, "issuer": issuer, "cusip": cusip, "limit": limit}
+        rows = list(self.sec_13f_rows)
+        if issuer:
+            rows = [row for row in rows if issuer.lower() in (row.issuer or "").lower()]
+        if manager:
+            rows = [row for row in rows if manager.lower() in (row.manager_name or "").lower()]
+        if cusip:
+            rows = [row for row in rows if (row.cusip or "").upper() == cusip.upper()]
+        return rows[:limit]
 
     async def start_llm_analysis_run(self, **kwargs):
         return None

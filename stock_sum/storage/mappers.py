@@ -14,6 +14,7 @@ from stock_sum.collectors.api.house import (
     normalize_house_transaction_action,
     parse_house_asset_metadata,
 )
+from stock_sum.collectors.api.sec_13f import SEC_13F_SOURCE_TYPE, normalize_sec_date, normalize_sec_name, sec_filing_url
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
 from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import RawItem
@@ -54,6 +55,8 @@ def map_raw_item(item: RawItem) -> MappedRawItem:
             return _map_reddit_comment(item)
     if item.source_type == HOUSE_PTR_SOURCE_TYPE:
         return _map_house_ptr_filing(item)
+    if item.source_type == SEC_13F_SOURCE_TYPE:
+        return _map_sec_13f_dataset(item)
     raise UnsupportedSourceTypeError(f"Unsupported raw item source type: {item.source_type}")
 
 
@@ -205,6 +208,103 @@ def _map_house_ptr_filing(item: RawItem) -> MappedRawItem:
         },
         media_rows=trade_rows,
     )
+
+
+def _map_sec_13f_dataset(item: RawItem) -> MappedRawItem:
+    rows_by_table = item.metadata.get("rows_by_table") if isinstance(item.metadata.get("rows_by_table"), dict) else {}
+    dataset_id = item.metadata.get("dataset_id") or item.source_id
+    dataset_row = {
+        "dataset_id": dataset_id,
+        "label": item.metadata.get("label") or item.text,
+        "download_url": item.metadata.get("download_url") or item.url,
+        "sha256": item.metadata.get("sha256"),
+        "byte_size": item.metadata.get("byte_size"),
+        "row_counts_json": raw_json(item.metadata.get("row_counts", {})),
+        "downloaded_at": item.collected_at.isoformat(),
+    }
+    child_rows: list[dict[str, Any]] = []
+    for table_name, rows in rows_by_table.items():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            child_rows.append(_sec_13f_child_row(str(table_name), dataset_id, row))
+    return MappedRawItem(
+        table="raw_sec_13f_datasets",
+        key=(dataset_id,),
+        row=dataset_row,
+        media_rows=child_rows,
+    )
+
+
+def _sec_13f_child_row(table_name: str, dataset_id: str, row: dict[str, Any]) -> dict[str, Any]:
+    accession = _row_value(row, "ACCESSION_NUMBER")
+    filing_date = _row_value(row, "FILING_DATE")
+    period = _row_value(row, "PERIODOFREPORT")
+    manager_name = _row_value(row, "FILINGMANAGER_NAME")
+    cik = _row_value(row, "CIK")
+    common = {
+        "table_name": table_name,
+        "dataset_id": dataset_id,
+        "accession_number": accession,
+        "raw_json": raw_json(row),
+    }
+    if table_name == "submissions":
+        return {
+            **common,
+            "filing_date": filing_date,
+            "filing_date_utc": normalize_sec_date(filing_date),
+            "submission_type": _row_value(row, "SUBMISSIONTYPE"),
+            "cik": cik,
+            "period_of_report": period,
+            "period_of_report_utc": normalize_sec_date(period),
+        }
+    if table_name == "coverpages":
+        return {
+            **common,
+            "manager_name": manager_name,
+            "manager_name_normalized": normalize_sec_name(manager_name),
+            "report_type": _row_value(row, "REPORTTYPE"),
+            "form_13f_file_number": _row_value(row, "FORM13FFILENUMBER"),
+            "raw_json": raw_json(row),
+        }
+    if table_name == "info_tables":
+        value = _int_or_none(_row_value(row, "VALUE"))
+        shares = _int_or_none(_row_value(row, "SSHPRNAMT"))
+        return {
+            **common,
+            "info_table_sk": _row_value(row, "INFOTABLE_SK"),
+            "issuer": _row_value(row, "NAMEOFISSUER"),
+            "issuer_normalized": normalize_sec_name(_row_value(row, "NAMEOFISSUER")),
+            "title_of_class": _row_value(row, "TITLEOFCLASS"),
+            "cusip": _row_value(row, "CUSIP").upper() or None,
+            "figi": _row_value(row, "FIGI").upper() or None,
+            "value": value,
+            "ssh_prn_amt": shares,
+            "ssh_prn_type": _row_value(row, "SSHPRNAMTTYPE"),
+            "put_call": _row_value(row, "PUTCALL").upper() or None,
+            "investment_discretion": _row_value(row, "INVESTMENTDISCRETION"),
+            "other_manager": _row_value(row, "OTHERMANAGER"),
+            "voting_auth_sole": _int_or_none(_row_value(row, "VOTING_AUTH_SOLE")),
+            "voting_auth_shared": _int_or_none(_row_value(row, "VOTING_AUTH_SHARED")),
+            "voting_auth_none": _int_or_none(_row_value(row, "VOTING_AUTH_NONE")),
+        }
+    return common
+
+
+def _row_value(row: dict[str, Any], key: str) -> str:
+    return str(row.get(key) or "").strip()
+
+
+def _int_or_none(value: Any) -> int | None:
+    text = str(value or "").strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
 
 
 def _normalized_timestamp(value: Any) -> str | None:

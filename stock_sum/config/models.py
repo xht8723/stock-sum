@@ -178,12 +178,23 @@ class HousePtrSourceConfig(BaseModel):
     pdf_url_template: str = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
 
 
+class Sec13FSourceConfig(BaseModel):
+    """Configured SEC Form 13F dataset source."""
+
+    enabled: bool = True
+    page_url: str = "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
+    refresh_ttl_seconds: int = Field(default=21600, ge=0)
+    download_timeout_seconds: int = Field(default=120, ge=1)
+    user_agent: str = "stock-sum/0.1 contact@example.com"
+
+
 class SourcesConfig(BaseModel):
     """Long-list source configuration."""
 
     x_users: list[XUserSourceConfig] = Field(default_factory=list)
     subreddits: list[RedditSubredditSourceConfig] = Field(default_factory=list)
     house_ptr: HousePtrSourceConfig = Field(default_factory=HousePtrSourceConfig)
+    sec_13f: Sec13FSourceConfig = Field(default_factory=Sec13FSourceConfig)
 
 
 class EmailDeliveryConfig(BaseModel):
