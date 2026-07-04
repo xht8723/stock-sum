@@ -17,11 +17,6 @@ def test_example_config_is_valid() -> None:
     assert config.server.max_in_memory_jobs == 200
     assert config.server.report_cache_ttl_seconds == 21600
     assert config.server.coalesce_inflight_reports is True
-    assert config.playwright.channel == "chromium"
-    assert config.playwright.browser == "chromium"
-    assert config.playwright.headless is True
-    assert config.playwright.x.base_url == "https://x.com"
-    assert config.playwright.x.max_scrolls == 12
     assert config.media.root_dir == "data/media"
     assert config.media.download_enabled is False
     assert config.retention.enabled is True
@@ -63,4 +58,3 @@ def test_example_config_is_valid() -> None:
     assert config.sources.sec_13f.refresh_ttl_seconds == 21600
     assert config.sources.sec_13f.page_url == "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"
     assert config.collectors == {}
-    assert config.delivery.email["primary"].password_env == "SMTP_PASSWORD"

@@ -1,281 +1,61 @@
-# Deployment Guide
+# Deployment
 
-This guide explains how to deploy `stock-sum` on a regular machine and with
-Docker. The current project state includes the HTTP daemon, configuration
-validation, models.dev cache, shared SQLite run/index storage, Xpoz X/Reddit
-API collectors, official House PTR disclosure collection, and generic
-Playwright infrastructure.
+This guide deploys `stock-sum` as a local or VM-hosted HTTP service. The service
+collects data through Xpoz, official disclosure sources, SQLite, DeepSeek, and
+HTTP job artifacts. It does not run scheduled outbound delivery; automation
+clients such as Redbot request reports through the API.
 
-## Deployment model
+## Bare Machine
 
-A deployment needs:
-
-- Python 3.12 runtime or the provided Docker image.
-- A TOML config file.
-- Environment variables for secrets.
-- Writable `data/` storage for SQLite files, models.dev cache files, and future
-  browser profiles.
-- Chromium installed through Playwright for future browser-based collectors.
-
-The default daemon command is:
+Create a service account and install Python 3.12:
 
 ```bash
-stock-sum daemon --config stock_sum/config/example.toml --host 0.0.0.0 --port 8000
+sudo useradd --system --create-home --shell /usr/sbin/nologin stocksum
+sudo mkdir -p /opt/stock-sum/app
+sudo chown -R stocksum:stocksum /opt/stock-sum
 ```
 
-For real deployments, create a separate config file instead of editing the
-bundled example in place.
-
-## 1. Bare-machine deployment
-
-Use this path for a VM, workstation, or small server running Windows, Linux, or
-macOS.
-
-### 1.1 Clone and prepare the project
+Install the app:
 
 ```bash
-git clone <repo-url> stock-sum
-cd stock-sum
-python -m venv .venv
+cd /opt/stock-sum/app
+python3.12 -m venv .venv
+. .venv/bin/activate
+pip install .
 ```
 
-Activate the environment.
-
-Windows PowerShell:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-Linux or macOS:
+Create config and secrets:
 
 ```bash
-source .venv/bin/activate
-```
-
-Install the package.
-
-```bash
-python -m pip install --upgrade pip
-pip install -e .
-```
-
-For a machine that will also run tests:
-
-```bash
-pip install -e ".[dev]"
-```
-
-### 1.2 Install Playwright browsers
-
-Windows or macOS:
-
-```bash
-python -m playwright install chromium
-```
-
-Linux:
-
-```bash
-python -m playwright install --with-deps chromium
-```
-
-If the Linux host does not allow the dependency installer to use `sudo`, install
-the OS packages manually according to Playwright's error output, then rerun:
-
-```bash
-python -m playwright install chromium
-```
-
-### 1.3 Create configuration
-
-Create a local config file:
-
-```bash
-stock-sum config init config.toml
-```
-
-Edit `config.toml` for the deployment. The most common values to change are:
-
-```toml
-[service]
-timezone = "America/Vancouver"
-collector_concurrency = 1
-
-[server]
-max_in_memory_jobs = 200
-
-[storage]
-sqlite_path = "data/stock_sum.sqlite3"
-
-[playwright]
-browser = "chromium"
-channel = ""
-headless = true
-timeout_seconds = 30
-
-[providers.xpoz]
-api_key_env = "XPOZ_API_KEY"
-server_url = "https://mcp.xpoz.ai/mcp"
-timeout_seconds = 60
-max_concurrent_requests = 1
-
-[llm]
-provider = "deepseek"
-model = "deepseek-v4-flash"
-api_key_env = "DEEPSEEK_API_KEY"
-base_url = "https://api.deepseek.com"
-analysis_max_concurrency = 1
-
-[retention]
-max_total_bytes = 268435456
-
-[report_input]
-max_x_posts_per_source = 100
-max_reddit_posts_per_source = 100
-max_reddit_comments_per_post = 10
-```
-
-Validate the file:
-
-```bash
-stock-sum config validate config.toml
-```
-
-### 1.4 Configure secrets
-
-Create an environment file from the example:
-
-Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Linux or macOS:
-
-```bash
-cp .env.example .env
-```
-
-Fill in only the values needed by enabled integrations:
-
-```env
-XPOZ_API_KEY=
-DEEPSEEK_API_KEY=
-SMTP_USERNAME=
-SMTP_PASSWORD=
-TWILIO_ACCOUNT_SID=
-TWILIO_AUTH_TOKEN=
-TWILIO_WHATSAPP_FROM=
-```
-
-For local setup, prefer the onboarding command:
-
-```bash
-stock-sum setup init --config config.toml --env-file .env
+stock-sum setup init --config config.toml --env-file .env --overwrite
+stock-sum secrets set XPOZ_API_KEY --env-file .env
+stock-sum secrets set DEEPSEEK_API_KEY --env-file .env
 stock-sum setup check --config config.toml --env-file .env
 ```
 
-For systemd, keep the same default env file used by `setup init`:
-`/opt/stock-sum/app/.env`. Point both systemd and `stock-sum daemon` at that
-same file. The daemon remains non-interactive and fails fast if required secrets
-are missing.
-
-Windows PowerShell:
-
-```powershell
-$env:XPOZ_API_KEY = "..."
-$env:DEEPSEEK_API_KEY = "..."
-$env:SMTP_USERNAME = "..."
-$env:SMTP_PASSWORD = "..."
-stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
-```
-
-Linux or macOS:
+Run locally:
 
 ```bash
-set -a
-. ./.env
-set +a
-stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
+stock-sum daemon --config config.toml --env-file .env --host 127.0.0.1 --port 8000
 ```
 
-### 1.5 Initialize cache
+Expose to trusted clients by binding to `0.0.0.0` only behind an appropriate
+firewall or reverse proxy.
 
-Refresh the models.dev cache:
+## systemd
 
-```bash
-stock-sum config sync --config config.toml
-```
-
-The bundled default profile includes enabled starter sources for
-`x.aleabitoreddit`, `reddit.wallstreetbets`, and `house.ptr`. X and Reddit
-sources use Xpoz. House PTR uses official public House Clerk disclosure files.
-Source-list entries resolve to collector IDs such as `x.aleabitoreddit`,
-`reddit.wallstreetbets`, and `house.ptr`. By default, stock-sum fetches up to
-100 provider rows for social sources and keeps posts from the last 24 hours.
-Use the config CLI to add, delete, or replace sources.
-
-```bash
-stock-sum config x-user add aleabitoreddit --config config.toml --profile default --limit 100 --lookback-hours 24
-stock-sum config subreddit add wallstreetbets --config config.toml --profile default --limit 100 --lookback-hours 24
-stock-sum config house-ptr set --config config.toml --profile default --enabled
-stock-sum collect --collector x.aleabitoreddit --config config.toml
-stock-sum collect --collector reddit.wallstreetbets --config config.toml
-stock-sum collect --collector house.ptr --config config.toml
-stock-sum collect --profile default --config config.toml
-stock-sum run-report --profile default --config config.toml
-```
-
-### 1.6 Run the daemon
-
-For local-only access:
-
-```bash
-stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
-```
-
-For access from other machines or a reverse proxy:
-
-```bash
-stock-sum daemon --config config.toml --host 0.0.0.0 --port 8000
-```
-
-Verify:
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/config/effective
-```
-
-### 1.7 Linux systemd service
-
-Create a dedicated directory layout:
-
-```bash
-sudo mkdir -p /opt/stock-sum
-sudo chown -R "$USER":"$USER" /opt/stock-sum
-cp -R . /opt/stock-sum/app
-cd /opt/stock-sum/app
-python -m venv .venv
-. .venv/bin/activate
-pip install --upgrade pip
-pip install .
-python -m playwright install --with-deps chromium
-```
-
-Place `config.toml` and `.env` in `/opt/stock-sum/app`, then create
-`/etc/systemd/system/stock-sum.service`:
+Example unit:
 
 ```ini
 [Unit]
-Description=stock-sum trading report service
+Description=stock-sum HTTP API
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+User=stocksum
+Group=stocksum
 WorkingDirectory=/opt/stock-sum/app
 EnvironmentFile=/opt/stock-sum/app/.env
 ExecStart=/opt/stock-sum/app/.venv/bin/stock-sum daemon --config /opt/stock-sum/app/config.toml --env-file /opt/stock-sum/app/.env --host 0.0.0.0 --port 8000
@@ -286,7 +66,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Start and enable it:
+Enable and inspect:
 
 ```bash
 sudo systemctl daemon-reload
@@ -295,306 +75,96 @@ sudo systemctl status stock-sum
 journalctl -u stock-sum -f
 ```
 
-### 1.8 Windows long-running process
+## Docker
 
-For development, run the daemon in an activated PowerShell session:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-$env:XPOZ_API_KEY = "..."
-$env:DEEPSEEK_API_KEY = "..."
-stock-sum daemon --config config.toml --host 127.0.0.1 --port 8000
-```
-
-For an unattended Windows machine, use Task Scheduler:
-
-1. Create a task that runs whether the user is logged on or not.
-2. Set the working directory to the project folder.
-3. Start this program:
-
-```text
-powershell.exe
-```
-
-4. Use arguments like:
-
-```text
--NoProfile -ExecutionPolicy Bypass -Command "$env:XPOZ_API_KEY='...'; $env:DEEPSEEK_API_KEY='...'; & 'E:\projects\stock-sum\.venv\Scripts\stock-sum.exe' daemon --config 'E:\projects\stock-sum\config.toml' --host 0.0.0.0 --port 8000"
-```
-
-If you need many secrets, prefer setting machine/user environment variables
-outside the task instead of embedding them in the task arguments.
-
-## 2. Docker deployment
-
-Use Docker when you want a repeatable runtime image with Python dependencies and
-Playwright Chromium installed during image build.
-
-### 2.1 Docker image behavior
-
-The provided `Dockerfile`:
-
-- Starts from `python:3.12-slim`.
-- Installs the local package.
-- Runs `python -m playwright install --with-deps chromium`.
-- Exposes port `8000`.
-- Declares `/app/data` as the persistent data volume.
-- Starts `stock-sum daemon --host 0.0.0.0 --port 8000`.
-
-The provided `docker-compose.yml`:
-
-- Builds the local image.
-- Publishes host port `8000` to container port `8000`.
-- Mounts `./data:/app/data`.
-- Loads `.env` if present.
-
-### 2.2 Docker Compose quick start
-
-Create `.env`:
-
-```bash
-cp .env.example .env
-```
-
-On Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Build and start:
+Build and run:
 
 ```bash
 docker compose up --build
 ```
 
-Verify from the host:
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/config/effective
-```
-
-Stop:
-
-```bash
-docker compose down
-```
-
-Keep persistent data by leaving `./data` in place. Remove it only if you want to
-delete local cache and SQLite files.
-
-### 2.3 Use a custom config with Compose
-
-Create `config.toml` on the host, then override the service command and mount
-the file:
+The compose file maps `./data` to `/app/data` and optionally reads `.env`.
+For production, mount a config file and pass it through the command:
 
 ```yaml
 services:
   stock-sum:
     build: .
-    command:
-      [
-        "stock-sum",
-        "daemon",
-        "--config",
-        "/app/config.toml",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8000",
-      ]
+    command: ["stock-sum", "daemon", "--config", "/app/config.toml", "--env-file", "/app/.env", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
       - ./config.toml:/app/config.toml:ro
+      - ./data:/app/data
     env_file:
-      - path: .env
-        required: false
+      - .env
 ```
 
-Validate the config inside the container:
+## Redbot
+
+Install the cog path on the same VM or a trusted machine that can reach the API:
+
+```text
+[p]addpath /opt/stock-sum/app/redbot_cogs
+[p]load stocksum_report
+```
+
+Set the Redbot process environment when the API is not local:
 
 ```bash
-docker compose run --rm stock-sum stock-sum config validate /app/config.toml
+STOCK_SUM_BASE_URL=http://127.0.0.1:8000
 ```
 
-Refresh the models.dev cache:
+The cog uses:
+
+- `POST /v1/social-reports/{profile}/jobs/{mode}`
+- `POST /v1/trading-reports/jobs/{mode}`
+- `POST /v1/13f-reports/jobs/{mode}`
+- `GET /v1/jobs/{job_id}`
+- `GET /v1/jobs/{job_id}/artifact`
+
+## Operations
+
+Health and config:
 
 ```bash
-docker compose run --rm stock-sum stock-sum config sync --config /app/config.toml
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/v1/config/effective
 ```
 
-### 2.4 Manual docker commands
-
-Build:
+Run a social report:
 
 ```bash
-docker build -t stock-sum:local .
+curl -X POST http://127.0.0.1:8000/v1/social-reports/default/jobs/discord \
+  -H 'Content-Type: application/json' \
+  -d '{"detail":"minimum"}'
 ```
 
-Run with bundled example config:
+Inspect runtime data:
 
 ```bash
-docker run --rm \
-  --name stock-sum \
-  --env-file .env \
-  -p 8000:8000 \
-  -v "$PWD/data:/app/data" \
-  stock-sum:local
+stock-sum retention status --config config.toml
+stock-sum retention prune --dry-run --config config.toml
 ```
 
-Run with a custom config:
+Managed cleanup covers HTTP job artifacts and downloaded media. SQLite source
+history and provider response records are preserved.
+
+## Troubleshooting
+
+Missing secrets:
 
 ```bash
-docker run --rm \
-  --name stock-sum \
-  --env-file .env \
-  -p 8000:8000 \
-  -v "$PWD/data:/app/data" \
-  -v "$PWD/config.toml:/app/config.toml:ro" \
-  stock-sum:local \
-  stock-sum daemon --config /app/config.toml --host 0.0.0.0 --port 8000
+stock-sum setup check --config config.toml --env-file .env
 ```
 
-PowerShell version:
+Provider failures:
 
-```powershell
-docker run --rm `
-  --name stock-sum `
-  --env-file .env `
-  -p 8000:8000 `
-  -v "${PWD}\data:/app/data" `
-  -v "${PWD}\config.toml:/app/config.toml:ro" `
-  stock-sum:local `
-  stock-sum daemon --config /app/config.toml --host 0.0.0.0 --port 8000
-```
+- Check `XPOZ_API_KEY` and `DEEPSEEK_API_KEY`.
+- Confirm outbound HTTPS access from the service host.
+- Inspect job status with `GET /v1/jobs/{job_id}` and service logs.
 
-### 2.5 Docker operations
+Disk pressure:
 
-View logs:
-
-```bash
-docker compose logs -f stock-sum
-```
-
-Restart:
-
-```bash
-docker compose restart stock-sum
-```
-
-Rebuild after code changes:
-
-```bash
-docker compose build --no-cache
-docker compose up -d
-```
-
-Run one-off CLI commands:
-
-```bash
-docker compose run --rm stock-sum stock-sum --help
-docker compose run --rm stock-sum stock-sum config validate stock_sum/config/example.toml
-```
-
-The production image does not install the `dev` optional dependencies or copy
-the test suite. Run tests on the host, or build a separate development image
-that installs `.[dev]` and includes `tests/`.
-
-## 3. Reverse proxy notes
-
-When exposing the daemon beyond localhost, put it behind a reverse proxy or
-private network boundary. The current API has no authentication middleware, but
-you can block exact client IPs with `[server].blacklisted_ips`.
-Successful report jobs are reused for `[server].report_cache_ttl_seconds`
-seconds, defaulting to `21600`; set it to `0` when every request should force a
-fresh collection and LLM run.
-Completed HTTP job metadata is also bounded in memory by
-`[server].max_in_memory_jobs`, while retained status files remain reloadable from
-disk. Managed runtime data is capped by `[retention].max_total_bytes`, defaulting
-to `268435456` bytes. Cleanup runs after report/collection jobs and prunes
-oldest HTTP artifacts and downloaded media. SQLite source history and provider
-response archives are intentionally excluded from this cap. Use `stock-sum
-retention status` and `stock-sum retention prune --dry-run` to inspect usage
-before applying manual cleanup.
-
-Minimal Nginx location:
-
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:8000;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-Keep `/config/effective` private because it reveals deployment structure and the
-names of secret environment variables.
-
-## 4. Upgrade checklist
-
-For bare-machine deployments:
-
-```bash
-git pull
-. .venv/bin/activate
-pip install -e .
-python -m playwright install chromium
-stock-sum config validate config.toml
-stock-sum config sync --config config.toml
-```
-
-Then restart the process or service.
-
-For Docker deployments:
-
-```bash
-git pull
-docker compose build
-docker compose up -d
-docker compose logs -f stock-sum
-```
-
-## 5. Troubleshooting
-
-Config validation fails:
-
-- Run `stock-sum config validate config.toml`.
-- Check TOML quoting. String values passed through `config set` should include
-  quotes, for example `"'America/Vancouver'"` in PowerShell.
-- Make sure required sections such as `[llm]` exist.
-
-Playwright cannot launch Chromium:
-
-- Run `python -m playwright install chromium`.
-- On Linux, run `python -m playwright install --with-deps chromium`.
-- In Docker, rebuild the image so the Dockerfile browser install step reruns.
-
-Collection fails with an unsupported collector kind:
-
-- Built-in collector kinds are `x_user_timeline` for Xpoz X collection and
-  `reddit_subreddit` for Xpoz Reddit collection.
-- For any other future kind, add a source-specific collector implementation and
-  register it in the collector factory.
-- Add the matching source-specific storage table and mapper before persisting
-  that source type.
-
-Collection fails with a missing Xpoz API key:
-
-- Set `XPOZ_API_KEY` in the process environment.
-- Keep the TOML value as `api_key_env = "XPOZ_API_KEY"`; do not put
-  the real key in config.
-
-The daemon starts but LLM summaries or deliveries do nothing:
-
-- This is expected in the current scaffold. Collection orchestration exists, but
-  summarization, rendering, and delivery are not implemented yet.
-
-Port 8000 is already in use:
-
-- Choose another port, for example `--port 8010`.
-- With Compose, change the host side of the mapping, for example
-  `"8010:8000"`.
+- Run `stock-sum retention status`.
+- Increase `[retention].max_total_bytes` or run `stock-sum retention prune --apply`.

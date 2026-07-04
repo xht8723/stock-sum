@@ -1259,17 +1259,6 @@ class SQLiteStorageRepository:
             await _upsert_downloaded_media(db, media)
             await db.commit()
 
-    async def save_summaries(self, summaries: list[Any]) -> None:
-        """Persist generated summaries."""
-
-        raise NotImplementedError("Summary storage is not implemented yet.")
-
-    async def save_report(self, report: Any) -> None:
-        """Persist a rendered report."""
-
-        raise NotImplementedError("Report storage is not implemented yet.")
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 

@@ -177,7 +177,6 @@ def _config(tmp_path) -> AppConfig:
         llm=LLMConfig(provider="deepseek", model="deepseek-v4-flash", api_key_env="DEEPSEEK_API_KEY"),
         reports={
             "default": ReportProfileConfig(
-                schedule="0 8 * * *",
                 collector_ids=["x.alpha", "reddit.bets"],
             )
         },

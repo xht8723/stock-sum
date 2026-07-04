@@ -44,7 +44,7 @@ def test_report_job_lifecycle_and_artifact_download(tmp_path) -> None:
     client = TestClient(create_app(config, job_manager=manager))
 
     create_response = client.post(
-        "/v1/reports/default/jobs",
+        "/v1/social-reports/default/jobs",
         json={"mode": "html", "detail": "medium"},
     )
 
@@ -69,7 +69,7 @@ def test_report_job_format_endpoint_sets_mode(tmp_path) -> None:
     client = TestClient(create_app(config, job_manager=manager))
 
     create_response = client.post(
-        "/v1/reports/default/jobs/discord",
+        "/v1/social-reports/default/jobs/discord",
         json={},
     )
 
@@ -83,7 +83,7 @@ def test_report_job_format_endpoint_allows_empty_body(tmp_path) -> None:
     manager = FakeJobManager(tmp_path)
     client = TestClient(create_app(config, job_manager=manager))
 
-    create_response = client.post("/v1/reports/default/jobs/text")
+    create_response = client.post("/v1/social-reports/default/jobs/text")
 
     assert create_response.status_code == 202
     assert manager.last_report_mode == "text"
@@ -94,11 +94,22 @@ def test_missing_profile_returns_404(tmp_path) -> None:
     client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
 
     response = client.post(
-        "/v1/reports/missing/jobs",
+        "/v1/social-reports/missing/jobs",
         json={"mode": "html"},
     )
 
     assert response.status_code == 404
+
+
+def test_removed_report_compatibility_routes_return_404(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
+    top_level_route = "/" + "reports" + "/default/run"
+    v1_base_route = "/v1/" + "reports" + "/default/jobs"
+
+    assert client.post(top_level_route).status_code == 404
+    assert client.post(v1_base_route).status_code == 404
+    assert client.post(f"{v1_base_route}/discord").status_code == 404
 
 
 def test_trading_report_accepts_large_optional_limit(tmp_path) -> None:

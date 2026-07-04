@@ -11,11 +11,7 @@ MODULES = [
     "stock_sum.core.pipeline",
     "stock_sum.collectors.base",
     "stock_sum.llm.catalog",
-    "stock_sum.reports.renderer",
     "stock_sum.reports.presentation",
-    "stock_sum.delivery.email",
-    "stock_sum.scheduler.service",
-    "stock_sum.storage.database",
     "stock_sum.api.app",
     "stock_sum.api.jobs",
 ]

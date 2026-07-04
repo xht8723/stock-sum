@@ -70,10 +70,7 @@ def add_profile(
     path: str | Path,
     name: str,
     *,
-    timezone: str,
-    schedule: str,
     collector_ids: list[str],
-    delivery_ids: list[str],
     overwrite: bool = False,
 ) -> None:
     """Add a report profile to a TOML config."""
@@ -84,10 +81,7 @@ def add_profile(
         raise KeyError(f"Profile already exists: {name}")
 
     profile = tomlkit.table()
-    profile["timezone"] = timezone
-    profile["schedule"] = schedule
     profile["collector_ids"] = collector_ids
-    profile["delivery_ids"] = delivery_ids
     reports[name] = profile
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
 
@@ -96,10 +90,7 @@ def edit_profile(
     path: str | Path,
     name: str,
     *,
-    timezone: str | None = None,
-    schedule: str | None = None,
     collector_ids: list[str] | None = None,
-    delivery_ids: list[str] | None = None,
 ) -> None:
     """Edit fields on an existing report profile."""
 
@@ -109,14 +100,8 @@ def edit_profile(
     except KeyError as exc:
         raise KeyError(f"Profile does not exist: {name}") from exc
 
-    if timezone is not None:
-        profile["timezone"] = timezone
-    if schedule is not None:
-        profile["schedule"] = schedule
     if collector_ids is not None:
         profile["collector_ids"] = collector_ids
-    if delivery_ids is not None:
-        profile["delivery_ids"] = delivery_ids
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
 
 

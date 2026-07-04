@@ -115,19 +115,12 @@ class FakeRepository:
     async def save_provider_api_responses(self, **kwargs):
         self.saved_provider_responses.append(kwargs)
 
-    async def save_summaries(self, summaries):
-        raise NotImplementedError
-
-    async def save_report(self, report):
-        raise NotImplementedError
-
-
 def _config(tmp_path) -> AppConfig:
     return AppConfig(
         storage=StorageConfig(sqlite_path=str(tmp_path / "test.sqlite3")),
         llm=LLMConfig(provider="deepseek", model="deepseek-v4-flash", api_key_env="DEEPSEEK_API_KEY"),
         collectors={"api": {"test": CollectorConfig(kind="test_source")}},
-        reports={"default": ReportProfileConfig(schedule="0 8 * * *", collector_ids=["api.test"])},
+        reports={"default": ReportProfileConfig(collector_ids=["api.test"])},
     )
 
 
@@ -141,7 +134,7 @@ def _multi_config(tmp_path) -> AppConfig:
                 "bad": CollectorConfig(kind="bad_source"),
             }
         },
-        reports={"default": ReportProfileConfig(schedule="0 8 * * *", collector_ids=["api.bad", "api.good"])},
+        reports={"default": ReportProfileConfig(collector_ids=["api.bad", "api.good"])},
     )
 
 
@@ -157,7 +150,7 @@ def _slow_config(tmp_path) -> AppConfig:
                 "three": CollectorConfig(kind="test_source"),
             }
         },
-        reports={"default": ReportProfileConfig(schedule="0 8 * * *", collector_ids=["api.one", "api.two", "api.three"])},
+        reports={"default": ReportProfileConfig(collector_ids=["api.one", "api.two", "api.three"])},
     )
 
 

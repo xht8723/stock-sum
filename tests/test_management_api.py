@@ -15,7 +15,7 @@ def test_profile_and_source_management_hot_reloads_config(tmp_path) -> None:
 
     create_profile = client.post(
         "/v1/profiles",
-        json={"name": "tech", "collector_ids": [], "delivery_ids": [], "overwrite": False},
+        json={"name": "tech", "collector_ids": [], "overwrite": False},
     )
     assert create_profile.status_code == 200
 

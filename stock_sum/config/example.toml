@@ -40,19 +40,6 @@ catalog_url = "https://models.dev/catalog.json"
 cache_path = "data/cache/models_dev_api.json"
 refresh_interval_hours = 24
 
-[playwright]
-browser = "chromium"
-channel = "chromium"
-headless = true
-timeout_seconds = 30
-
-[playwright.x]
-base_url = "https://x.com"
-max_scrolls = 12
-selector_timeout_seconds = 10
-page_settle_ms = 1500
-scroll_pause_ms = 1200
-
 [providers.xpoz]
 api_key_env = "XPOZ_API_KEY"
 server_url = "https://mcp.xpoz.ai/mcp"
@@ -73,10 +60,7 @@ analysis_max_chars_per_chunk = 12000
 analysis_max_concurrency = 1
 
 [reports.default]
-timezone = "America/Vancouver"
-schedule = "0 8 * * 1-5"
 collector_ids = ["x.aleabitoreddit", "reddit.wallstreetbets", "house.ptr"]
-delivery_ids = ["email.primary"]
 
 [[sources.x_users]]
 enabled = true
@@ -110,22 +94,3 @@ page_url = "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-set
 refresh_ttl_seconds = 21600
 download_timeout_seconds = 120
 user_agent = "stock-sum/0.1 contact@example.com"
-
-[delivery.email.primary]
-kind = "email"
-enabled = false
-smtp_host = "smtp.example.com"
-smtp_port = 587
-username_env = "SMTP_USERNAME"
-password_env = "SMTP_PASSWORD"
-from_address = "reports@example.com"
-to_addresses = ["user@example.com"]
-
-[delivery.whatsapp.primary]
-kind = "whatsapp"
-enabled = false
-provider = "twilio"
-account_sid_env = "TWILIO_ACCOUNT_SID"
-auth_token_env = "TWILIO_AUTH_TOKEN"
-from_number_env = "TWILIO_WHATSAPP_FROM"
-to_numbers = ["whatsapp:+10000000000"]

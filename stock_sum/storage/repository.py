@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult, Report, Summary
+from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.models import StoredCollectionRun, StoredDownloadedMedia, StoredHousePtrTradeRow, StoredRedditPost, StoredSec13FHolding, StoredXPost
 
 
@@ -148,9 +148,3 @@ class StorageRepository(Protocol):
 
     async def save_downloaded_media(self, media: StoredDownloadedMedia) -> None:
         """Persist downloaded media metadata."""
-
-    async def save_summaries(self, summaries: list[Summary]) -> None:
-        """Persist generated summaries."""
-
-    async def save_report(self, report: Report) -> None:
-        """Persist a rendered report."""

@@ -9,9 +9,5 @@ class ConfigurationError(StockSumError):
     """Raised when configuration is invalid or incomplete."""
 
 
-class PipelineNotImplementedError(StockSumError):
-    """Raised by scaffolded pipeline operations."""
-
-
 class UnsupportedSourceTypeError(StockSumError):
     """Raised when storage has no source-specific schema for a raw item."""

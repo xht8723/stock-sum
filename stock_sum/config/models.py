@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 
@@ -70,26 +68,6 @@ class ModelsDevConfig(BaseModel):
     refresh_interval_hours: int = Field(default=24, ge=1)
 
 
-class PlaywrightXConfig(BaseModel):
-    """X timeline scraping settings for public Playwright access."""
-
-    base_url: str = "https://x.com"
-    max_scrolls: int = Field(default=12, ge=0)
-    selector_timeout_seconds: int = Field(default=10, ge=1)
-    page_settle_ms: int = Field(default=1500, ge=0)
-    scroll_pause_ms: int = Field(default=1200, ge=0)
-
-
-class PlaywrightConfig(BaseModel):
-    """Browser automation defaults for Playwright collectors."""
-
-    browser: Literal["chromium", "firefox", "webkit"] = "chromium"
-    channel: Literal["", "chrome", "msedge", "chromium"] = "chromium"
-    headless: bool = True
-    timeout_seconds: int = Field(default=30, ge=1)
-    x: PlaywrightXConfig = Field(default_factory=PlaywrightXConfig)
-
-
 class XpozProviderConfig(BaseModel):
     """Xpoz MCP-over-HTTP provider settings."""
 
@@ -122,12 +100,9 @@ class LLMConfig(BaseModel):
 
 
 class ReportProfileConfig(BaseModel):
-    """A scheduled or manually requested report profile."""
+    """A manually requested report profile."""
 
-    timezone: str = "UTC"
-    schedule: str
     collector_ids: list[str] = Field(default_factory=list)
-    delivery_ids: list[str] = Field(default_factory=list)
 
 
 class CollectorConfig(BaseModel):
@@ -206,38 +181,6 @@ class SourcesConfig(BaseModel):
     sec_13f: Sec13FSourceConfig = Field(default_factory=Sec13FSourceConfig)
 
 
-class EmailDeliveryConfig(BaseModel):
-    """Email delivery configuration with secret env-var names only."""
-
-    kind: Literal["email"] = "email"
-    enabled: bool = False
-    smtp_host: str
-    smtp_port: int = 587
-    username_env: str
-    password_env: str
-    from_address: str
-    to_addresses: list[str] = Field(default_factory=list)
-
-
-class WhatsAppDeliveryConfig(BaseModel):
-    """WhatsApp delivery configuration with secret env-var names only."""
-
-    kind: Literal["whatsapp"] = "whatsapp"
-    enabled: bool = False
-    provider: str = "twilio"
-    account_sid_env: str
-    auth_token_env: str
-    from_number_env: str
-    to_numbers: list[str] = Field(default_factory=list)
-
-
-class DeliveryConfig(BaseModel):
-    """Delivery channel groups."""
-
-    email: dict[str, EmailDeliveryConfig] = Field(default_factory=dict)
-    whatsapp: dict[str, WhatsAppDeliveryConfig] = Field(default_factory=dict)
-
-
 class AppConfig(BaseModel):
     """Complete application configuration."""
 
@@ -248,10 +191,8 @@ class AppConfig(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     report_input: ReportInputConfig = Field(default_factory=ReportInputConfig)
     models_dev: ModelsDevConfig = Field(default_factory=ModelsDevConfig)
-    playwright: PlaywrightConfig = Field(default_factory=PlaywrightConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     llm: LLMConfig
     reports: dict[str, ReportProfileConfig] = Field(default_factory=dict)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     collectors: dict[str, dict[str, CollectorConfig]] = Field(default_factory=dict)
-    delivery: DeliveryConfig = Field(default_factory=DeliveryConfig)

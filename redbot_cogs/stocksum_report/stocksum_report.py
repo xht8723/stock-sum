@@ -803,17 +803,12 @@ class StockSumReport(commands.Cog):
         interaction,
         name: str,
         collectors: str = "",
-        schedule: str = "0 8 * * *",
-        timezone: str = "UTC",
     ) -> None:
         if not await self._require_owner(interaction):
             return
         payload = {
             "name": name,
             "collector_ids": _csv(collectors),
-            "delivery_ids": [],
-            "schedule": schedule,
-            "timezone": timezone,
         }
         await self._send_api_json(interaction, "/v1/profiles", method="post", payload=payload, title=f"Added profile {name}", private=True)
 

@@ -337,7 +337,7 @@ def daemon(
     host: str | None = typer.Option(None, "--host"),
     port: int | None = typer.Option(None, "--port"),
 ) -> None:
-    """Run the HTTP service and scheduler host."""
+    """Run the HTTP service."""
 
     _load_env_file(env_file, override=True)
     settings = load_config(config)
@@ -890,10 +890,7 @@ def profile_show(
 def profile_add(
     name: str = typer.Argument(..., help="Profile name."),
     config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
-    timezone: str = typer.Option("UTC", "--timezone", help="Profile timezone."),
-    schedule: str = typer.Option("0 8 * * 1-5", "--schedule", help="Cron schedule."),
     collectors: str = typer.Option("", "--collectors", help="Comma-separated collector ids."),
-    deliveries: str = typer.Option("", "--deliveries", help="Comma-separated delivery ids."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing profile."),
 ) -> None:
     """Add a report profile."""
@@ -902,10 +899,7 @@ def profile_add(
         add_profile(
             config,
             name,
-            timezone=timezone,
-            schedule=schedule,
             collector_ids=_split_csv(collectors) or [],
-            delivery_ids=_split_csv(deliveries) or [],
             overwrite=overwrite,
         )
     except KeyError as exc:
@@ -919,10 +913,7 @@ def profile_add(
 def profile_edit(
     name: str = typer.Argument(..., help="Profile name."),
     config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
-    timezone: str | None = typer.Option(None, "--timezone", help="Profile timezone."),
-    schedule: str | None = typer.Option(None, "--schedule", help="Cron schedule."),
     collectors: str | None = typer.Option(None, "--collectors", help="Comma-separated collector ids."),
-    deliveries: str | None = typer.Option(None, "--deliveries", help="Comma-separated delivery ids."),
 ) -> None:
     """Edit a report profile."""
 
@@ -930,10 +921,7 @@ def profile_edit(
         edit_profile(
             config,
             name,
-            timezone=timezone,
-            schedule=schedule,
             collector_ids=_split_csv(collectors),
-            delivery_ids=_split_csv(deliveries),
         )
     except KeyError as exc:
         console.print(str(exc))

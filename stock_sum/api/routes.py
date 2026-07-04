@@ -47,20 +47,14 @@ class ProfileRequest(BaseModel):
     """Request body for creating a report profile."""
 
     name: str
-    timezone: str = "UTC"
-    schedule: str = "0 8 * * *"
     collector_ids: list[str] = Field(default_factory=list)
-    delivery_ids: list[str] = Field(default_factory=list)
     overwrite: bool = False
 
 
 class ProfilePatchRequest(BaseModel):
     """Request body for editing a report profile."""
 
-    timezone: str | None = None
-    schedule: str | None = None
     collector_ids: list[str] | None = None
-    delivery_ids: list[str] | None = None
 
 
 class XUserRequest(BaseModel):
@@ -191,13 +185,6 @@ def build_router(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @router.post("/reports/{profile}/run", status_code=202)
-    async def run_report(profile: str) -> dict[str, str]:
-        active = current_config()
-        if active is not None and profile not in active.reports:
-            raise HTTPException(status_code=404, detail=f"Unknown report profile: {profile}")
-        return {"status": "accepted", "profile": profile}
-
     @router.get("/config/effective")
     async def effective_config() -> dict:
         active = current_config()
@@ -214,23 +201,6 @@ def build_router(
         if active is None:
             return {}
         return redacted_config(active)
-
-    @v1.post("/reports/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)
-    async def create_report_job(
-        profile: str,
-        background_tasks: BackgroundTasks,
-        request: ReportJobRequest = ReportJobRequest(),
-    ) -> dict:
-        return _create_social_report_job(current_manager(), profile, request, background_tasks)
-
-    @v1.post("/reports/{profile}/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
-    async def create_report_job_for_mode(
-        profile: str,
-        mode: ReportModePath,
-        background_tasks: BackgroundTasks,
-        request: ReportJobRequest = ReportJobRequest(),
-    ) -> dict:
-        return _create_social_report_job(current_manager(), profile, request, background_tasks, mode=mode)
 
     @v1.post("/social-reports/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)
     async def create_social_report_job(
@@ -414,10 +384,7 @@ def build_router(
             lambda path: add_profile(
                 path,
                 request.name,
-                timezone=request.timezone,
-                schedule=request.schedule,
                 collector_ids=request.collector_ids,
-                delivery_ids=request.delivery_ids,
                 overwrite=request.overwrite,
             ),
         )
@@ -431,10 +398,7 @@ def build_router(
             lambda path: edit_profile(
                 path,
                 name,
-                timezone=request.timezone,
-                schedule=request.schedule,
                 collector_ids=request.collector_ids,
-                delivery_ids=request.delivery_ids,
             ),
         )
         return {"name": name, "profile": runtime_manager.config.reports[name].model_dump(mode="json")}

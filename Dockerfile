@@ -8,7 +8,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY stock_sum ./stock_sum
 
-RUN pip install --no-cache-dir . && python -m playwright install --with-deps chromium
+RUN pip install --no-cache-dir .
 
 VOLUME ["/app/data"]
 EXPOSE 8000

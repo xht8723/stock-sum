@@ -531,14 +531,8 @@ def test_config_profile_add_edit_delete(tmp_path) -> None:
             "closing",
             "--config",
             str(config_path),
-            "--timezone",
-            "America/Vancouver",
-            "--schedule",
-            "0 16 * * 1-5",
             "--collectors",
             "api.market_watch",
-            "--deliveries",
-            "email.primary",
         ],
     )
     edit_result = runner.invoke(
