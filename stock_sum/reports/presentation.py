@@ -789,11 +789,6 @@ def _importance_bucket(item: dict[str, Any]) -> str:
         return "low"
     if explicit.startswith("med"):
         return "medium"
-    confidence = str(item.get("confidence") or "").lower()
-    if confidence.startswith("high"):
-        return "high"
-    if confidence.startswith("low"):
-        return "low"
     return "medium"
 
 

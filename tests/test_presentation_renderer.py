@@ -21,6 +21,7 @@ def _response() -> dict:
                     "source_ref": "x1",
                     "claim": "X claim",
                     "interpretation": "X interpretation",
+                    "importance": "low",
                     "confidence": "low",
                     "urls": ["https://x.com/example/status/1"],
                 }
@@ -251,7 +252,7 @@ def test_renderer_rejects_unknown_mode() -> None:
 
 def test_renderer_detail_minimum_includes_high_only() -> None:
     response = _response()
-    response["summary"]["x_signals"][0]["confidence"] = "high"
+    response["summary"]["x_signals"][0]["importance"] = "high"
 
     rendered = PresentationRenderer().render(response, mode="markdown")
 
@@ -264,7 +265,7 @@ def test_renderer_detail_minimum_includes_high_only() -> None:
 
 def test_renderer_detail_medium_includes_high_and_medium() -> None:
     response = _response()
-    response["summary"]["x_signals"][0]["confidence"] = "high"
+    response["summary"]["x_signals"][0]["importance"] = "high"
 
     rendered = PresentationRenderer().render(response, mode="discord", detail="medium")
 
@@ -281,7 +282,8 @@ def test_renderer_detail_full_includes_all_importance_levels() -> None:
         {
             "source_ref": "x2",
             "claim": "High claim",
-            "confidence": "high",
+            "importance": "high",
+            "confidence": "medium",
             "urls": ["https://x.com/example/status/2"],
         }
     )
@@ -301,6 +303,17 @@ def test_renderer_minimum_empty_state_when_no_high_importance_items() -> None:
 
     assert "No social signals at this detail level." in rendered
     assert "NBIS growth post" not in rendered
+
+
+def test_renderer_detail_does_not_use_confidence_as_importance() -> None:
+    response = _response()
+    response["summary"]["x_signals"][0]["confidence"] = "high"
+    response["summary"]["x_signals"][0]["importance"] = "medium"
+
+    rendered = PresentationRenderer().render(response, mode="markdown")
+
+    assert "No social signals at this detail level." in rendered
+    assert "X claim" not in rendered
 
 
 def test_renderer_rejects_unknown_detail() -> None:

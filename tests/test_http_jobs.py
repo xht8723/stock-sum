@@ -907,6 +907,7 @@ class FakeRepository:
                 "sentiment": row["sentiment"],
                 "tags": ["market", "social", "signal", "risk", "watch"],
                 "interpretation": row["interpretation"],
+                "importance": row.get("importance", "medium"),
                 "confidence": row["confidence"],
                 "urls": [row["url"]],
             }
@@ -931,7 +932,7 @@ class FakeLLM:
     async def complete_json(self, messages) -> Summary:
         self.calls += 1
         return Summary(
-            text='{"source":"x","posts":[{"source_ref":"x1","source_id":"1","sentiment":"bullish","tags":["market","social","signal","risk","watch"],"summary":"summary","interpretation":"interpretation","confidence":"medium"}]}',
+            text='{"source":"x","posts":[{"source_ref":"x1","source_id":"1","sentiment":"bullish","tags":["market","social","signal","risk","watch"],"summary":"summary","interpretation":"interpretation","importance":"high","confidence":"medium"}]}',
             model="fake",
             metadata={
                 "parsed": {
@@ -944,6 +945,7 @@ class FakeLLM:
                             "tags": ["market", "social", "signal", "risk", "watch"],
                             "summary": "summary",
                             "interpretation": "interpretation",
+                            "importance": "high",
                             "confidence": "medium",
                         }
                     ],

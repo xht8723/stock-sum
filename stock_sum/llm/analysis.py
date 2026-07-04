@@ -16,9 +16,10 @@ from stock_sum.llm.base import LLMClient
 from stock_sum.llm.prompts import build_analysis_chunk_messages
 from stock_sum.storage.repository import StorageRepository
 
-PROMPT_VERSION = "llm-analysis-v1"
+PROMPT_VERSION = "llm-analysis-v2"
 SENTIMENTS = {"bullish", "bearish", "mixed", "neutral", "unclear"}
 CONFIDENCES = {"low", "medium", "high"}
+IMPORTANCE_LEVELS = {"low", "medium", "high"}
 
 
 @dataclass(frozen=True)
@@ -275,6 +276,7 @@ def _x_analysis_rows(
                 "tags_json": json.dumps(_tags(post.get("tags")), ensure_ascii=False),
                 "summary": _text(post.get("summary")),
                 "interpretation": _text(post.get("interpretation")),
+                "importance": _importance(post.get("importance") or post.get("priority")),
                 "confidence": _confidence(post.get("confidence")),
                 "raw_response_json": _raw_response_json(summary),
                 "analyzed_at": _utc_now(),
@@ -342,6 +344,7 @@ def _reddit_analysis_rows(
                 "tags_json": json.dumps(_tags(parsed_post.get("tags")), ensure_ascii=False),
                 "summary": _text(parsed_post.get("summary")),
                 "interpretation": _text(parsed_post.get("interpretation")),
+                "importance": _importance(parsed_post.get("importance") or parsed_post.get("priority")),
                 "confidence": _confidence(parsed_post.get("confidence")),
                 "comment_sentiment_counts_json": json.dumps(counts, ensure_ascii=False, sort_keys=True),
                 "raw_response_json": _raw_response_json(summary),
@@ -359,6 +362,17 @@ def _sentiment(value: Any) -> str:
 def _confidence(value: Any) -> str:
     text = str(value or "").strip().lower()
     return text if text in CONFIDENCES else "low"
+
+
+def _importance(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text.startswith("high"):
+        return "high"
+    if text.startswith("low"):
+        return "low"
+    if text.startswith("med"):
+        return "medium"
+    return text if text in IMPORTANCE_LEVELS else "medium"
 
 
 def _tags(value: Any) -> list[str]:

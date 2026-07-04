@@ -74,9 +74,83 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         x_columns = await _columns(db, "raw_x_posts")
         reddit_columns = await _columns(db, "raw_reddit_posts")
         comment_columns = await _columns(db, "raw_reddit_comments")
+        llm_x_columns = await _columns(db, "llm_x_post_analyses")
+        llm_reddit_columns = await _columns(db, "llm_reddit_post_analyses")
     assert "posted_at_utc" in x_columns
     assert "created_at_utc" in reddit_columns
     assert "created_at_utc" in comment_columns
+    assert "importance" in llm_x_columns
+    assert "importance" in llm_reddit_columns
+
+
+async def test_initialize_adds_llm_importance_to_existing_database(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    async with aiosqlite.connect(db_path) as db:
+        await db.executescript(
+            """
+            CREATE TABLE llm_x_post_analyses (
+                analysis_run_id TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                handle TEXT NOT NULL,
+                status_id TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                url TEXT,
+                posted_at_text TEXT,
+                sentiment TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                interpretation TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                raw_response_json TEXT NOT NULL,
+                analyzed_at TEXT NOT NULL,
+                PRIMARY KEY (analysis_run_id, status_id)
+            );
+            CREATE TABLE llm_reddit_post_analyses (
+                analysis_run_id TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                subreddit TEXT NOT NULL,
+                post_id TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                title TEXT NOT NULL,
+                url TEXT,
+                created_at_text TEXT,
+                sentiment TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                interpretation TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                comment_sentiment_counts_json TEXT NOT NULL,
+                raw_response_json TEXT NOT NULL,
+                analyzed_at TEXT NOT NULL,
+                PRIMARY KEY (analysis_run_id, post_id)
+            );
+            INSERT INTO llm_x_post_analyses VALUES (
+                'analysis-1', 'default', 'example', '123', 'x1', NULL, NULL,
+                'bullish', '[]', 'summary', 'interpretation', 'high', '{}', '2026-06-30T00:00:00+00:00'
+            );
+            INSERT INTO llm_reddit_post_analyses VALUES (
+                'analysis-1', 'default', 'wallstreetbets', 'abc', 'r1', 'title', NULL, NULL,
+                'mixed', '[]', 'summary', 'interpretation', 'high',
+                '{}', '{}', '2026-06-30T00:00:00+00:00'
+            );
+            """
+        )
+        await db.commit()
+
+    await SQLiteStorageRepository(db_path).initialize()
+
+    async with aiosqlite.connect(db_path) as db:
+        assert "importance" in await _columns(db, "llm_x_post_analyses")
+        assert "importance" in await _columns(db, "llm_reddit_post_analyses")
+        cursor = await db.execute("SELECT importance FROM llm_x_post_analyses")
+        x_importance = (await cursor.fetchone())[0]
+        await cursor.close()
+        cursor = await db.execute("SELECT importance FROM llm_reddit_post_analyses")
+        reddit_importance = (await cursor.fetchone())[0]
+        await cursor.close()
+
+    assert x_importance == "medium"
+    assert reddit_importance == "medium"
 
 
 async def test_save_x_items_upserts_posts_media_and_index(tmp_path) -> None:
@@ -341,6 +415,7 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
                 "tags_json": '["ai","growth","cloud","risk","watch"]',
                 "summary": "X post summary.",
                 "interpretation": "Market relevance.",
+                "importance": "high",
                 "confidence": "medium",
                 "raw_response_json": "{}",
                 "analyzed_at": "2026-06-30T00:00:00+00:00",
@@ -362,6 +437,7 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
                 "tags_json": '["semis","memory","earnings","risk","watch"]',
                 "summary": "Reddit post summary.",
                 "interpretation": "Comment thread is divided.",
+                "importance": "low",
                 "confidence": "high",
                 "comment_sentiment_counts_json": '{"bullish":1,"bearish":0,"mixed":1,"neutral":0,"unclear":0}',
                 "raw_response_json": "{}",
@@ -397,7 +473,9 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
     report = await repository.read_llm_analysis_report(profile="default", analysis_run_id="analysis-1")
 
     assert report["x_reports"][0]["posts"][0]["tags"] == ["ai", "growth", "cloud", "risk", "watch"]
+    assert report["x_reports"][0]["posts"][0]["importance"] == "high"
     reddit_post = report["reddit_report"]["posts"][0]
+    assert reddit_post["importance"] == "low"
     assert reddit_post["comment_sentiment_counts"]["bullish"] == 1
     assert reddit_post["comments_sentiment"] == "bullish: 1, bearish: 0, mixed: 1, neutral: 0, unclear: 0"
 

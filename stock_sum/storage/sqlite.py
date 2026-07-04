@@ -344,6 +344,7 @@ CREATE TABLE IF NOT EXISTS llm_x_post_analyses (
     tags_json TEXT NOT NULL,
     summary TEXT NOT NULL,
     interpretation TEXT NOT NULL,
+    importance TEXT NOT NULL DEFAULT 'medium',
     confidence TEXT NOT NULL,
     raw_response_json TEXT NOT NULL,
     analyzed_at TEXT NOT NULL,
@@ -363,6 +364,7 @@ CREATE TABLE IF NOT EXISTS llm_reddit_post_analyses (
     tags_json TEXT NOT NULL,
     summary TEXT NOT NULL,
     interpretation TEXT NOT NULL,
+    importance TEXT NOT NULL DEFAULT 'medium',
     confidence TEXT NOT NULL,
     comment_sentiment_counts_json TEXT NOT NULL,
     raw_response_json TEXT NOT NULL,
@@ -415,18 +417,25 @@ HOUSE_PTR_TRADE_COLUMNS = {
     "stock_ticker": "TEXT",
 }
 
+LLM_POST_ANALYSIS_COLUMNS = {
+    "importance": "TEXT NOT NULL DEFAULT 'medium'",
+}
+
 
 async def _ensure_schema_updates(db: aiosqlite.Connection) -> None:
     """Apply additive schema updates for existing SQLite databases."""
 
     await _ensure_columns(db, "raw_house_ptr_filings", HOUSE_PTR_FILING_COLUMNS)
     await _ensure_columns(db, "raw_house_ptr_trade_rows", HOUSE_PTR_TRADE_COLUMNS)
+    await _ensure_columns(db, "llm_x_post_analyses", LLM_POST_ANALYSIS_COLUMNS)
+    await _ensure_columns(db, "llm_reddit_post_analyses", LLM_POST_ANALYSIS_COLUMNS)
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_house_ptr_trade_rows_asset_type ON raw_house_ptr_trade_rows (asset_type_code)"
     )
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_house_ptr_trade_rows_stock_ticker ON raw_house_ptr_trade_rows (stock_ticker)"
     )
+    await _backfill_llm_importance(db)
 
 
 async def _ensure_columns(db: aiosqlite.Connection, table: str, columns: dict[str, str]) -> None:
@@ -438,6 +447,36 @@ async def _ensure_columns(db: aiosqlite.Connection, table: str, columns: dict[st
     for name, definition in columns.items():
         if name not in existing:
             await db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+async def _backfill_llm_importance(db: aiosqlite.Connection) -> None:
+    """Best-effort backfill for post importance from old raw LLM responses."""
+
+    for table, id_column in (
+        ("llm_x_post_analyses", "status_id"),
+        ("llm_reddit_post_analyses", "post_id"),
+    ):
+        cursor = await db.execute(
+            f"""
+            SELECT analysis_run_id, {id_column}, source_ref, raw_response_json
+            FROM {table}
+            WHERE importance IS NULL OR importance NOT IN ('high', 'medium', 'low')
+            """
+        )
+        try:
+            rows = await cursor.fetchall()
+        finally:
+            await cursor.close()
+        for analysis_run_id, source_id, source_ref, raw_response_json in rows:
+            importance = _importance_from_raw_response(raw_response_json, source_ref)
+            await db.execute(
+                f"""
+                UPDATE {table}
+                SET importance = ?
+                WHERE analysis_run_id = ? AND {id_column} = ?
+                """,
+                (importance, analysis_run_id, source_id),
+            )
 
 
 async def _backfill_house_ptr_normalized_columns(db: aiosqlite.Connection) -> None:
@@ -734,11 +773,11 @@ class SQLiteStorageRepository:
                     INSERT INTO llm_x_post_analyses (
                         analysis_run_id, profile, handle, status_id, source_ref, url,
                         posted_at_text, sentiment, tags_json, summary, interpretation,
-                        confidence, raw_response_json, analyzed_at
+                        importance, confidence, raw_response_json, analyzed_at
                     ) VALUES (
                         :analysis_run_id, :profile, :handle, :status_id, :source_ref, :url,
                         :posted_at_text, :sentiment, :tags_json, :summary, :interpretation,
-                        :confidence, :raw_response_json, :analyzed_at
+                        :importance, :confidence, :raw_response_json, :analyzed_at
                     )
                     ON CONFLICT (analysis_run_id, status_id) DO UPDATE SET
                         source_ref = excluded.source_ref,
@@ -748,6 +787,7 @@ class SQLiteStorageRepository:
                         tags_json = excluded.tags_json,
                         summary = excluded.summary,
                         interpretation = excluded.interpretation,
+                        importance = excluded.importance,
                         confidence = excluded.confidence,
                         raw_response_json = excluded.raw_response_json,
                         analyzed_at = excluded.analyzed_at
@@ -769,11 +809,11 @@ class SQLiteStorageRepository:
                     INSERT INTO llm_reddit_post_analyses (
                         analysis_run_id, profile, subreddit, post_id, source_ref, title,
                         url, created_at_text, sentiment, tags_json, summary, interpretation,
-                        confidence, comment_sentiment_counts_json, raw_response_json, analyzed_at
+                        importance, confidence, comment_sentiment_counts_json, raw_response_json, analyzed_at
                     ) VALUES (
                         :analysis_run_id, :profile, :subreddit, :post_id, :source_ref, :title,
                         :url, :created_at_text, :sentiment, :tags_json, :summary, :interpretation,
-                        :confidence, :comment_sentiment_counts_json, :raw_response_json, :analyzed_at
+                        :importance, :confidence, :comment_sentiment_counts_json, :raw_response_json, :analyzed_at
                     )
                     ON CONFLICT (analysis_run_id, post_id) DO UPDATE SET
                         source_ref = excluded.source_ref,
@@ -784,6 +824,7 @@ class SQLiteStorageRepository:
                         tags_json = excluded.tags_json,
                         summary = excluded.summary,
                         interpretation = excluded.interpretation,
+                        importance = excluded.importance,
                         confidence = excluded.confidence,
                         comment_sentiment_counts_json = excluded.comment_sentiment_counts_json,
                         raw_response_json = excluded.raw_response_json,
@@ -1327,6 +1368,48 @@ def _json_list(value: str | None) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _normalized_importance(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text.startswith("high"):
+        return "high"
+    if text.startswith("low"):
+        return "low"
+    if text.startswith("med"):
+        return "medium"
+    return "medium"
+
+
+def _importance_from_raw_response(raw_response_json: str | None, source_ref: str | None) -> str:
+    if not raw_response_json:
+        return "medium"
+    try:
+        wrapper = json.loads(raw_response_json)
+    except json.JSONDecodeError:
+        return "medium"
+    candidates: list[dict[str, Any]] = []
+    metadata = wrapper.get("metadata") if isinstance(wrapper, dict) else None
+    parsed = metadata.get("parsed") if isinstance(metadata, dict) else None
+    if not isinstance(parsed, dict) and isinstance(wrapper, dict):
+        text = wrapper.get("text")
+        if isinstance(text, str):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+    if isinstance(parsed, dict):
+        posts = parsed.get("posts")
+        if isinstance(posts, list):
+            candidates.extend(post for post in posts if isinstance(post, dict))
+        post = parsed.get("post")
+        if isinstance(post, dict):
+            candidates.append(post)
+    for candidate in candidates:
+        if source_ref and str(candidate.get("source_ref") or "") != str(source_ref):
+            continue
+        return _normalized_importance(candidate.get("importance") or candidate.get("priority"))
+    return "medium"
+
+
 async def _latest_analysis_run_id(db: aiosqlite.Connection, profile: str) -> str | None:
     cursor = await db.execute(
         """
@@ -1349,7 +1432,7 @@ async def _read_analysis_x_reports(db: aiosqlite.Connection, profile: str, analy
     cursor = await db.execute(
         """
         SELECT handle, status_id, source_ref, url, posted_at_text, sentiment, tags_json,
-               summary, interpretation, confidence
+               summary, interpretation, importance, confidence
         FROM llm_x_post_analyses
         WHERE profile = ? AND analysis_run_id = ?
         ORDER BY handle, posted_at_text DESC, status_id DESC
@@ -1372,7 +1455,8 @@ async def _read_analysis_x_reports(db: aiosqlite.Connection, profile: str, analy
                 "sentiment": row[5],
                 "tags": _json_list(row[6]),
                 "interpretation": row[8],
-                "confidence": row[9],
+                "importance": _normalized_importance(row[9]),
+                "confidence": row[10],
                 "urls": [row[3]] if row[3] else [],
             }
         )
@@ -1390,7 +1474,7 @@ async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, a
     cursor = await db.execute(
         """
         SELECT subreddit, post_id, source_ref, title, url, created_at_text, sentiment, tags_json,
-               summary, interpretation, confidence, comment_sentiment_counts_json
+               summary, interpretation, importance, confidence, comment_sentiment_counts_json
         FROM llm_reddit_post_analyses
         WHERE profile = ? AND analysis_run_id = ?
         ORDER BY created_at_text DESC, post_id DESC
@@ -1406,7 +1490,7 @@ async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, a
     total_comments = 0
     totals = {"bullish": 0, "bearish": 0, "mixed": 0, "neutral": 0, "unclear": 0}
     for row in rows:
-        counts = _json_obj(row[11])
+        counts = _json_obj(row[12])
         for sentiment in totals:
             value = counts.get(sentiment)
             if isinstance(value, int):
@@ -1424,7 +1508,8 @@ async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, a
                 "sentiment": row[6],
                 "tags": _json_list(row[7]),
                 "interpretation": row[9],
-                "confidence": row[10],
+                "importance": _normalized_importance(row[10]),
+                "confidence": row[11],
                 "urls": [row[4]] if row[4] else [],
             }
         )

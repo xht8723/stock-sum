@@ -74,6 +74,7 @@ X_ANALYSIS_SCHEMA: dict[str, Any] = {
             "tags": ["five", "single", "word", "lowercase", "tags"],
             "summary": "One concise sentence describing the post.",
             "interpretation": "One concise sentence on possible market relevance.",
+            "importance": "high|medium|low",
             "confidence": "low|medium|high",
         }
     ],
@@ -88,6 +89,7 @@ REDDIT_ANALYSIS_SCHEMA: dict[str, Any] = {
         "tags": ["five", "single", "word", "lowercase", "tags"],
         "summary": "One concise sentence describing the main post.",
         "interpretation": "One concise sentence on post and comment relevance.",
+        "importance": "high|medium|low",
         "confidence": "low|medium|high",
         "comments": [
             {
@@ -138,6 +140,7 @@ def build_analysis_chunk_messages(chunk: dict[str, Any], *, instructions: str | 
     user_sections = [
         f"Analyze this {kind} chunk for market/social sentiment.",
         "Use sentiment only from: bullish, bearish, mixed, neutral, unclear.",
+        "For every main post, set importance to high, medium, or low based on market relevance and urgency; do not use confidence for importance.",
         "For every main post, return exactly 5 lowercase single-word tags. No tickers with punctuation; use words like nbis, ai, semis, valuation.",
         "For Reddit, analyze every provided comment and keep comment source_ref/source_id/parent links intact.",
         "Keep summaries and interpretations short. No markdown. No extra keys.",
