@@ -6,7 +6,16 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
-from stock_sum.storage.models import StoredCollectionRun, StoredDownloadedMedia, StoredHousePtrTradeRow, StoredRedditPost, StoredSec13FHolding, StoredXPost
+from stock_sum.storage.models import (
+    StoredCollectionRun,
+    StoredDownloadedMedia,
+    StoredHousePtrTradeRow,
+    StoredRedditPost,
+    StoredSec13FHolding,
+    StoredSocialStatisticPoint,
+    StoredTradingStatisticPoint,
+    StoredXPost,
+)
 
 
 @runtime_checkable
@@ -87,6 +96,28 @@ class StorageRepository(Protocol):
     async def read_llm_analysis_report(self, *, profile: str, analysis_run_id: str | None = None) -> dict:
         """Read stored analysis rows as a renderer-ready summary object."""
 
+    async def read_llm_social_posts_by_ticker(
+        self,
+        *,
+        profile: str,
+        ticker: str,
+        analysis_run_id: str | None = None,
+    ) -> list[dict]:
+        """Read analyzed X/Reddit post rows linked to a ticker."""
+
+    async def read_social_statistic_points(
+        self,
+        *,
+        profile: str,
+        ticker: str | None = None,
+        source: str | None = None,
+        sentiment: str | None = None,
+        posted_start: datetime | None = None,
+        posted_end: datetime | None = None,
+        analysis_run_id: str | None = None,
+    ) -> list[StoredSocialStatisticPoint]:
+        """Read analyzed social post rows for statistic charting."""
+
     async def list_collection_runs(self, *, profile: str | None = None, limit: int | None = None) -> list[StoredCollectionRun]:
         """Return stored collection runs."""
 
@@ -122,6 +153,18 @@ class StorageRepository(Protocol):
         limit: int | None = None,
     ) -> list[StoredHousePtrTradeRow]:
         """Read House PTR trade rows for deterministic report rendering."""
+
+    async def read_trading_statistic_points(
+        self,
+        *,
+        name_contains: str | None = None,
+        transaction_start: datetime | None = None,
+        transaction_end: datetime | None = None,
+        asset_type: str | None = None,
+        ticker: str | None = None,
+        action: str | None = None,
+    ) -> list[StoredTradingStatisticPoint]:
+        """Read House PTR trade rows for statistic charting."""
 
     async def read_sec_13f_holdings(
         self,

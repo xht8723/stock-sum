@@ -1,8 +1,8 @@
 # stocksum_report
 
-Red Discord Bot cog that exposes `/socialreport`, `/tradingreport`, and
-`/13freport`, then bridges those slash commands to the local `stock-sum` HTTP
-server.
+Red Discord Bot cog that exposes `/socialreport`, `/tradingreport`,
+`/13freport`, and `/statistic`, then bridges those slash commands to the local
+`stock-sum` HTTP server.
 
 ## Environment
 
@@ -30,6 +30,7 @@ Then sync slash commands with Red's slash-command management command and run:
 /socialreport profile:default detail:minimum
 /tradingreport days:30
 /13freport issuer:NVIDIA
+/statistic mode:social ticker:NVDA days:30
 ```
 
 `/socialreport` generates X/Reddit social sentiment reports with LLM analysis.
@@ -44,10 +45,15 @@ to `ST` stock rows.
 quarterly SEC dataset in SQLite without LLM analysis. It requires at least one
 filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
 `min_value`, or `min_shares`.
+`/statistic` generates a PNG chart from existing SQLite data. Use
+`mode:social` for X/Reddit sentiment over time or `mode:trading` for House PTR
+purchase/sale activity over time. It requires at least one filter such as
+`ticker`, `name`, `asset_type`, `days`, or a date range.
 
 The default format for report commands is Discord-specific markdown and is sent
 inline in message chunks. Choose `html`, `markdown`, `text`, or `json` to
 receive the report as a file attachment instead.
+Statistic output is always a PNG file attachment.
 
 Slash commands validate common input mistakes before calling stock-sum:
 malformed dates, invalid source names, unsupported report formats, invalid

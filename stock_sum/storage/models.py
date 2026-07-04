@@ -179,3 +179,35 @@ class StoredSec13FHolding:
     voting_auth_none: int | None
     filing_url: str | None
     raw_metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class StoredSocialStatisticPoint:
+    """Analyzed social post point for statistic charting."""
+
+    source: str
+    profile: str
+    ticker: str | None
+    source_id: str
+    source_ref: str
+    label: str | None
+    sentiment: str
+    importance: str
+    posted_at: str | None
+    analyzed_at: str | None
+
+
+@dataclass(frozen=True)
+class StoredTradingStatisticPoint:
+    """House PTR transaction point for statistic charting."""
+
+    doc_id: str
+    name: str | None
+    state: str | None
+    asset: str | None
+    asset_type_code: str | None
+    stock_ticker: str | None
+    transaction_action: str | None
+    transaction_date: str | None
+    transaction_date_utc: str | None
+    amount: str | None

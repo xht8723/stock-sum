@@ -158,6 +158,46 @@ async def test_client_rejects_trading_report_without_filter() -> None:
         await client.run_trading_report(output_format="discord")
 
 
+async def test_client_sends_statistic_request_and_downloads_png() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "stat-1"})],
+        get_responses=[
+            FakeResponse(200, {"job_id": "stat-1", "status": "succeeded"}),
+            FakeResponse(
+                200,
+                body=b"png",
+                headers={
+                    "content-type": "image/png",
+                    "content-disposition": 'attachment; filename="statistic.png"',
+                },
+            ),
+        ],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    artifact = await client.run_statistic(mode="social", ticker="NVDA", days=30)
+
+    assert artifact.filename == "statistic.png"
+    assert artifact.content_type == "image/png"
+    assert session.requests[0] == (
+        "POST",
+        "http://stock-sum.local/v1/statistics/jobs",
+        {
+            "headers": {},
+            "json": {
+                "mode": "social",
+                "profile": "default",
+                "ticker": "NVDA",
+                "action": "all",
+                "source": "all",
+                "sentiment": "all",
+                "days": 30,
+                "bucket": "auto",
+            },
+        },
+    )
+
+
 async def test_client_reports_failed_job() -> None:
     session = FakeSession(
         post_responses=[FakeResponse(202, {"job_id": "job-2"})],
@@ -573,6 +613,74 @@ async def test_13freport_command_sends_discord_report(monkeypatch) -> None:
     assert interaction.channel.messages == [{"content": "holding one\n\nholding two", "suppress_embeds": True}]
 
 
+async def test_statistic_rejects_invalid_parameters_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.statistic(interaction, mode="social", ticker="bad ticker!", days=30, private=False)
+
+    assert client.statistic_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: ticker must be 1-16 characters using letters, numbers, dot, or dash.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_statistic_command_sends_png_file(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"png", filename="statistic.png")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.statistic(
+        interaction,
+        mode="trading",
+        ticker="aapl",
+        name="Pelosi",
+        asset_type="st",
+        action="sell",
+        days=180,
+        bucket="week",
+        private=False,
+    )
+
+    assert client.statistic_calls == [
+        {
+            "mode": "trading",
+            "profile": "default",
+            "ticker": "AAPL",
+            "name": "Pelosi",
+            "asset_type": "ST",
+            "action": "sell",
+            "source": "all",
+            "sentiment": "all",
+            "days": 180,
+            "start_date": None,
+            "end_date": None,
+            "bucket": "week",
+        }
+    ]
+    assert interaction.response.messages == [
+        {
+            "content": "Statistic chart is being generated, please wait a few minutes.",
+            "ephemeral": False,
+        }
+    ]
+    assert interaction.channel.messages == [
+        {
+            "content": "Statistic generated.",
+            "file": "statistic.png",
+            "suppress_embeds": True,
+        }
+    ]
+
+
 async def test_management_command_blocks_non_owner(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=False))
@@ -805,6 +913,7 @@ class FakeStockSumClient:
         self.social_calls: list[dict[str, Any]] = []
         self.trading_calls: list[dict[str, Any]] = []
         self.sec_13f_calls: list[dict[str, Any]] = []
+        self.statistic_calls: list[dict[str, Any]] = []
 
     async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
         self.social_calls.append({"profile": profile, "output_format": output_format, "detail": detail})
@@ -860,6 +969,16 @@ class FakeStockSumClient:
             status={"status": "succeeded"},
         )
 
+    async def run_statistic(self, **kwargs: Any) -> StockSumArtifact:
+        self.statistic_calls.append(kwargs)
+        return StockSumArtifact(
+            job_id="stat-1",
+            filename=self.filename,
+            content_type="image/png",
+            content=self.content,
+            status={"status": "succeeded"},
+        )
+
 
 class FakeFailingStockSumClient:
     async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
@@ -869,6 +988,9 @@ class FakeFailingStockSumClient:
         raise StockSumRequestError("broken")
 
     async def run_13f_report(self, **kwargs: Any) -> StockSumArtifact:
+        raise StockSumRequestError("broken")
+
+    async def run_statistic(self, **kwargs: Any) -> StockSumArtifact:
         raise StockSumRequestError("broken")
 
 

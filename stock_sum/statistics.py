@@ -1,0 +1,370 @@
+"""Statistical aggregation and PNG plotting for stock-sum data."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from datetime import date, datetime, time, timezone
+from pathlib import Path
+from typing import Any, Literal
+import re
+
+from stock_sum.storage.models import StoredSocialStatisticPoint, StoredTradingStatisticPoint
+
+StatisticMode = Literal["social", "trading"]
+StatisticBucket = Literal["auto", "day", "week", "month"]
+
+SENTIMENT_SCORES = {
+    "bullish": 1.0,
+    "bearish": -1.0,
+    "mixed": 0.0,
+    "neutral": 0.0,
+    "unclear": 0.0,
+}
+
+_USD_RE = re.compile(r"\$?\s*([0-9][0-9,]*)")
+
+
+def build_social_statistic_summary(
+    points: list[StoredSocialStatisticPoint],
+    *,
+    filters: dict[str, Any],
+    bucket: StatisticBucket = "auto",
+    title: str = "Social Sentiment Statistic",
+) -> dict[str, Any]:
+    """Aggregate analyzed social sentiment into time buckets."""
+
+    dated: list[tuple[datetime, StoredSocialStatisticPoint]] = []
+    skipped_missing_date = 0
+    for point in points:
+        posted_at = parse_datetime(point.posted_at)
+        if posted_at is None:
+            skipped_missing_date += 1
+            continue
+        dated.append((posted_at, point))
+    if not dated:
+        raise ValueError("No social statistic rows had usable post dates.")
+
+    resolved_bucket = resolve_bucket(bucket, min(item[0] for item in dated), max(item[0] for item in dated))
+    grouped: dict[str, dict[str, Any]] = {}
+    for posted_at, point in dated:
+        key = bucket_key(posted_at, resolved_bucket)
+        group = grouped.setdefault(
+            key,
+            {
+                "bucket": key,
+                "post_count": 0,
+                "sentiment_score_sum": 0.0,
+                "sentiment_counts": {sentiment: 0 for sentiment in SENTIMENT_SCORES},
+                "sources": {"x": 0, "reddit": 0},
+            },
+        )
+        sentiment = normalize_sentiment(point.sentiment)
+        group["post_count"] += 1
+        group["sentiment_score_sum"] += SENTIMENT_SCORES[sentiment]
+        group["sentiment_counts"][sentiment] += 1
+        group["sources"][point.source] = group["sources"].get(point.source, 0) + 1
+
+    buckets = []
+    for key in sorted(grouped):
+        group = grouped[key]
+        count = int(group["post_count"])
+        score_sum = float(group.pop("sentiment_score_sum"))
+        group["avg_sentiment_score"] = round(score_sum / count, 4) if count else 0.0
+        buckets.append(group)
+
+    return {
+        "report_type": "statistic",
+        "statistic_mode": "social",
+        "title": title,
+        "bucket": resolved_bucket,
+        "filters": filters,
+        "row_count": len(points),
+        "plotted_count": len(dated),
+        "skipped": {"missing_date": skipped_missing_date},
+        "buckets": buckets,
+    }
+
+
+def build_trading_statistic_summary(
+    points: list[StoredTradingStatisticPoint],
+    *,
+    filters: dict[str, Any],
+    bucket: StatisticBucket = "auto",
+    title: str = "Financial Disclosure Statistic",
+) -> dict[str, Any]:
+    """Aggregate House PTR trading rows into time buckets."""
+
+    dated: list[tuple[datetime, StoredTradingStatisticPoint]] = []
+    skipped_missing_date = 0
+    for point in points:
+        traded_at = parse_datetime(point.transaction_date_utc) or parse_date(point.transaction_date)
+        if traded_at is None:
+            skipped_missing_date += 1
+            continue
+        dated.append((traded_at, point))
+    if not dated:
+        raise ValueError("No trading statistic rows had usable transaction dates.")
+
+    resolved_bucket = resolve_bucket(bucket, min(item[0] for item in dated), max(item[0] for item in dated))
+    grouped: dict[str, dict[str, Any]] = {}
+    skipped_unknown_amount = 0
+    open_ended_amounts = 0
+    unknown_actions = 0
+    for traded_at, point in dated:
+        action = normalize_action(point.transaction_action)
+        if action not in {"purchase", "sell", "sell_partial"}:
+            unknown_actions += 1
+            continue
+        estimate, open_ended = estimate_amount(point.amount)
+        if estimate is None:
+            skipped_unknown_amount += 1
+            estimate = 0.0
+        elif open_ended:
+            open_ended_amounts += 1
+
+        key = bucket_key(traded_at, resolved_bucket)
+        group = grouped.setdefault(
+            key,
+            {
+                "bucket": key,
+                "purchase_count": 0,
+                "sell_count": 0,
+                "purchase_estimated_usd": 0.0,
+                "sell_estimated_usd": 0.0,
+                "net_estimated_usd": 0.0,
+            },
+        )
+        if action == "purchase":
+            group["purchase_count"] += 1
+            group["purchase_estimated_usd"] += estimate
+            group["net_estimated_usd"] += estimate
+        else:
+            group["sell_count"] += 1
+            group["sell_estimated_usd"] += estimate
+            group["net_estimated_usd"] -= estimate
+
+    buckets = []
+    for key in sorted(grouped):
+        group = grouped[key]
+        for money_key in ("purchase_estimated_usd", "sell_estimated_usd", "net_estimated_usd"):
+            group[money_key] = round(float(group[money_key]), 2)
+        group["net_trade_count"] = int(group["purchase_count"]) - int(group["sell_count"])
+        buckets.append(group)
+
+    return {
+        "report_type": "statistic",
+        "statistic_mode": "trading",
+        "title": title,
+        "bucket": resolved_bucket,
+        "filters": filters,
+        "row_count": len(points),
+        "plotted_count": sum(item["purchase_count"] + item["sell_count"] for item in buckets),
+        "skipped": {
+            "missing_date": skipped_missing_date,
+            "unknown_amount": skipped_unknown_amount,
+            "unknown_action": unknown_actions,
+            "open_ended_amount": open_ended_amounts,
+        },
+        "buckets": buckets,
+    }
+
+
+def render_statistic_png(summary: dict[str, Any], output_path: Path) -> None:
+    """Render statistic summary data to a PNG file."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if summary.get("statistic_mode") == "trading":
+        _render_trading_png(summary, output_path, plt)
+        return
+    _render_social_png(summary, output_path, plt)
+
+
+def resolve_bucket(bucket: StatisticBucket, start: datetime, end: datetime) -> Literal["day", "week", "month"]:
+    """Resolve auto bucket selection from date span."""
+
+    if bucket in {"day", "week", "month"}:
+        return bucket
+    span_days = max(0, (end.date() - start.date()).days)
+    if span_days <= 45:
+        return "day"
+    if span_days <= 365:
+        return "week"
+    return "month"
+
+
+def bucket_key(value: datetime, bucket: Literal["day", "week", "month"]) -> str:
+    """Return stable ISO-like bucket key."""
+
+    current = value.astimezone(timezone.utc).date()
+    if bucket == "day":
+        return current.isoformat()
+    if bucket == "week":
+        week_start = current.fromordinal(current.toordinal() - current.weekday())
+        return week_start.isoformat()
+    return date(current.year, current.month, 1).isoformat()
+
+
+def parse_datetime(value: str | None) -> datetime | None:
+    """Parse common UTC datetime strings."""
+
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return parse_date(text)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def parse_date(value: str | None) -> datetime | None:
+    """Parse date-only strings used in disclosure rows."""
+
+    if not value:
+        return None
+    text = value.strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            parsed = datetime.strptime(text, fmt).date()
+            return datetime.combine(parsed, time.min, tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def normalize_sentiment(value: str | None) -> str:
+    """Normalize sentiment to a score-bearing value."""
+
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in SENTIMENT_SCORES else "unclear"
+
+
+def normalize_action(value: str | None) -> str:
+    """Normalize PTR transaction actions."""
+
+    normalized = (value or "").strip().lower()
+    if normalized in {"purchase", "sell", "sell_partial"}:
+        return normalized
+    if normalized.startswith("p"):
+        return "purchase"
+    if normalized.startswith("s"):
+        return "sell_partial" if "partial" in normalized else "sell"
+    return normalized
+
+
+def estimate_amount(value: str | None) -> tuple[float | None, bool]:
+    """Estimate a disclosure amount range using midpoint or lower bound."""
+
+    if not value:
+        return None, False
+    text = value.replace("\u2013", "-").replace("\u2014", "-")
+    numbers = [int(match.replace(",", "")) for match in _USD_RE.findall(text)]
+    if len(numbers) >= 2:
+        return (numbers[0] + numbers[-1]) / 2.0, False
+    if len(numbers) == 1:
+        open_ended = "+" in text or "over" in text.lower() or "more" in text.lower()
+        return float(numbers[0]), open_ended
+    return None, False
+
+
+def _render_social_png(summary: dict[str, Any], output_path: Path, plt: Any) -> None:
+    buckets = summary.get("buckets") or []
+    labels = [item["bucket"] for item in buckets]
+    scores = [item["avg_sentiment_score"] for item in buckets]
+    counts = [item["post_count"] for item in buckets]
+
+    fig, ax_score = plt.subplots(figsize=(10, 5.4), facecolor="#1f2329")
+    ax_score.set_facecolor("#252a31")
+    ax_count = ax_score.twinx()
+    x_positions = list(range(len(labels)))
+    ax_count.bar(x_positions, counts, color="#7aa2f7", alpha=0.22, label="Post count")
+    ax_score.plot(x_positions, scores, color="#a6e3a1", marker="o", linewidth=2.2, label="Average sentiment")
+    ax_score.axhline(0, color="#c0caf5", linewidth=0.8, alpha=0.45)
+    _style_axes(ax_score, ax_count)
+    ax_score.set_ylim(-1.05, 1.05)
+    ax_score.set_ylabel("Sentiment score", color="#f4f4f5")
+    ax_count.set_ylabel("Post count", color="#f4f4f5")
+    ax_score.set_title(str(summary.get("title") or "Social Sentiment Statistic"), color="#f4f4f5", pad=14)
+    _apply_x_labels(ax_score, labels, x_positions)
+    _combined_legend(fig, ax_score, ax_count)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160, facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def _render_trading_png(summary: dict[str, Any], output_path: Path, plt: Any) -> None:
+    buckets = summary.get("buckets") or []
+    labels = [item["bucket"] for item in buckets]
+    x_positions = list(range(len(labels)))
+    purchase_usd = [item["purchase_estimated_usd"] for item in buckets]
+    sell_usd = [-item["sell_estimated_usd"] for item in buckets]
+    purchase_count = [item["purchase_count"] for item in buckets]
+    sell_count = [-item["sell_count"] for item in buckets]
+
+    fig, (ax_usd, ax_count) = plt.subplots(2, 1, figsize=(10, 7.2), facecolor="#1f2329", sharex=True)
+    for ax in (ax_usd, ax_count):
+        ax.set_facecolor("#252a31")
+        ax.axhline(0, color="#c0caf5", linewidth=0.8, alpha=0.45)
+        _style_single_axis(ax)
+
+    ax_usd.bar(x_positions, purchase_usd, color="#2dd4bf", alpha=0.8, label="Purchases est. USD")
+    ax_usd.bar(x_positions, sell_usd, color="#f59e0b", alpha=0.8, label="Sales est. USD")
+    ax_count.bar(x_positions, purchase_count, color="#2dd4bf", alpha=0.8, label="Purchase count")
+    ax_count.bar(x_positions, sell_count, color="#f59e0b", alpha=0.8, label="Sale count")
+    ax_usd.set_ylabel("Estimated USD", color="#f4f4f5")
+    ax_count.set_ylabel("Trade count", color="#f4f4f5")
+    ax_usd.set_title(str(summary.get("title") or "Financial Disclosure Statistic"), color="#f4f4f5", pad=14)
+    _apply_x_labels(ax_count, labels, x_positions)
+    ax_usd.legend(loc="best", facecolor="#252a31", edgecolor="#4b5563", labelcolor="#f4f4f5")
+    ax_count.legend(loc="best", facecolor="#252a31", edgecolor="#4b5563", labelcolor="#f4f4f5")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160, facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def _style_axes(primary: Any, secondary: Any) -> None:
+    _style_single_axis(primary)
+    _style_single_axis(secondary)
+    primary.grid(True, axis="y", alpha=0.2, color="#c0caf5")
+    secondary.grid(False)
+
+
+def _style_single_axis(ax: Any) -> None:
+    ax.tick_params(colors="#f4f4f5")
+    for spine in ax.spines.values():
+        spine.set_color("#4b5563")
+    ax.yaxis.label.set_color("#f4f4f5")
+    ax.xaxis.label.set_color("#f4f4f5")
+    ax.grid(True, axis="y", alpha=0.18, color="#c0caf5")
+
+
+def _apply_x_labels(ax: Any, labels: list[str], x_positions: list[int]) -> None:
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(labels, rotation=35, ha="right", color="#f4f4f5")
+    if len(labels) > 18:
+        step = max(1, len(labels) // 12)
+        for index, label in enumerate(ax.get_xticklabels()):
+            label.set_visible(index % step == 0 or index == len(labels) - 1)
+
+
+def _combined_legend(fig: Any, primary: Any, secondary: Any) -> None:
+    handles1, labels1 = primary.get_legend_handles_labels()
+    handles2, labels2 = secondary.get_legend_handles_labels()
+    fig.legend(
+        handles1 + handles2,
+        labels1 + labels2,
+        loc="upper right",
+        bbox_to_anchor=(0.96, 0.93),
+        facecolor="#252a31",
+        edgecolor="#4b5563",
+        labelcolor="#f4f4f5",
+    )

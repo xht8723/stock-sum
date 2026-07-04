@@ -27,7 +27,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
             """
             SELECT name FROM sqlite_master
             WHERE type = 'table'
-              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "collection_runs",
@@ -42,6 +42,8 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
                 "llm_analysis_runs",
                 "llm_x_post_analyses",
                 "llm_reddit_post_analyses",
+                "llm_x_post_tickers",
+                "llm_reddit_post_tickers",
                 "llm_reddit_comment_analyses",
                 "raw_house_ptr_filings",
                 "raw_house_ptr_trade_rows",
@@ -65,6 +67,8 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         "llm_analysis_runs",
         "llm_x_post_analyses",
         "llm_reddit_post_analyses",
+        "llm_x_post_tickers",
+        "llm_reddit_post_tickers",
         "llm_reddit_comment_analyses",
         "raw_house_ptr_filings",
         "raw_house_ptr_trade_rows",
@@ -81,6 +85,8 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
     assert "created_at_utc" in comment_columns
     assert "importance" in llm_x_columns
     assert "importance" in llm_reddit_columns
+    assert "tickers_json" in llm_x_columns
+    assert "tickers_json" in llm_reddit_columns
 
 
 async def test_initialize_adds_llm_importance_to_existing_database(tmp_path) -> None:
@@ -140,8 +146,12 @@ async def test_initialize_adds_llm_importance_to_existing_database(tmp_path) -> 
     await SQLiteStorageRepository(db_path).initialize()
 
     async with aiosqlite.connect(db_path) as db:
-        assert "importance" in await _columns(db, "llm_x_post_analyses")
-        assert "importance" in await _columns(db, "llm_reddit_post_analyses")
+        x_columns = await _columns(db, "llm_x_post_analyses")
+        reddit_columns = await _columns(db, "llm_reddit_post_analyses")
+        assert "importance" in x_columns
+        assert "importance" in reddit_columns
+        assert "tickers_json" in x_columns
+        assert "tickers_json" in reddit_columns
         cursor = await db.execute("SELECT importance FROM llm_x_post_analyses")
         x_importance = (await cursor.fetchone())[0]
         await cursor.close()
@@ -413,6 +423,7 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
                 "posted_at_text": "2026-06-30T00:00:00+00:00",
                 "sentiment": "bullish",
                 "tags_json": '["ai","growth","cloud","risk","watch"]',
+                "tickers_json": '["$NBIS","HOOD","bad value"]',
                 "summary": "X post summary.",
                 "interpretation": "Market relevance.",
                 "importance": "high",
@@ -435,6 +446,7 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
                 "created_at_text": "2026-06-30T00:00:00+00:00",
                 "sentiment": "mixed",
                 "tags_json": '["semis","memory","earnings","risk","watch"]',
+                "tickers_json": '["NVDA","BRK.B"]',
                 "summary": "Reddit post summary.",
                 "interpretation": "Comment thread is divided.",
                 "importance": "low",
@@ -474,10 +486,74 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
 
     assert report["x_reports"][0]["posts"][0]["tags"] == ["ai", "growth", "cloud", "risk", "watch"]
     assert report["x_reports"][0]["posts"][0]["importance"] == "high"
+    assert report["x_reports"][0]["posts"][0]["tickers"] == ["NBIS", "HOOD"]
     reddit_post = report["reddit_report"]["posts"][0]
     assert reddit_post["importance"] == "low"
+    assert reddit_post["tickers"] == ["NVDA", "BRK.B"]
     assert reddit_post["comment_sentiment_counts"]["bullish"] == 1
     assert reddit_post["comments_sentiment"] == "bullish: 1, bearish: 0, mixed: 1, neutral: 0, unclear: 0"
+
+    matches = await repository.read_llm_social_posts_by_ticker(
+        profile="default",
+        ticker="nbis",
+        analysis_run_id="analysis-1",
+    )
+    assert [(match["source"], match["ticker"], match["source_id"]) for match in matches] == [("x", "NBIS", "123")]
+    reddit_matches = await repository.read_llm_social_posts_by_ticker(
+        profile="default",
+        ticker="brk.b",
+        analysis_run_id="analysis-1",
+    )
+    assert [(match["source"], match["ticker"], match["source_id"]) for match in reddit_matches] == [
+        ("reddit", "BRK.B", "abc")
+    ]
+
+    await repository.save_llm_x_post_analyses(
+        [
+            {
+                "analysis_run_id": "analysis-1",
+                "profile": "default",
+                "handle": "aleabitoreddit",
+                "status_id": "123",
+                "source_ref": "x1",
+                "url": "https://x.com/aleabitoreddit/status/123",
+                "posted_at_text": "2026-06-30T00:00:00+00:00",
+                "sentiment": "bearish",
+                "tags_json": '["ai","growth","cloud","risk","watch"]',
+                "tickers_json": '["MSTR"]',
+                "summary": "Updated X post summary.",
+                "interpretation": "Updated market relevance.",
+                "importance": "medium",
+                "confidence": "low",
+                "raw_response_json": "{}",
+                "analyzed_at": "2026-06-30T00:01:00+00:00",
+            }
+        ]
+    )
+    assert await repository.read_llm_social_posts_by_ticker(
+        profile="default",
+        ticker="NBIS",
+        analysis_run_id="analysis-1",
+    ) == []
+    replacement_matches = await repository.read_llm_social_posts_by_ticker(
+        profile="default",
+        ticker="MSTR",
+        analysis_run_id="analysis-1",
+    )
+    assert [(match["source"], match["ticker"], match["source_id"]) for match in replacement_matches] == [
+        ("x", "MSTR", "123")
+    ]
+
+    social_points = await repository.read_social_statistic_points(
+        profile="default",
+        ticker="MSTR",
+        source="x",
+        sentiment="bearish",
+        analysis_run_id="analysis-1",
+    )
+    assert [(point.source, point.ticker, point.sentiment, point.posted_at) for point in social_points] == [
+        ("x", "MSTR", "bearish", "2026-06-30T00:00:00+00:00")
+    ]
 
 
 async def test_downloaded_media_upsert_is_idempotent(tmp_path) -> None:
@@ -561,6 +637,10 @@ async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
     assert [trade.doc_id for trade in await repository.read_house_ptr_trades(asset_type="st")] == ["20024228"]
     assert [trade.doc_id for trade in await repository.read_house_ptr_trades(ticker="aapl")] == ["20024228"]
     assert await repository.read_house_ptr_trades(asset_type="GS") == []
+    trading_points = await repository.read_trading_statistic_points(ticker="aapl", action="purchase")
+    assert [(point.doc_id, point.stock_ticker, point.transaction_action, point.amount) for point in trading_points] == [
+        ("20024228", "AAPL", "purchase", "$1,001 - $15,000")
+    ]
 
 
 async def test_save_and_read_sec_13f_holdings(tmp_path) -> None:

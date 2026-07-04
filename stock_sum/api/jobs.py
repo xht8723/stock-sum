@@ -20,12 +20,15 @@ from stock_sum.collectors.factory import source_type_for_collector_id
 from stock_sum.llm.analysis import PROMPT_VERSION
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
-JobKind = Literal["report", "trading_report", "13f_report", "collect"]
+JobKind = Literal["report", "trading_report", "13f_report", "statistic", "collect"]
 ReportMode = Literal["html", "markdown", "discord", "text", "json"]
+StatisticMode = Literal["social", "trading"]
+StatisticBucket = Literal["auto", "day", "week", "month"]
 WorkerOperation = Literal[
     "http_report",
     "http_trading_report",
     "http_13f_report",
+    "http_statistic",
     "http_collect",
     "http_render_cached_report",
     "http_render_coalesced_report",
@@ -82,6 +85,25 @@ class Sec13FReportJobOptions:
     limit: int = 20
     title: str = "SEC 13F Holdings"
     force_refresh: bool = False
+
+
+@dataclass(frozen=True)
+class StatisticJobOptions:
+    """Options for a read-only statistic PNG job."""
+
+    mode: StatisticMode = "social"
+    profile: str = "default"
+    ticker: str | None = None
+    name: str | None = None
+    asset_type: str | None = None
+    action: Literal["purchase", "sell", "sell_partial", "all"] = "all"
+    source: Literal["x", "reddit", "all"] = "all"
+    sentiment: Literal["bullish", "bearish", "mixed", "neutral", "unclear", "all"] = "all"
+    start_date: str | None = None
+    end_date: str | None = None
+    days: int | None = None
+    bucket: StatisticBucket = "auto"
+    title: str = "Stock-Sum Statistic"
 
 
 @dataclass
@@ -235,6 +257,21 @@ class HttpJobManager:
         record = self._new_job(
             kind="13f_report",
             profile="13f",
+            mode=options.mode,
+        )
+        self._save(record)
+        self._refresh_memory_status(record.job_id)
+        return record
+
+    def create_statistic_job(self, options: StatisticJobOptions) -> HttpJobRecord:
+        """Create a queued statistic PNG job."""
+
+        _validate_statistic_filters(options)
+        if options.mode == "social":
+            self._validate_profile(options.profile)
+        record = self._new_job(
+            kind="statistic",
+            profile=options.profile if options.mode == "social" else "trading",
             mode=options.mode,
         )
         self._save(record)
@@ -620,6 +657,84 @@ class HttpJobManager:
                 summary_path=str(summary_path),
                 warnings=warning_data,
                 collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+            )
+        except Exception as exc:
+            self._mark_failed(job_id, str(exc))
+        finally:
+            await self._run_retention(job_id)
+            self._refresh_memory_status(job_id)
+
+    async def run_statistic_job(self, job_id: str, options: StatisticJobOptions) -> None:
+        """Run a statistic PNG job in a child worker unless configured otherwise."""
+
+        if self._use_subprocess_workers:
+            await self._run_worker_operation(job_id, "http_statistic", {"options": asdict(options)})
+            self._refresh_memory_status(job_id)
+            return
+        await self._run_statistic_job_in_process(job_id, options)
+
+    async def _run_statistic_job_in_process(self, job_id: str, options: StatisticJobOptions) -> None:
+        """Query SQLite statistic rows and render a PNG artifact."""
+
+        from stock_sum.statistics import (
+            build_social_statistic_summary,
+            build_trading_statistic_summary,
+            render_statistic_png,
+        )
+
+        try:
+            _validate_statistic_filters(options)
+            self._mark_running(job_id, phase="querying")
+            repository = self._repository_factory()
+            start_at, end_at = _statistic_date_window(options)
+            filter_data = _statistic_filter_data(options, start_at, end_at)
+            if options.mode == "social":
+                points = await repository.read_social_statistic_points(
+                    profile=options.profile,
+                    ticker=options.ticker,
+                    source=options.source,
+                    sentiment=None if options.sentiment == "all" else options.sentiment,
+                    posted_start=start_at,
+                    posted_end=end_at,
+                )
+                if not points:
+                    raise RuntimeError("No analyzed social posts matched the statistic filters.")
+                response_data = build_social_statistic_summary(
+                    points,
+                    filters=filter_data,
+                    bucket=options.bucket,
+                    title=options.title,
+                )
+            else:
+                points = await repository.read_trading_statistic_points(
+                    name_contains=options.name,
+                    transaction_start=start_at,
+                    transaction_end=end_at,
+                    asset_type=options.asset_type,
+                    ticker=options.ticker,
+                    action=None if options.action == "all" else options.action,
+                )
+                if not points:
+                    raise RuntimeError("No House PTR trades matched the statistic filters.")
+                response_data = build_trading_statistic_summary(
+                    points,
+                    filters=filter_data,
+                    bucket=options.bucket,
+                    title=options.title,
+                )
+                if not response_data.get("buckets"):
+                    raise RuntimeError("No House PTR trades with usable actions matched the statistic filters.")
+
+            summary_path = self._job_dir(job_id) / "summary.json"
+            self._write_json(summary_path, response_data)
+            self._update(job_id, phase="rendering", summary_path=str(summary_path))
+            artifact_path = self._job_dir(job_id) / "statistic.png"
+            render_statistic_png(response_data, artifact_path)
+            self._mark_succeeded(
+                job_id,
+                artifact_path=str(artifact_path),
+                artifact_media_type="image/png",
+                summary_path=str(summary_path),
             )
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
@@ -1279,7 +1394,35 @@ def _validate_13f_filters(options: Sec13FReportJobOptions) -> None:
         raise ValueError("13F report limit must be between 1 and 100.")
 
 
+def _validate_statistic_filters(options: StatisticJobOptions) -> None:
+    if options.mode not in {"social", "trading"}:
+        raise ValueError("Statistic mode must be social or trading.")
+    if options.bucket not in {"auto", "day", "week", "month"}:
+        raise ValueError("Statistic bucket must be auto, day, week, or month.")
+    if options.days is not None and options.days < 1:
+        raise ValueError("Statistic days must be a positive integer.")
+    if options.days is not None and (options.start_date or options.end_date):
+        raise ValueError("Statistic accepts either days or explicit start/end dates, not both.")
+    if options.mode == "social":
+        if options.source not in {"x", "reddit", "all"}:
+            raise ValueError("Statistic source must be x, reddit, or all.")
+        if options.sentiment not in {"bullish", "bearish", "mixed", "neutral", "unclear", "all"}:
+            raise ValueError("Statistic sentiment must be bullish, bearish, mixed, neutral, unclear, or all.")
+    if options.mode == "trading" and options.action not in {"purchase", "sell", "sell_partial", "all"}:
+        raise ValueError("Statistic action must be purchase, sell, sell_partial, or all.")
+    has_filter = any((options.ticker, options.name, options.asset_type, options.days, options.start_date, options.end_date))
+    if not has_filter:
+        raise ValueError("Statistic requires at least one filter: ticker, name, asset_type, days, or date range.")
+
+
 def _trading_date_window(options: TradingReportJobOptions) -> tuple[datetime | None, datetime | None]:
+    if options.days is not None:
+        now = datetime.now(timezone.utc)
+        return now - timedelta(days=options.days), now
+    return _parse_date_filter(options.start_date, end_of_day=False), _parse_date_filter(options.end_date, end_of_day=True)
+
+
+def _statistic_date_window(options: StatisticJobOptions) -> tuple[datetime | None, datetime | None]:
     if options.days is not None:
         now = datetime.now(timezone.utc)
         return now - timedelta(days=options.days), now
@@ -1346,6 +1489,29 @@ def _sec_13f_filter_data(
         "min_shares": options.min_shares,
         "limit": options.limit,
         "force_refresh": options.force_refresh,
+    }
+
+
+def _statistic_filter_data(
+    options: StatisticJobOptions,
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> dict[str, Any]:
+    return {
+        "mode": options.mode,
+        "profile": options.profile if options.mode == "social" else None,
+        "ticker": options.ticker,
+        "name": options.name,
+        "asset_type": options.asset_type,
+        "action": options.action,
+        "source": options.source if options.mode == "social" else None,
+        "sentiment": options.sentiment if options.mode == "social" else None,
+        "start_date": options.start_date,
+        "end_date": options.end_date,
+        "days": options.days,
+        "bucket": options.bucket,
+        "window_start": start_at.isoformat() if start_at else None,
+        "window_end": end_at.isoformat() if end_at else None,
     }
 
 

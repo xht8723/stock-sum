@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 import json
+import re
 
 from stock_sum.config.models import AppConfig
 from stock_sum.core.models import PipelineSectionWarning, Summary
@@ -16,10 +17,11 @@ from stock_sum.llm.base import LLMClient
 from stock_sum.llm.prompts import build_analysis_chunk_messages
 from stock_sum.storage.repository import StorageRepository
 
-PROMPT_VERSION = "llm-analysis-v2"
+PROMPT_VERSION = "llm-analysis-v3"
 SENTIMENTS = {"bullish", "bearish", "mixed", "neutral", "unclear"}
 CONFIDENCES = {"low", "medium", "high"}
 IMPORTANCE_LEVELS = {"low", "medium", "high"}
+TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9]{0,5}([.-][A-Z0-9]{1,3})?$")
 
 
 @dataclass(frozen=True)
@@ -274,6 +276,7 @@ def _x_analysis_rows(
                 "posted_at_text": source.get("time"),
                 "sentiment": _sentiment(post.get("sentiment")),
                 "tags_json": json.dumps(_tags(post.get("tags")), ensure_ascii=False),
+                "tickers_json": json.dumps(_tickers(post.get("tickers")), ensure_ascii=False),
                 "summary": _text(post.get("summary")),
                 "interpretation": _text(post.get("interpretation")),
                 "importance": _importance(post.get("importance") or post.get("priority")),
@@ -342,6 +345,7 @@ def _reddit_analysis_rows(
                 "created_at_text": input_post.get("time"),
                 "sentiment": _sentiment(parsed_post.get("sentiment")),
                 "tags_json": json.dumps(_tags(parsed_post.get("tags")), ensure_ascii=False),
+                "tickers_json": json.dumps(_tickers(parsed_post.get("tickers")), ensure_ascii=False),
                 "summary": _text(parsed_post.get("summary")),
                 "interpretation": _text(parsed_post.get("interpretation")),
                 "importance": _importance(parsed_post.get("importance") or parsed_post.get("priority")),
@@ -387,6 +391,24 @@ def _tags(value: Any) -> list[str]:
         if fallback not in tags:
             tags.append(fallback)
     return tags[:5]
+
+
+def _tickers(value: Any) -> list[str]:
+    tickers: list[str] = []
+    if not isinstance(value, list):
+        return tickers
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        ticker = item.strip().upper()
+        if ticker.startswith("$"):
+            ticker = ticker[1:].strip()
+        ticker = ticker.replace("/", ".")
+        if not ticker or ticker in tickers:
+            continue
+        if TICKER_PATTERN.fullmatch(ticker):
+            tickers.append(ticker)
+    return tickers
 
 
 def _text(value: Any) -> str:

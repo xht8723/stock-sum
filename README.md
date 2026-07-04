@@ -118,11 +118,14 @@ Canonical job endpoints:
 - `POST /v1/trading-reports/jobs/{mode}`
 - `POST /v1/13f-reports/jobs`
 - `POST /v1/13f-reports/jobs/{mode}`
+- `POST /v1/statistics/jobs`
 - `POST /v1/collect/{profile}/jobs`
 - `GET /v1/jobs/{job_id}`
 - `GET /v1/jobs/{job_id}/artifact`
 
 Supported modes are `html`, `markdown`, `discord`, `text`, and `json`.
+Statistics jobs are separate from report modes: they render a PNG chart plus a
+JSON summary sidecar from existing SQLite social analysis or House PTR rows.
 
 HTTP jobs are coordinated by the daemon but executed by one short-lived child
 worker process per job. The job status payload includes worker diagnostics such
@@ -153,10 +156,13 @@ API and exposes:
 - `/socialreport`
 - `/tradingreport`
 - `/13freport`
+- `/statistic`
 - `/stocksum ...` management commands
 
 The default report format is Discord-specific markdown sent inline in chunks.
 Other formats are returned as Discord file attachments.
+`/statistic` returns a PNG attachment for social sentiment or House disclosure
+activity over time.
 
 ## Runtime Data
 

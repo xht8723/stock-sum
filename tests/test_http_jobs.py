@@ -9,11 +9,18 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, Sec13FReportJobOptions, TradingReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions
 from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
-from stock_sum.storage.models import StoredCollectionRun, StoredHousePtrTradeRow, StoredSec13FHolding, StoredXPost
+from stock_sum.storage.models import (
+    StoredCollectionRun,
+    StoredHousePtrTradeRow,
+    StoredSec13FHolding,
+    StoredSocialStatisticPoint,
+    StoredTradingStatisticPoint,
+    StoredXPost,
+)
 from stock_sum.worker import _run_request
 
 
@@ -213,6 +220,47 @@ async def test_13f_report_job_renders_matching_holdings_without_llm(tmp_path) ->
     summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
     assert summary["sec_13f"][0]["issuer"] == "NVIDIA CORP"
     assert repository.last_sec_13f_filters["issuer"] == "nvidia"
+
+
+async def test_statistic_job_creates_png_and_summary(tmp_path, monkeypatch) -> None:
+    def fake_render(summary, output_path):
+        output_path.write_bytes(b"fake-png")
+
+    monkeypatch.setattr("stock_sum.statistics.render_statistic_png", fake_render)
+    repository = FakeRepository(
+        with_social_data=False,
+        social_statistic_points=[
+            StoredSocialStatisticPoint(
+                source="x",
+                profile="default",
+                ticker="NVDA",
+                source_id="1",
+                source_ref="x1",
+                label="aleabitoreddit",
+                sentiment="bullish",
+                importance="high",
+                posted_at="2026-06-30T00:00:00+00:00",
+                analyzed_at="2026-06-30T01:00:00+00:00",
+            )
+        ],
+    )
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        repository_factory=lambda: repository,
+    )
+    options = StatisticJobOptions(mode="social", ticker="NVDA", days=30)
+    job = manager.create_statistic_job(options)
+
+    await manager.run_statistic_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    assert status.status == "succeeded"
+    assert status.artifact_media_type == "image/png"
+    assert Path(status.artifact_path or "").read_bytes() == b"fake-png"
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["statistic_mode"] == "social"
+    assert summary["buckets"][0]["avg_sentiment_score"] == 1.0
 
 
 async def test_trading_report_sorts_rows_by_transaction_date(tmp_path) -> None:
@@ -765,10 +813,12 @@ class FakePipeline:
 
 
 class FakeRepository:
-    def __init__(self, *, with_social_data: bool, house_rows=None, sec_13f_rows=None) -> None:
+    def __init__(self, *, with_social_data: bool, house_rows=None, sec_13f_rows=None, social_statistic_points=None, trading_statistic_points=None) -> None:
         self.with_social_data = with_social_data
         self.house_rows = house_rows or []
         self.sec_13f_rows = sec_13f_rows or []
+        self.social_statistic_points = social_statistic_points or []
+        self.trading_statistic_points = trading_statistic_points or []
         self.x_analysis_rows = []
         self.reddit_post_analysis_rows = []
         self.reddit_comment_analysis_rows = []
@@ -881,6 +931,45 @@ class FakeRepository:
         if cusip:
             rows = [row for row in rows if (row.cusip or "").upper() == cusip.upper()]
         return rows[:limit]
+
+    async def read_social_statistic_points(
+        self,
+        *,
+        profile="default",
+        ticker=None,
+        source=None,
+        sentiment=None,
+        posted_start=None,
+        posted_end=None,
+        analysis_run_id=None,
+    ):
+        rows = list(self.social_statistic_points)
+        if ticker:
+            rows = [row for row in rows if (row.ticker or "").upper() == ticker.upper()]
+        if source and source != "all":
+            rows = [row for row in rows if row.source == source]
+        if sentiment:
+            rows = [row for row in rows if row.sentiment == sentiment]
+        return rows
+
+    async def read_trading_statistic_points(
+        self,
+        *,
+        name_contains=None,
+        transaction_start=None,
+        transaction_end=None,
+        asset_type=None,
+        ticker=None,
+        action=None,
+    ):
+        rows = list(self.trading_statistic_points or self.house_rows)
+        if ticker:
+            rows = [row for row in rows if (row.stock_ticker or "").upper() == ticker.upper()]
+        if asset_type:
+            rows = [row for row in rows if (row.asset_type_code or "").upper() == asset_type.upper()]
+        if action:
+            rows = [row for row in rows if row.transaction_action == action]
+        return rows
 
     async def start_llm_analysis_run(self, **kwargs):
         return None

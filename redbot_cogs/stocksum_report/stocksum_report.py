@@ -71,6 +71,11 @@ DISCORD_INLINE_LIMIT = 1900
 DISCORD_FAILURE_LIMIT = 1900
 SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
 SUPPORTED_SOCIAL_DETAILS = {"minimum", "medium", "full"}
+SUPPORTED_STATISTIC_MODES = {"social", "trading"}
+SUPPORTED_STATISTIC_BUCKETS = {"auto", "day", "week", "month"}
+SUPPORTED_STATISTIC_SOURCES = {"x", "reddit", "all"}
+SUPPORTED_STATISTIC_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral", "unclear", "all"}
+SUPPORTED_STATISTIC_ACTIONS = {"purchase", "sell", "sell_partial", "all"}
 SUPPORTED_PUT_CALL = {"PUT", "CALL"}
 MAX_SOURCE_FETCH_LIMIT = 300
 MAX_LOOKBACK_HOURS = 24 * 31
@@ -336,6 +341,65 @@ class StockSumHttpClient:
             if owns_session:
                 await session.close()
 
+    async def run_statistic(
+        self,
+        *,
+        mode: str,
+        profile: str = "default",
+        ticker: str | None = None,
+        name: str | None = None,
+        asset_type: str | None = None,
+        action: str = "all",
+        source: str = "all",
+        sentiment: str = "all",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        days: int | None = None,
+        bucket: str = "auto",
+    ) -> StockSumArtifact:
+        """Create, poll, and download one stock-sum statistic PNG job."""
+
+        if mode not in SUPPORTED_STATISTIC_MODES:
+            raise StockSumRequestError(f"Unsupported statistic mode: {mode}")
+        if bucket not in SUPPORTED_STATISTIC_BUCKETS:
+            raise StockSumRequestError(f"Unsupported statistic bucket: {bucket}")
+        if not any((ticker, name, asset_type, days, start_date, end_date)):
+            raise StockSumRequestError("statistic requires at least one filter: ticker, name, asset_type, days, or date range.")
+
+        session, owns_session = await self._session()
+        try:
+            payload = {
+                "mode": mode,
+                "profile": profile,
+                "ticker": ticker,
+                "name": name,
+                "asset_type": asset_type,
+                "action": action,
+                "source": source,
+                "sentiment": sentiment,
+                "start_date": start_date,
+                "end_date": end_date,
+                "days": days,
+                "bucket": bucket,
+            }
+            job = await self._create_statistic_job(
+                session,
+                payload={key: value for key, value in payload.items() if value is not None},
+            )
+            job_id = _required_string(job, "job_id")
+            status_payload = await self._poll_until_done(session, job_id)
+            content, content_type, filename = await self._download_artifact(session, job_id, "png")
+            return StockSumArtifact(
+                job_id=job_id,
+                filename=filename,
+                content_type=content_type,
+                content=content,
+                status=status_payload,
+            )
+        finally:
+            if owns_session:
+                await session.close()
+
     async def run_collect_profile(self, *, profile: str) -> dict[str, Any]:
         """Create and poll a collection-only job for one profile."""
 
@@ -448,6 +512,21 @@ class StockSumHttpClient:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         url = f"{self.base_url}/v1/13f-reports/jobs/{quote(output_format, safe='')}"
+        try:
+            async with session.post(url, json=payload, headers=self._headers()) as response:
+                return await self._json_response(response, expected_status=202)
+        except StockSumCogError:
+            raise
+        except Exception as exc:
+            raise StockSumRequestError(f"Could not reach stock-sum at {self.base_url}: {exc}") from exc
+
+    async def _create_statistic_job(
+        self,
+        session: _ClientSession,
+        *,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}/v1/statistics/jobs"
         try:
             async with session.post(url, json=payload, headers=self._headers()) as response:
                 return await self._json_response(response, expected_status=202)
@@ -878,6 +957,139 @@ class StockSumReport(commands.Cog):
 
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
         await _send_report_output(interaction, "Report generated.", private=private, file=file)
+
+    @app_commands.command(name="statistic", description="Generate a stock-sum statistics chart.")
+    @app_commands.describe(
+        mode="statistic mode",
+        ticker="stock ticker filter, e.g. NVDA",
+        name="House filer name filter for trading mode",
+        asset_type="House asset type code for trading mode, e.g. ST",
+        action="House trading action filter",
+        profile="social profile, default",
+        source="social source filter",
+        sentiment="social sentiment filter",
+        days="records within the last N days",
+        start_date="start date, YYYY-MM-DD",
+        end_date="end date, YYYY-MM-DD",
+        bucket="time bucket",
+        private="send the chart only to you",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="Social media", value="social"),
+            app_commands.Choice(name="Financial disclosures", value="trading"),
+        ],
+        action=[
+            app_commands.Choice(name="All", value="all"),
+            app_commands.Choice(name="Purchase", value="purchase"),
+            app_commands.Choice(name="Sell", value="sell"),
+            app_commands.Choice(name="Sell partial", value="sell_partial"),
+        ],
+        source=[
+            app_commands.Choice(name="All", value="all"),
+            app_commands.Choice(name="X", value="x"),
+            app_commands.Choice(name="Reddit", value="reddit"),
+        ],
+        sentiment=[
+            app_commands.Choice(name="All", value="all"),
+            app_commands.Choice(name="Bullish", value="bullish"),
+            app_commands.Choice(name="Bearish", value="bearish"),
+            app_commands.Choice(name="Mixed", value="mixed"),
+            app_commands.Choice(name="Neutral", value="neutral"),
+            app_commands.Choice(name="Unclear", value="unclear"),
+        ],
+        bucket=[
+            app_commands.Choice(name="Auto", value="auto"),
+            app_commands.Choice(name="Day", value="day"),
+            app_commands.Choice(name="Week", value="week"),
+            app_commands.Choice(name="Month", value="month"),
+        ],
+    )
+    async def statistic(
+        self,
+        interaction,
+        mode: str = "social",
+        ticker: str = "",
+        name: str = "",
+        asset_type: str = "",
+        action: str = "all",
+        profile: str = "default",
+        source: str = "all",
+        sentiment: str = "all",
+        days: int | None = None,
+        start_date: str = "",
+        end_date: str = "",
+        bucket: str = "auto",
+        private: bool = False,
+    ) -> None:
+        """Slash command handler for statistic PNG charts."""
+
+        mode_filter = mode.strip().lower()
+        ticker_filter = ticker.strip().upper() or None
+        name_filter = name.strip() or None
+        asset_type_filter = asset_type.strip().upper() or None
+        action_filter = action.strip().lower() or "all"
+        source_filter = source.strip().lower() or "all"
+        sentiment_filter = sentiment.strip().lower() or "all"
+        bucket_filter = bucket.strip().lower() or "auto"
+        start_filter, end_filter, error = _validate_date_range(
+            start_date,
+            end_date,
+            start_label="start_date",
+            end_label="end_date",
+        )
+        if error:
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_statistic_options(
+            mode=mode_filter,
+            profile=profile,
+            ticker=ticker_filter,
+            name=name_filter,
+            asset_type=asset_type_filter,
+            action=action_filter,
+            source=source_filter,
+            sentiment=sentiment_filter,
+            days=days,
+            start_date=start_filter,
+            end_date=end_filter,
+            bucket=bucket_filter,
+        ):
+            await _send_validation_error(interaction, error)
+            return
+
+        await interaction.response.send_message(
+            "Statistic chart is being generated, please wait a few minutes.",
+            ephemeral=private,
+        )
+        try:
+            artifact = await StockSumHttpClient.from_env().run_statistic(
+                mode=mode_filter,
+                profile=profile,
+                ticker=ticker_filter,
+                name=name_filter,
+                asset_type=asset_type_filter,
+                action=action_filter,
+                source=source_filter,
+                sentiment=sentiment_filter,
+                days=days,
+                start_date=start_filter,
+                end_date=end_filter,
+                bucket=bucket_filter,
+            )
+        except StockSumCogError as exc:
+            await _send_report_output(interaction, _failure_message(exc), private=private)
+            return
+
+        if discord is None:
+            await _send_report_output(
+                interaction,
+                "stock-sum statistic is ready, but discord.py is not available.",
+                private=private,
+            )
+            return
+        file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
+        await _send_report_output(interaction, "Statistic generated.", private=private, file=file)
 
     @profiles.command(name="list", description="List stock-sum profiles.")
     async def profiles_list(self, interaction) -> None:
@@ -1325,6 +1537,46 @@ def _validate_ticker(value: str | None) -> str | None:
     return None
 
 
+def _validate_statistic_options(
+    *,
+    mode: str,
+    profile: str,
+    ticker: str | None,
+    name: str | None,
+    asset_type: str | None,
+    action: str,
+    source: str,
+    sentiment: str,
+    days: int | None,
+    start_date: str | None,
+    end_date: str | None,
+    bucket: str,
+) -> str | None:
+    if mode not in SUPPORTED_STATISTIC_MODES:
+        return "statistic mode must be social or trading."
+    if error := _validate_profile_name(profile):
+        return error
+    if error := _validate_ticker(ticker):
+        return error
+    if error := _validate_asset_type(asset_type):
+        return error
+    if action not in SUPPORTED_STATISTIC_ACTIONS:
+        return "action must be purchase, sell, sell_partial, or all."
+    if source not in SUPPORTED_STATISTIC_SOURCES:
+        return "source must be x, reddit, or all."
+    if sentiment not in SUPPORTED_STATISTIC_SENTIMENTS:
+        return "sentiment must be bullish, bearish, mixed, neutral, unclear, or all."
+    if bucket not in SUPPORTED_STATISTIC_BUCKETS:
+        return "bucket must be auto, day, week, or month."
+    if error := _validate_positive_int(days, label="days", maximum=MAX_DAYS_FILTER):
+        return error
+    if days is not None and (start_date or end_date):
+        return "statistic accepts either days or explicit start/end dates, not both."
+    if not any((ticker, name, asset_type, days, start_date, end_date)):
+        return "statistic requires at least one filter: ticker, name, asset_type, days, or date range."
+    return None
+
+
 def _validate_13f_identifier(value: str | None, *, label: str, pattern: re.Pattern[str]) -> str | None:
     if value and not pattern.fullmatch(value):
         return f"{label} has an invalid format."
@@ -1463,5 +1715,5 @@ def _filename_from_response(headers: Any) -> str | None:
 
 
 def _default_filename(job_id: str, output_format: str) -> str:
-    extension = {"discord": "md", "html": "html", "markdown": "md", "text": "txt", "json": "json"}.get(output_format, "bin")
+    extension = {"discord": "md", "html": "html", "markdown": "md", "text": "txt", "json": "json", "png": "png"}.get(output_format, "bin")
     return f"stock-sum-report-{job_id}.{extension}"

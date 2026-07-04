@@ -9,7 +9,8 @@ import re
 from stock_sum.config.models import AppConfig, LLMConfig
 from stock_sum.core.models import Summary
 from stock_sum.core.summary_input import SummaryInput, SummaryXPost, SummaryXUserSection
-from stock_sum.llm.analysis import LLMAnalysisService, build_analysis_chunks
+from stock_sum.llm.analysis import LLMAnalysisService, PROMPT_VERSION, build_analysis_chunks
+from stock_sum.llm.analysis import _tickers
 from stock_sum.llm.prompts import build_analysis_chunk_messages
 
 
@@ -71,9 +72,26 @@ def test_analysis_prompt_requires_main_post_importance_without_comment_importanc
     content = "\n".join(message["content"] for message in messages)
 
     assert '"importance": "high|medium|low"' in content
+    assert '"tickers": [' in content
+    assert "return tickers as an array of uppercase stock symbols without $" in content
     assert "do not use confidence for importance" in content
     comment_schema = content.split('"comments":', 1)[1]
     assert '"importance"' not in comment_schema.split("Chunk JSON:", 1)[0]
+    assert '"tickers"' not in comment_schema.split("Chunk JSON:", 1)[0]
+
+
+def test_analysis_prompt_version_changes_for_ticker_schema() -> None:
+    assert PROMPT_VERSION == "llm-analysis-v3"
+
+
+def test_ticker_parser_normalizes_and_rejects_bad_values() -> None:
+    assert _tickers(["$NBIS", "hood", "BRK.B", "NBIS", "bad value", "", {"ticker": "AAPL"}]) == [
+        "NBIS",
+        "HOOD",
+        "BRK.B",
+    ]
+    assert _tickers(None) == []
+    assert _tickers("NBIS") == []
 
 
 async def test_llm_analysis_runs_chunks_with_bounded_concurrency() -> None:
@@ -125,6 +143,7 @@ async def test_llm_analysis_runs_chunks_with_bounded_concurrency() -> None:
     assert result.failed_count == 0
     assert [row["source_ref"] for row in repository.x_rows] == ["x1", "x2", "x3"]
     assert {row["importance"] for row in repository.x_rows} == {"high"}
+    assert {row["tickers_json"] for row in repository.x_rows} == {'["NBIS"]'}
     assert repository.finished["status"] == "succeeded"
 
 
@@ -156,6 +175,7 @@ class SlowFakeLLM:
                         "source_ref": source_ref,
                         "sentiment": "bullish",
                         "tags": ["market", "social", "signal", "risk", "watch"],
+                        "tickers": ["$NBIS", "bad value"],
                         "summary": "summary",
                         "interpretation": "interpretation",
                         "importance": "high",

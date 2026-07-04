@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, Sec13FReportJobOptions, TradingReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions
 from stock_sum.api.runtime_config import RuntimeConfigError, RuntimeConfigManager
 from stock_sum.config.loader import redacted_config
 from stock_sum.config.models import AppConfig
@@ -29,6 +29,11 @@ from stock_sum.retention import DataRetentionService
 
 ReportModePath = Literal["html", "markdown", "discord", "text", "json"]
 SocialReportDetailPath = Literal["minimum", "medium", "full"]
+StatisticModePath = Literal["social", "trading"]
+StatisticBucketPath = Literal["auto", "day", "week", "month"]
+StatisticSourcePath = Literal["x", "reddit", "all"]
+StatisticSentimentPath = Literal["bullish", "bearish", "mixed", "neutral", "unclear", "all"]
+StatisticActionPath = Literal["purchase", "sell", "sell_partial", "all"]
 
 
 class ReportJobRequest(BaseModel):
@@ -132,6 +137,24 @@ class Sec13FReportJobRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
     title: str = "SEC 13F Holdings"
     force_refresh: bool = False
+
+
+class StatisticJobRequest(BaseModel):
+    """HTTP request body for a statistic PNG job."""
+
+    mode: StatisticModePath = "social"
+    profile: str = "default"
+    ticker: str | None = None
+    name: str | None = None
+    asset_type: str | None = None
+    action: StatisticActionPath = "all"
+    source: StatisticSourcePath = "all"
+    sentiment: StatisticSentimentPath = "all"
+    start_date: str | None = None
+    end_date: str | None = None
+    days: int | None = Field(default=None, ge=1)
+    bucket: StatisticBucketPath = "auto"
+    title: str = "Stock-Sum Statistic"
 
 
 class LLMConfigPatchRequest(BaseModel):
@@ -258,6 +281,13 @@ def build_router(
         data["mode"] = mode
         return _create_13f_report_job(current_manager(), Sec13FReportJobRequest(**data), background_tasks)
 
+    @v1.post("/statistics/jobs", status_code=status.HTTP_202_ACCEPTED)
+    async def create_statistic_job(
+        background_tasks: BackgroundTasks,
+        request: StatisticJobRequest = StatisticJobRequest(),
+    ) -> dict:
+        return _create_statistic_job(current_manager(), request, background_tasks)
+
     def _create_social_report_job(
         manager: HttpJobManager | None,
         profile: str,
@@ -307,6 +337,23 @@ def build_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         background_tasks.add_task(manager.run_13f_report_job, job.job_id, options)
+        return _job_response(job.to_dict())
+
+    def _create_statistic_job(
+        manager: HttpJobManager | None,
+        request: StatisticJobRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict:
+        if manager is None:
+            raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
+        try:
+            options = StatisticJobOptions(**request.model_dump())
+            job = manager.create_statistic_job(options)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        background_tasks.add_task(manager.run_statistic_job, job.job_id, options)
         return _job_response(job.to_dict())
 
     @v1.post("/collect/{profile}/jobs", status_code=status.HTTP_202_ACCEPTED)

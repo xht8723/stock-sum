@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 import hashlib
 import json
+import re
 from typing import Any
 
 import aiosqlite
@@ -28,9 +29,13 @@ from stock_sum.storage.models import (
     StoredRedditComment,
     StoredRedditPost,
     StoredSec13FHolding,
+    StoredSocialStatisticPoint,
+    StoredTradingStatisticPoint,
     StoredXPost,
 )
 
+
+TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9]{0,5}([.-][A-Z0-9]{1,3})?$")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS collection_runs (
@@ -342,6 +347,7 @@ CREATE TABLE IF NOT EXISTS llm_x_post_analyses (
     posted_at_text TEXT,
     sentiment TEXT NOT NULL,
     tags_json TEXT NOT NULL,
+    tickers_json TEXT NOT NULL DEFAULT '[]',
     summary TEXT NOT NULL,
     interpretation TEXT NOT NULL,
     importance TEXT NOT NULL DEFAULT 'medium',
@@ -362,6 +368,7 @@ CREATE TABLE IF NOT EXISTS llm_reddit_post_analyses (
     created_at_text TEXT,
     sentiment TEXT NOT NULL,
     tags_json TEXT NOT NULL,
+    tickers_json TEXT NOT NULL DEFAULT '[]',
     summary TEXT NOT NULL,
     interpretation TEXT NOT NULL,
     importance TEXT NOT NULL DEFAULT 'medium',
@@ -370,6 +377,28 @@ CREATE TABLE IF NOT EXISTS llm_reddit_post_analyses (
     raw_response_json TEXT NOT NULL,
     analyzed_at TEXT NOT NULL,
     PRIMARY KEY (analysis_run_id, post_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_x_post_tickers (
+    analysis_run_id TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    handle TEXT NOT NULL,
+    status_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    PRIMARY KEY (analysis_run_id, status_id, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS llm_reddit_post_tickers (
+    analysis_run_id TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    subreddit TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    analyzed_at TEXT NOT NULL,
+    PRIMARY KEY (analysis_run_id, post_id, ticker)
 );
 
 CREATE TABLE IF NOT EXISTS llm_reddit_comment_analyses (
@@ -396,6 +425,12 @@ ON llm_x_post_analyses (profile, handle);
 
 CREATE INDEX IF NOT EXISTS idx_llm_reddit_post_analyses_profile
 ON llm_reddit_post_analyses (profile, subreddit);
+
+CREATE INDEX IF NOT EXISTS idx_llm_x_post_tickers_ticker_profile
+ON llm_x_post_tickers (ticker, profile);
+
+CREATE INDEX IF NOT EXISTS idx_llm_reddit_post_tickers_ticker_profile
+ON llm_reddit_post_tickers (ticker, profile);
 """
 
 
@@ -419,6 +454,7 @@ HOUSE_PTR_TRADE_COLUMNS = {
 
 LLM_POST_ANALYSIS_COLUMNS = {
     "importance": "TEXT NOT NULL DEFAULT 'medium'",
+    "tickers_json": "TEXT NOT NULL DEFAULT '[]'",
 }
 
 
@@ -567,6 +603,92 @@ async def _backfill_house_ptr_normalized_columns(db: aiosqlite.Connection) -> No
                 doc_id,
                 table_index,
                 row_index,
+            ),
+        )
+
+
+def _normalized_ticker(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    ticker = value.strip().upper()
+    if ticker.startswith("$"):
+        ticker = ticker[1:].strip()
+    ticker = ticker.replace("/", ".")
+    return ticker if TICKER_PATTERN.fullmatch(ticker) else None
+
+
+def _normalized_tickers(value: Any) -> list[str]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    else:
+        parsed = value
+    if not isinstance(parsed, list):
+        return []
+    tickers: list[str] = []
+    for item in parsed:
+        ticker = _normalized_ticker(item)
+        if ticker and ticker not in tickers:
+            tickers.append(ticker)
+    return tickers
+
+
+def _tickers_json(value: Any) -> str:
+    return json.dumps(_normalized_tickers(value), ensure_ascii=False)
+
+
+async def _replace_llm_x_ticker_rows(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        DELETE FROM llm_x_post_tickers
+        WHERE analysis_run_id = ? AND status_id = ?
+        """,
+        (row["analysis_run_id"], row["status_id"]),
+    )
+    for ticker in _normalized_tickers(row.get("tickers_json")):
+        await db.execute(
+            """
+            INSERT INTO llm_x_post_tickers (
+                analysis_run_id, profile, handle, status_id, ticker, source_ref, analyzed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["analysis_run_id"],
+                row["profile"],
+                row["handle"],
+                row["status_id"],
+                ticker,
+                row["source_ref"],
+                row["analyzed_at"],
+            ),
+        )
+
+
+async def _replace_llm_reddit_ticker_rows(db: aiosqlite.Connection, row: dict[str, Any]) -> None:
+    await db.execute(
+        """
+        DELETE FROM llm_reddit_post_tickers
+        WHERE analysis_run_id = ? AND post_id = ?
+        """,
+        (row["analysis_run_id"], row["post_id"]),
+    )
+    for ticker in _normalized_tickers(row.get("tickers_json")):
+        await db.execute(
+            """
+            INSERT INTO llm_reddit_post_tickers (
+                analysis_run_id, profile, subreddit, post_id, ticker, source_ref, analyzed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["analysis_run_id"],
+                row["profile"],
+                row["subreddit"],
+                row["post_id"],
+                ticker,
+                row["source_ref"],
+                row["analyzed_at"],
             ),
         )
 
@@ -768,15 +890,16 @@ class SQLiteStorageRepository:
             return
         async with aiosqlite.connect(self.sqlite_path) as db:
             for row in rows:
+                row = {**row, "tickers_json": _tickers_json(row.get("tickers_json"))}
                 await db.execute(
                     """
                     INSERT INTO llm_x_post_analyses (
                         analysis_run_id, profile, handle, status_id, source_ref, url,
-                        posted_at_text, sentiment, tags_json, summary, interpretation,
+                        posted_at_text, sentiment, tags_json, tickers_json, summary, interpretation,
                         importance, confidence, raw_response_json, analyzed_at
                     ) VALUES (
                         :analysis_run_id, :profile, :handle, :status_id, :source_ref, :url,
-                        :posted_at_text, :sentiment, :tags_json, :summary, :interpretation,
+                        :posted_at_text, :sentiment, :tags_json, :tickers_json, :summary, :interpretation,
                         :importance, :confidence, :raw_response_json, :analyzed_at
                     )
                     ON CONFLICT (analysis_run_id, status_id) DO UPDATE SET
@@ -785,6 +908,7 @@ class SQLiteStorageRepository:
                         posted_at_text = excluded.posted_at_text,
                         sentiment = excluded.sentiment,
                         tags_json = excluded.tags_json,
+                        tickers_json = excluded.tickers_json,
                         summary = excluded.summary,
                         interpretation = excluded.interpretation,
                         importance = excluded.importance,
@@ -794,6 +918,7 @@ class SQLiteStorageRepository:
                     """,
                     row,
                 )
+                await _replace_llm_x_ticker_rows(db, row)
             await db.commit()
 
     async def save_llm_reddit_post_analyses(self, rows: list[dict]) -> None:
@@ -804,15 +929,16 @@ class SQLiteStorageRepository:
             return
         async with aiosqlite.connect(self.sqlite_path) as db:
             for row in rows:
+                row = {**row, "tickers_json": _tickers_json(row.get("tickers_json"))}
                 await db.execute(
                     """
                     INSERT INTO llm_reddit_post_analyses (
                         analysis_run_id, profile, subreddit, post_id, source_ref, title,
-                        url, created_at_text, sentiment, tags_json, summary, interpretation,
+                        url, created_at_text, sentiment, tags_json, tickers_json, summary, interpretation,
                         importance, confidence, comment_sentiment_counts_json, raw_response_json, analyzed_at
                     ) VALUES (
                         :analysis_run_id, :profile, :subreddit, :post_id, :source_ref, :title,
-                        :url, :created_at_text, :sentiment, :tags_json, :summary, :interpretation,
+                        :url, :created_at_text, :sentiment, :tags_json, :tickers_json, :summary, :interpretation,
                         :importance, :confidence, :comment_sentiment_counts_json, :raw_response_json, :analyzed_at
                     )
                     ON CONFLICT (analysis_run_id, post_id) DO UPDATE SET
@@ -822,6 +948,7 @@ class SQLiteStorageRepository:
                         created_at_text = excluded.created_at_text,
                         sentiment = excluded.sentiment,
                         tags_json = excluded.tags_json,
+                        tickers_json = excluded.tickers_json,
                         summary = excluded.summary,
                         interpretation = excluded.interpretation,
                         importance = excluded.importance,
@@ -832,6 +959,7 @@ class SQLiteStorageRepository:
                     """,
                     row,
                 )
+                await _replace_llm_reddit_ticker_rows(db, row)
             await db.commit()
 
     async def save_llm_reddit_comment_analyses(self, rows: list[dict]) -> None:
@@ -875,6 +1003,78 @@ class SQLiteStorageRepository:
             x_reports = await _read_analysis_x_reports(db, profile, run_id)
             reddit_report = await _read_analysis_reddit_report(db, profile, run_id)
         return {"x_reports": x_reports, "reddit_report": reddit_report}
+
+    async def read_llm_social_posts_by_ticker(
+        self,
+        *,
+        profile: str,
+        ticker: str,
+        analysis_run_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read analyzed social posts linked to a normalized ticker."""
+
+        await self.initialize()
+        normalized_ticker = _normalized_ticker(ticker)
+        if not normalized_ticker:
+            return []
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            run_id = analysis_run_id or await _latest_analysis_run_id(db, profile)
+            if run_id is None:
+                return []
+            x_rows = await _read_x_posts_by_ticker(db, profile, run_id, normalized_ticker)
+            reddit_rows = await _read_reddit_posts_by_ticker(db, profile, run_id, normalized_ticker)
+        return [*x_rows, *reddit_rows]
+
+    async def read_social_statistic_points(
+        self,
+        *,
+        profile: str,
+        ticker: str | None = None,
+        source: str | None = None,
+        sentiment: str | None = None,
+        posted_start: datetime | None = None,
+        posted_end: datetime | None = None,
+        analysis_run_id: str | None = None,
+    ) -> list[StoredSocialStatisticPoint]:
+        """Read analyzed social rows for statistic charting."""
+
+        await self.initialize()
+        normalized_ticker = _normalized_ticker(ticker) if ticker else None
+        normalized_source = (source or "all").strip().lower()
+        normalized_sentiment = (sentiment or "").strip().lower() or None
+        if normalized_source not in {"all", "x", "reddit"}:
+            return []
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            run_id = analysis_run_id or await _latest_analysis_run_id(db, profile)
+            if run_id is None:
+                return []
+            points: list[StoredSocialStatisticPoint] = []
+            if normalized_source in {"all", "x"}:
+                points.extend(
+                    await _read_x_statistic_points(
+                        db,
+                        profile=profile,
+                        analysis_run_id=run_id,
+                        ticker=normalized_ticker,
+                        sentiment=normalized_sentiment,
+                        posted_start=posted_start,
+                        posted_end=posted_end,
+                    )
+                )
+            if normalized_source in {"all", "reddit"}:
+                points.extend(
+                    await _read_reddit_statistic_points(
+                        db,
+                        profile=profile,
+                        analysis_run_id=run_id,
+                        ticker=normalized_ticker,
+                        sentiment=normalized_sentiment,
+                        posted_start=posted_start,
+                        posted_end=posted_end,
+                    )
+                )
+        points.sort(key=lambda item: item.posted_at or "", reverse=True)
+        return points
 
     async def list_collection_runs(
         self,
@@ -1153,6 +1353,78 @@ class SQLiteStorageRepository:
             for row in rows
         ]
 
+    async def read_trading_statistic_points(
+        self,
+        *,
+        name_contains: str | None = None,
+        transaction_start: datetime | None = None,
+        transaction_end: datetime | None = None,
+        asset_type: str | None = None,
+        ticker: str | None = None,
+        action: str | None = None,
+    ) -> list[StoredTradingStatisticPoint]:
+        """Read House PTR trade rows for statistic charting."""
+
+        await self.initialize()
+        query = """
+            SELECT f.doc_id, COALESCE(f.display_name, f.name), f.state,
+                   r.asset, r.asset_type_code, r.stock_ticker, r.transaction_action,
+                   r.transaction_date, r.transaction_date_utc, r.amount
+            FROM raw_house_ptr_trade_rows r
+            JOIN raw_house_ptr_filings f ON f.doc_id = r.doc_id
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+        normalized_name = normalize_house_name(name_contains)
+        if normalized_name:
+            conditions.append("f.name_normalized LIKE ?")
+            params.append(f"%{normalized_name}%")
+        if transaction_start is not None:
+            conditions.append("r.transaction_date_utc >= ?")
+            params.append(_datetime_param(transaction_start))
+        if transaction_end is not None:
+            conditions.append("r.transaction_date_utc <= ?")
+            params.append(_datetime_param(transaction_end, end_of_day=True))
+        normalized_asset_type = _normalized_upper_filter(asset_type)
+        if normalized_asset_type:
+            conditions.append("UPPER(r.asset_type_code) = ?")
+            params.append(normalized_asset_type)
+        normalized_ticker = _normalized_upper_filter(ticker)
+        if normalized_ticker:
+            conditions.append("UPPER(r.stock_ticker) = ?")
+            params.append(normalized_ticker)
+        normalized_action = _normalized_action_filter(action)
+        if normalized_action:
+            conditions.append("r.transaction_action = ?")
+            params.append(normalized_action)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += """
+            ORDER BY COALESCE(r.transaction_date_utc, f.filing_date_utc, f.collected_at) DESC,
+                     f.doc_id DESC, r.table_index ASC, r.row_index ASC
+        """
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            cursor = await db.execute(query, params)
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return [
+            StoredTradingStatisticPoint(
+                doc_id=row[0],
+                name=row[1],
+                state=row[2],
+                asset=row[3],
+                asset_type_code=row[4],
+                stock_ticker=row[5],
+                transaction_action=row[6],
+                transaction_date=row[7],
+                transaction_date_utc=row[8],
+                amount=row[9],
+            )
+            for row in rows
+        ]
+
     async def read_sec_13f_holdings(
         self,
         *,
@@ -1331,6 +1603,13 @@ def _normalized_upper_filter(value: str | None) -> str | None:
     return normalized or None
 
 
+def _normalized_action_filter(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    return None if normalized == "all" else normalized
+
+
 def _content_hash(item: RawItem) -> str:
     payload = json.dumps(
         {
@@ -1431,7 +1710,7 @@ async def _latest_analysis_run_id(db: aiosqlite.Connection, profile: str) -> str
 async def _read_analysis_x_reports(db: aiosqlite.Connection, profile: str, analysis_run_id: str) -> list[dict[str, Any]]:
     cursor = await db.execute(
         """
-        SELECT handle, status_id, source_ref, url, posted_at_text, sentiment, tags_json,
+        SELECT handle, status_id, source_ref, url, posted_at_text, sentiment, tags_json, tickers_json,
                summary, interpretation, importance, confidence
         FROM llm_x_post_analyses
         WHERE profile = ? AND analysis_run_id = ?
@@ -1450,13 +1729,14 @@ async def _read_analysis_x_reports(db: aiosqlite.Connection, profile: str, analy
             {
                 "source_ref": row[2],
                 "source_id": row[1],
-                "title": _analysis_title(row[7]),
-                "post_summary": row[7],
+                "title": _analysis_title(row[8]),
+                "post_summary": row[8],
                 "sentiment": row[5],
                 "tags": _json_list(row[6]),
-                "interpretation": row[8],
-                "importance": _normalized_importance(row[9]),
-                "confidence": row[10],
+                "tickers": _normalized_tickers(row[7]),
+                "interpretation": row[9],
+                "importance": _normalized_importance(row[10]),
+                "confidence": row[11],
                 "urls": [row[3]] if row[3] else [],
             }
         )
@@ -1473,7 +1753,7 @@ async def _read_analysis_x_reports(db: aiosqlite.Connection, profile: str, analy
 async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, analysis_run_id: str) -> dict[str, Any]:
     cursor = await db.execute(
         """
-        SELECT subreddit, post_id, source_ref, title, url, created_at_text, sentiment, tags_json,
+        SELECT subreddit, post_id, source_ref, title, url, created_at_text, sentiment, tags_json, tickers_json,
                summary, interpretation, importance, confidence, comment_sentiment_counts_json
         FROM llm_reddit_post_analyses
         WHERE profile = ? AND analysis_run_id = ?
@@ -1490,7 +1770,7 @@ async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, a
     total_comments = 0
     totals = {"bullish": 0, "bearish": 0, "mixed": 0, "neutral": 0, "unclear": 0}
     for row in rows:
-        counts = _json_obj(row[12])
+        counts = _json_obj(row[13])
         for sentiment in totals:
             value = counts.get(sentiment)
             if isinstance(value, int):
@@ -1502,14 +1782,15 @@ async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, a
                 "source_id": row[1],
                 "subreddit": row[0],
                 "title": row[3],
-                "post_summary": row[8],
+                "post_summary": row[9],
                 "comments_sentiment": _comment_counts_text(counts),
                 "comment_sentiment_counts": counts,
                 "sentiment": row[6],
                 "tags": _json_list(row[7]),
-                "interpretation": row[9],
-                "importance": _normalized_importance(row[10]),
-                "confidence": row[11],
+                "tickers": _normalized_tickers(row[8]),
+                "interpretation": row[10],
+                "importance": _normalized_importance(row[11]),
+                "confidence": row[12],
                 "urls": [row[4]] if row[4] else [],
             }
         )
@@ -1520,6 +1801,221 @@ async def _read_analysis_reddit_report(db: aiosqlite.Connection, profile: str, a
         "comment_sentiment_counts": totals,
         "posts": posts,
     }
+
+
+async def _read_x_posts_by_ticker(
+    db: aiosqlite.Connection,
+    profile: str,
+    analysis_run_id: str,
+    ticker: str,
+) -> list[dict[str, Any]]:
+    cursor = await db.execute(
+        """
+        SELECT t.ticker, x.handle, x.status_id, x.source_ref, x.url, x.summary,
+               x.sentiment, x.importance, x.confidence, x.analyzed_at
+        FROM llm_x_post_tickers t
+        JOIN llm_x_post_analyses x
+          ON x.analysis_run_id = t.analysis_run_id
+         AND x.status_id = t.status_id
+        WHERE t.profile = ? AND t.analysis_run_id = ? AND t.ticker = ?
+        ORDER BY x.posted_at_text DESC, x.status_id DESC
+        """,
+        (profile, analysis_run_id, ticker),
+    )
+    try:
+        rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+    return [
+        {
+            "source": "x",
+            "ticker": row[0],
+            "handle": row[1],
+            "source_id": row[2],
+            "source_ref": row[3],
+            "url": row[4],
+            "summary": row[5],
+            "sentiment": row[6],
+            "importance": _normalized_importance(row[7]),
+            "confidence": row[8],
+            "analyzed_at": row[9],
+        }
+        for row in rows
+    ]
+
+
+async def _read_reddit_posts_by_ticker(
+    db: aiosqlite.Connection,
+    profile: str,
+    analysis_run_id: str,
+    ticker: str,
+) -> list[dict[str, Any]]:
+    cursor = await db.execute(
+        """
+        SELECT t.ticker, r.subreddit, r.post_id, r.source_ref, r.url, r.title,
+               r.summary, r.sentiment, r.importance, r.confidence, r.analyzed_at
+        FROM llm_reddit_post_tickers t
+        JOIN llm_reddit_post_analyses r
+          ON r.analysis_run_id = t.analysis_run_id
+         AND r.post_id = t.post_id
+        WHERE t.profile = ? AND t.analysis_run_id = ? AND t.ticker = ?
+        ORDER BY r.created_at_text DESC, r.post_id DESC
+        """,
+        (profile, analysis_run_id, ticker),
+    )
+    try:
+        rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+    return [
+        {
+            "source": "reddit",
+            "ticker": row[0],
+            "subreddit": row[1],
+            "source_id": row[2],
+            "source_ref": row[3],
+            "url": row[4],
+            "title": row[5],
+            "summary": row[6],
+            "sentiment": row[7],
+            "importance": _normalized_importance(row[8]),
+            "confidence": row[9],
+            "analyzed_at": row[10],
+        }
+        for row in rows
+    ]
+
+
+async def _read_x_statistic_points(
+    db: aiosqlite.Connection,
+    *,
+    profile: str,
+    analysis_run_id: str,
+    ticker: str | None,
+    sentiment: str | None,
+    posted_start: datetime | None,
+    posted_end: datetime | None,
+) -> list[StoredSocialStatisticPoint]:
+    if ticker:
+        select_ticker = "t.ticker"
+        join_ticker = """
+            JOIN llm_x_post_tickers t
+              ON t.analysis_run_id = x.analysis_run_id
+             AND t.profile = x.profile
+             AND t.status_id = x.status_id
+        """
+        conditions = ["x.profile = ?", "x.analysis_run_id = ?", "t.ticker = ?"]
+        params: list[Any] = [profile, analysis_run_id, ticker]
+    else:
+        select_ticker = "NULL"
+        join_ticker = ""
+        conditions = ["x.profile = ?", "x.analysis_run_id = ?"]
+        params = [profile, analysis_run_id]
+    if sentiment:
+        conditions.append("x.sentiment = ?")
+        params.append(sentiment)
+    if posted_start is not None:
+        conditions.append("x.posted_at_text >= ?")
+        params.append(_datetime_param(posted_start))
+    if posted_end is not None:
+        conditions.append("x.posted_at_text <= ?")
+        params.append(_datetime_param(posted_end, end_of_day=True))
+    cursor = await db.execute(
+        f"""
+        SELECT {select_ticker}, x.status_id, x.source_ref, x.handle, x.sentiment,
+               x.importance, x.posted_at_text, x.analyzed_at
+        FROM llm_x_post_analyses x
+        {join_ticker}
+        WHERE {" AND ".join(conditions)}
+        ORDER BY x.posted_at_text DESC, x.status_id DESC
+        """,
+        params,
+    )
+    try:
+        rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+    return [
+        StoredSocialStatisticPoint(
+            source="x",
+            profile=profile,
+            ticker=row[0],
+            source_id=row[1],
+            source_ref=row[2],
+            label=row[3],
+            sentiment=row[4],
+            importance=_normalized_importance(row[5]),
+            posted_at=row[6],
+            analyzed_at=row[7],
+        )
+        for row in rows
+    ]
+
+
+async def _read_reddit_statistic_points(
+    db: aiosqlite.Connection,
+    *,
+    profile: str,
+    analysis_run_id: str,
+    ticker: str | None,
+    sentiment: str | None,
+    posted_start: datetime | None,
+    posted_end: datetime | None,
+) -> list[StoredSocialStatisticPoint]:
+    if ticker:
+        select_ticker = "t.ticker"
+        join_ticker = """
+            JOIN llm_reddit_post_tickers t
+              ON t.analysis_run_id = r.analysis_run_id
+             AND t.profile = r.profile
+             AND t.post_id = r.post_id
+        """
+        conditions = ["r.profile = ?", "r.analysis_run_id = ?", "t.ticker = ?"]
+        params: list[Any] = [profile, analysis_run_id, ticker]
+    else:
+        select_ticker = "NULL"
+        join_ticker = ""
+        conditions = ["r.profile = ?", "r.analysis_run_id = ?"]
+        params = [profile, analysis_run_id]
+    if sentiment:
+        conditions.append("r.sentiment = ?")
+        params.append(sentiment)
+    if posted_start is not None:
+        conditions.append("r.created_at_text >= ?")
+        params.append(_datetime_param(posted_start))
+    if posted_end is not None:
+        conditions.append("r.created_at_text <= ?")
+        params.append(_datetime_param(posted_end, end_of_day=True))
+    cursor = await db.execute(
+        f"""
+        SELECT {select_ticker}, r.post_id, r.source_ref, r.subreddit, r.sentiment,
+               r.importance, r.created_at_text, r.analyzed_at
+        FROM llm_reddit_post_analyses r
+        {join_ticker}
+        WHERE {" AND ".join(conditions)}
+        ORDER BY r.created_at_text DESC, r.post_id DESC
+        """,
+        params,
+    )
+    try:
+        rows = await cursor.fetchall()
+    finally:
+        await cursor.close()
+    return [
+        StoredSocialStatisticPoint(
+            source="reddit",
+            profile=profile,
+            ticker=row[0],
+            source_id=row[1],
+            source_ref=row[2],
+            label=row[3],
+            sentiment=row[4],
+            importance=_normalized_importance(row[5]),
+            posted_at=row[6],
+            analyzed_at=row[7],
+        )
+        for row in rows
+    ]
 
 
 def _analysis_title(summary: str | None) -> str:

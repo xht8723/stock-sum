@@ -141,6 +141,32 @@ def test_trading_report_accepts_asset_type_and_ticker_filters(tmp_path) -> None:
     assert manager.last_trading_ticker == "amzn"
 
 
+def test_statistic_job_accepts_filters(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    response = client.post(
+        "/v1/statistics/jobs",
+        json={"mode": "social", "ticker": "NVDA", "days": 30, "bucket": "auto"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "job-statistic"
+    assert manager.last_statistic_mode == "social"
+    assert manager.last_statistic_ticker == "NVDA"
+
+
+def test_statistic_job_rejects_missing_filters(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
+
+    response = client.post("/v1/statistics/jobs", json={"mode": "social"})
+
+    assert response.status_code == 422
+    assert "requires at least one filter" in response.json()["detail"]
+
+
 @dataclass
 class FakeJob:
     job_id: str
@@ -167,6 +193,8 @@ class FakeJobManager:
         self.last_trading_limit: int | None = None
         self.last_trading_asset_type: str | None = None
         self.last_trading_ticker: str | None = None
+        self.last_statistic_mode: str | None = None
+        self.last_statistic_ticker: str | None = None
 
     def create_report_job(self, profile: str, options) -> FakeJob:
         if profile != "default":
@@ -182,6 +210,15 @@ class FakeJobManager:
         self.last_trading_asset_type = options.asset_type
         self.last_trading_ticker = options.ticker
         job = FakeJob(job_id="job-trading", kind="trading_report", profile="trading")
+        self.jobs[job.job_id] = job
+        return job
+
+    def create_statistic_job(self, options) -> FakeJob:
+        if not any((options.ticker, options.name, options.asset_type, options.days, options.start_date, options.end_date)):
+            raise ValueError("Statistic requires at least one filter: ticker, name, asset_type, days, or date range.")
+        self.last_statistic_mode = options.mode
+        self.last_statistic_ticker = options.ticker
+        job = FakeJob(job_id="job-statistic", kind="statistic", profile=options.profile)
         self.jobs[job.job_id] = job
         return job
 
@@ -217,6 +254,18 @@ class FakeJobManager:
         job.phase = "succeeded"
         job.artifact_path = str(artifact)
         job.artifact_media_type = "text/markdown; charset=utf-8"
+        job.summary_path = str(summary)
+
+    async def run_statistic_job(self, job_id: str, options) -> None:
+        artifact = self.tmp_path / "statistic.png"
+        artifact.write_bytes(b"png")
+        summary = self.tmp_path / "statistic-summary.json"
+        summary.write_text('{"report_type":"statistic"}', encoding="utf-8")
+        job = self.jobs[job_id]
+        job.status = "succeeded"
+        job.phase = "succeeded"
+        job.artifact_path = str(artifact)
+        job.artifact_media_type = "image/png"
         job.summary_path = str(summary)
 
     async def run_collect_job(self, job_id: str) -> None:
