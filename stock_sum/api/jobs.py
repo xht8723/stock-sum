@@ -10,25 +10,26 @@ from uuid import uuid4
 import asyncio
 import hashlib
 import json
+import sys
+import time as monotonic_time
 
 from stock_sum.config.models import AppConfig
 from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
 from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID, SEC_13F_SOURCE_TYPE
 from stock_sum.collectors.factory import source_type_for_collector_id
-from stock_sum.core.context import RuntimeContext
-from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
-from stock_sum.core.pipeline import ReportPipeline
-from stock_sum.llm.analysis import LLMAnalysisService, PROMPT_VERSION
-from stock_sum.llm.registry import build_llm_client
-from stock_sum.media.downloader import MediaDownloader
-from stock_sum.retention import DataRetentionService
-from stock_sum.reports.presentation import PresentationRenderer
-from stock_sum.reports.summary_input import SummaryInputBuilder
-from stock_sum.storage.sqlite import SQLiteStorageRepository
+from stock_sum.llm.analysis import PROMPT_VERSION
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 JobKind = Literal["report", "trading_report", "13f_report", "collect"]
 ReportMode = Literal["html", "markdown", "discord", "text", "json"]
+WorkerOperation = Literal[
+    "http_report",
+    "http_trading_report",
+    "http_13f_report",
+    "http_collect",
+    "http_render_cached_report",
+    "http_render_coalesced_report",
+]
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,12 @@ class HttpJobRecord:
     inflight_reports: int | None = None
     max_in_memory_jobs: int | None = None
     evicted_in_memory_jobs: int | None = None
+    worker_pid: int | None = None
+    worker_started_at: str | None = None
+    worker_finished_at: str | None = None
+    worker_exit_code: int | None = None
+    worker_runtime_seconds: float | None = None
+    worker_mode: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe representation."""
@@ -143,19 +150,56 @@ class HttpJobManager:
         llm_client_factory: Callable[[], Any] | None = None,
         renderer_factory: Callable[[str], PresentationRenderer] | None = None,
         retention_service_factory: Callable[[], DataRetentionService] | None = None,
+        use_subprocess_workers: bool | None = None,
+        recover_stale_jobs: bool = True,
     ) -> None:
         self.config = config
         self.artifact_dir = Path(config.server.artifact_dir)
         self._jobs: dict[str, HttpJobRecord] = {}
         self._inflight_reports: dict[str, _InFlightReport] = {}
         self._inflight_lock = asyncio.Lock()
-        self._pipeline_factory = pipeline_factory or (
-            lambda: ReportPipeline(RuntimeContext(config=config), repository=self._repository_factory())
+        self._repository_factory = repository_factory or self._default_repository_factory
+        self._pipeline_factory = pipeline_factory or self._default_pipeline_factory
+        self._llm_client_factory = llm_client_factory or self._default_llm_client_factory
+        self._renderer_factory = renderer_factory or self._default_renderer_factory
+        self._retention_service_factory = retention_service_factory or self._default_retention_service_factory
+        self._use_subprocess_workers = (
+            pipeline_factory is None
+            and repository_factory is None
+            and llm_client_factory is None
+            and renderer_factory is None
+            and retention_service_factory is None
+            if use_subprocess_workers is None
+            else use_subprocess_workers
         )
-        self._repository_factory = repository_factory or (lambda: SQLiteStorageRepository(config.storage.sqlite_path))
-        self._llm_client_factory = llm_client_factory or (lambda: build_llm_client(config.llm))
-        self._renderer_factory = renderer_factory or (lambda title: PresentationRenderer(title=title))
-        self._retention_service_factory = retention_service_factory or (lambda: DataRetentionService(config))
+        if recover_stale_jobs:
+            self._mark_stale_running_jobs_failed()
+
+    def _default_repository_factory(self):
+        from stock_sum.storage.sqlite import SQLiteStorageRepository
+
+        return SQLiteStorageRepository(self.config.storage.sqlite_path)
+
+    def _default_pipeline_factory(self):
+        from stock_sum.core.context import RuntimeContext
+        from stock_sum.core.pipeline import ReportPipeline
+
+        return ReportPipeline(RuntimeContext(config=self.config), repository=self._repository_factory())
+
+    def _default_llm_client_factory(self):
+        from stock_sum.llm.registry import build_llm_client
+
+        return build_llm_client(self.config.llm)
+
+    def _default_renderer_factory(self, title: str):
+        from stock_sum.reports.presentation import PresentationRenderer
+
+        return PresentationRenderer(title=title)
+
+    def _default_retention_service_factory(self):
+        from stock_sum.retention import DataRetentionService
+
+        return DataRetentionService(self.config)
 
     def create_report_job(self, profile: str, options: ReportJobOptions) -> HttpJobRecord:
         """Create a queued social-media report job."""
@@ -210,14 +254,23 @@ class HttpJobManager:
         """Return a known in-memory or persisted job record."""
 
         if job_id in self._jobs:
+            if self._jobs[job_id].status in {"queued", "running"}:
+                reloaded = self._load_job_from_disk(job_id)
+                if reloaded is not None:
+                    return reloaded
             return self._jobs[job_id]
+        record = self._load_job_from_disk(job_id)
+        if record is not None:
+            self._refresh_memory_status(job_id)
+        return record
+
+    def _load_job_from_disk(self, job_id: str) -> HttpJobRecord | None:
         path = self._job_dir(job_id) / "status.json"
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
         record = _job_record_from_dict(data)
         self._jobs[job_id] = record
-        self._refresh_memory_status(job_id)
         return record
 
     def memory_status(self, *, evicted_in_memory_jobs: int | None = None) -> dict[str, int]:
@@ -233,7 +286,47 @@ class HttpJobManager:
         return data
 
     async def run_report_job(self, job_id: str, options: ReportJobOptions) -> None:
+        """Run a social report job in a child worker unless test factories request in-process execution."""
+
+        if not self._use_subprocess_workers:
+            await self._run_report_job_in_process(job_id, options)
+            return
+
+        is_inflight_leader = False
+        cache_key: str | None = None
+        try:
+            self._mark_running(job_id, phase="cache_lookup")
+            job = self._require_job(job_id)
+            cache_key = job.cache_key or self._report_cache_key(job.profile, options)
+            self._update(job_id, cache_key=cache_key)
+            cache_hit = self._find_report_cache_hit(job_id, cache_key)
+            if cache_hit is not None:
+                await self._run_worker_operation(
+                    job_id,
+                    "http_render_cached_report",
+                    {"options": asdict(options), "cache_hit_job_id": cache_hit.job_id},
+                )
+                return
+
+            is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
+            if not is_inflight_leader:
+                await self._wait_for_coalesced_report_worker(job_id, inflight_report, options)
+                return
+
+            await self._run_worker_operation(job_id, "http_report", {"options": asdict(options)})
+        except Exception as exc:
+            self._mark_failed(job_id, str(exc))
+        finally:
+            if is_inflight_leader and cache_key is not None:
+                await self._release_inflight_report(cache_key, job_id)
+            self._refresh_memory_status(job_id)
+
+    async def _run_report_job_in_process(self, job_id: str, options: ReportJobOptions) -> None:
         """Run social collection, payload assembly, LLM summarization, and rendering."""
+
+        from stock_sum.llm.analysis import LLMAnalysisService
+        from stock_sum.media.downloader import MediaDownloader
+        from stock_sum.reports.summary_input import SummaryInputBuilder
 
         is_inflight_leader = False
         cache_key: str | None = None
@@ -325,7 +418,18 @@ class HttpJobManager:
             self._refresh_memory_status(job_id)
 
     async def run_trading_report_job(self, job_id: str, options: TradingReportJobOptions) -> None:
+        """Run a House PTR trading report in a child worker unless configured otherwise."""
+
+        if self._use_subprocess_workers:
+            await self._run_worker_operation(job_id, "http_trading_report", {"options": asdict(options)})
+            self._refresh_memory_status(job_id)
+            return
+        await self._run_trading_report_job_in_process(job_id, options)
+
+    async def _run_trading_report_job_in_process(self, job_id: str, options: TradingReportJobOptions) -> None:
         """Run a House PTR trading disclosure report without LLM analysis."""
+
+        from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
 
         try:
             _validate_trading_filters(options)
@@ -414,7 +518,18 @@ class HttpJobManager:
             self._refresh_memory_status(job_id)
 
     async def run_13f_report_job(self, job_id: str, options: Sec13FReportJobOptions) -> None:
+        """Run an SEC 13F report in a child worker unless configured otherwise."""
+
+        if self._use_subprocess_workers:
+            await self._run_worker_operation(job_id, "http_13f_report", {"options": asdict(options)})
+            self._refresh_memory_status(job_id)
+            return
+        await self._run_13f_report_job_in_process(job_id, options)
+
+    async def _run_13f_report_job_in_process(self, job_id: str, options: Sec13FReportJobOptions) -> None:
         """Run an SEC 13F holdings report without LLM analysis."""
+
+        from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
 
         try:
             _validate_13f_filters(options)
@@ -513,6 +628,15 @@ class HttpJobManager:
             self._refresh_memory_status(job_id)
 
     async def run_collect_job(self, job_id: str) -> None:
+        """Run a collection job in a child worker unless configured otherwise."""
+
+        if self._use_subprocess_workers:
+            await self._run_worker_operation(job_id, "http_collect", {})
+            self._refresh_memory_status(job_id)
+            return
+        await self._run_collect_job_in_process(job_id)
+
+    async def _run_collect_job_in_process(self, job_id: str) -> None:
         """Run collection-only job and persist its JSON artifact."""
 
         try:
@@ -663,6 +787,104 @@ class HttpJobManager:
                     **self.memory_status(evicted_in_memory_jobs=0),
                 },
             )
+
+    async def _run_worker_operation(self, job_id: str, operation: WorkerOperation, payload: dict[str, Any]) -> None:
+        request_path = self._write_worker_request(job_id, operation, payload)
+        started_at = _utc_now()
+        started = monotonic_time.monotonic()
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "stock_sum.worker",
+            "--request",
+            str(request_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._update(
+            job_id,
+            worker_pid=process.pid,
+            worker_started_at=started_at,
+            worker_finished_at=None,
+            worker_exit_code=None,
+            worker_runtime_seconds=None,
+            worker_mode="subprocess",
+        )
+        stdout, stderr = await process.communicate()
+        runtime_seconds = round(monotonic_time.monotonic() - started, 3)
+        self._load_job_from_disk(job_id)
+        self._update(
+            job_id,
+            worker_pid=process.pid,
+            worker_started_at=started_at,
+            worker_finished_at=_utc_now(),
+            worker_exit_code=process.returncode,
+            worker_runtime_seconds=runtime_seconds,
+            worker_mode="subprocess",
+        )
+        if process.returncode != 0:
+            job = self.get_job(job_id)
+            if job is None or job.status not in {"succeeded", "failed"}:
+                detail = _worker_error_detail(stdout, stderr)
+                self._mark_failed(job_id, detail or f"Worker exited with code {process.returncode}.")
+
+    def _write_worker_request(self, job_id: str, operation: WorkerOperation, payload: dict[str, Any]) -> Path:
+        request_path = self._job_dir(job_id) / "worker-request.json"
+        data = {
+            "schema_version": 1,
+            "operation": operation,
+            "job_id": job_id,
+            "config": self.config.model_dump(mode="json"),
+            "payload": payload,
+        }
+        self._write_json(request_path, data)
+        return request_path
+
+    async def _wait_for_coalesced_report_worker(
+        self,
+        job_id: str,
+        report: _InFlightReport | None,
+        options: ReportJobOptions,
+    ) -> None:
+        if report is None:
+            raise RuntimeError("No in-flight report was available to coalesce.")
+        wait_started = datetime.now(timezone.utc)
+        self._update(job_id, phase="waiting_for_inflight", coalesced_from_job_id=report.leader_job_id)
+        await report.done.wait()
+        wait_seconds = max(0, int((datetime.now(timezone.utc) - wait_started).total_seconds()))
+        self._update(job_id, coalesced_wait_seconds=wait_seconds)
+        leader = self.get_job(report.leader_job_id)
+        if leader is None:
+            raise RuntimeError(f"Coalesced report leader disappeared: {report.leader_job_id}")
+        if leader.status != "succeeded":
+            detail = f": {leader.error}" if leader.error else "."
+            raise RuntimeError(f"Coalesced report leader {leader.job_id} failed{detail}")
+        if not leader.summary_path or not Path(leader.summary_path).exists():
+            raise RuntimeError(f"Coalesced report leader {leader.job_id} did not produce a summary.")
+        await self._run_worker_operation(
+            job_id,
+            "http_render_coalesced_report",
+            {"options": asdict(options), "leader_job_id": leader.job_id, "wait_seconds": wait_seconds},
+        )
+
+    def _mark_stale_running_jobs_failed(self) -> int:
+        count = 0
+        for status_path in self.artifact_dir.glob("*/status.json"):
+            try:
+                data = json.loads(status_path.read_text(encoding="utf-8"))
+                record = _job_record_from_dict(data)
+            except (OSError, TypeError, ValueError):
+                continue
+            if record.status not in {"queued", "running"}:
+                continue
+            record.status = "failed"
+            record.phase = "failed"
+            record.error = "Job was interrupted by daemon restart before completion."
+            record.finished_at = _utc_now()
+            record.updated_at = record.finished_at
+            self._save(record)
+            count += 1
+        return count
 
     def _update(self, job_id: str, **changes: Any) -> HttpJobRecord:
         job = self._require_job(job_id)
@@ -1130,6 +1352,15 @@ def _sec_13f_filter_data(
 def _job_record_from_dict(data: dict[str, Any]) -> HttpJobRecord:
     allowed = {item.name for item in fields(HttpJobRecord)}
     return HttpJobRecord(**{key: value for key, value in data.items() if key in allowed})
+
+
+def _worker_error_detail(stdout: bytes, stderr: bytes) -> str:
+    text = (stderr or stdout).decode("utf-8", errors="replace").strip()
+    if not text:
+        return ""
+    lines = [line for line in text.splitlines() if line.strip()]
+    tail = "\n".join(lines[-10:])
+    return f"Worker failed:\n{tail}"
 
 
 def _jsonable(value: Any) -> Any:

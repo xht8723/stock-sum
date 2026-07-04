@@ -155,6 +155,23 @@ stock-sum retention prune --dry-run --config config.toml
 Managed cleanup covers HTTP job artifacts and downloaded media. SQLite source
 history and provider response records are preserved.
 
+## 1GB VM Runtime Profile
+
+The shipped defaults favor daemon stability on small VMs:
+
+- HTTP jobs spawn one short-lived child worker process per heavy job, so Python
+  heap and parser/LLM memory are reclaimed when the worker exits.
+- The daemon keeps only bounded job metadata in memory and reloads old status
+  from disk when needed.
+- House PTR PDF work defaults to `download_concurrency = 1` and
+  `parse_concurrency = 1`.
+- Image downloads are disabled by default and retention caps generated data at
+  `268435456` bytes.
+
+If a VM is rebooted or the daemon restarts mid-job, stale `queued` or `running`
+jobs are marked failed on startup; rerun the report rather than treating the old
+job as active.
+
 ## Troubleshooting
 
 Missing secrets:

@@ -83,8 +83,8 @@ comments_per_post = 10
 enabled = true
 year = 0
 refresh_ttl_seconds = 21600
-download_concurrency = 4
-parse_concurrency = 2
+download_concurrency = 1
+parse_concurrency = 1
 zip_url_template = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip"
 pdf_url_template = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf"
 

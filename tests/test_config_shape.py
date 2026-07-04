@@ -52,8 +52,8 @@ def test_example_config_is_valid() -> None:
     assert config.sources.subreddits[0].comments_per_post == 10
     assert config.sources.house_ptr.enabled is True
     assert config.sources.house_ptr.year == 0
-    assert config.sources.house_ptr.download_concurrency == 4
-    assert config.sources.house_ptr.parse_concurrency == 2
+    assert config.sources.house_ptr.download_concurrency == 1
+    assert config.sources.house_ptr.parse_concurrency == 1
     assert config.sources.sec_13f.enabled is True
     assert config.sources.sec_13f.refresh_ttl_seconds == 21600
     assert config.sources.sec_13f.page_url == "https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets"

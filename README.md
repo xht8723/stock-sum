@@ -41,7 +41,7 @@ Important sections:
 
 - `[service]`: process name and collector concurrency.
 - `[server]`: local HTTP host, port, artifact directory, report cache, job
-  retention, and in-flight coalescing.
+  retention, in-flight coalescing, and bounded in-memory job status.
 - `[storage]`: SQLite path.
 - `[media]`: optional image download limits.
 - `[retention]`: generated artifact/media cleanup behavior.
@@ -51,6 +51,10 @@ Important sections:
 - `[reports.*]`: named manual report profiles with `collector_ids`.
 - `[sources.*]`: X users, subreddits, House PTR, and SEC 13F source settings.
 - `[collectors.*]`: optional explicit collector blocks.
+
+The default config is tuned for a 1GB VM: collector, Xpoz, LLM analysis, and
+House PTR PDF parsing concurrency all default to `1`; image downloading is off;
+and generated artifacts are capped by retention.
 
 Profile management:
 
@@ -69,6 +73,10 @@ Source management:
 ```
 
 ## CLI Workflows
+
+Heavy CLI commands such as `collect`, `run-report`, `llm summarize`, and
+`llm analyze` run their work in a short-lived child Python process. The parent
+CLI process stays small and mirrors the child output.
 
 Collect configured source data:
 
@@ -115,6 +123,11 @@ Canonical job endpoints:
 - `GET /v1/jobs/{job_id}/artifact`
 
 Supported modes are `html`, `markdown`, `discord`, `text`, and `json`.
+
+HTTP jobs are coordinated by the daemon but executed by one short-lived child
+worker process per job. The job status payload includes worker diagnostics such
+as `worker_pid`, `worker_exit_code`, and `worker_runtime_seconds`; stale
+`queued` or `running` jobs from a daemon restart are marked failed on startup.
 
 Example:
 

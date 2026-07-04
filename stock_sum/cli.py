@@ -57,6 +57,7 @@ from stock_sum.reports.presentation import PresentationRenderError, Presentation
 from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.service.daemon import build_daemon
 from stock_sum.storage.sqlite import SQLiteStorageRepository
+from stock_sum.worker_client import run_cli_worker
 
 app = typer.Typer(help="Trading information summarization service.")
 config_app = typer.Typer(help="Manage TOML configuration.")
@@ -351,15 +352,9 @@ def run_report(
     env_file = _resolve_env_file_option(env_file)
     _load_env_file(env_file)
     settings = load_config(config)
-    pipeline = ReportPipeline(RuntimeContext(config=settings))
-    try:
-        result = asyncio.run(pipeline.run_report(profile))
-        _run_retention_after_pipeline(settings)
-    except StockSumError as exc:
-        console.print(str(exc))
-        _run_retention_after_pipeline(settings)
-        raise typer.Exit(code=1) from exc
-    console.print_json(json.dumps(_pipeline_result_to_jsonable(result)))
+    code = run_cli_worker(settings, "cli_run_report", {"profile": profile})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @app.command()
@@ -378,21 +373,9 @@ def collect(
         raise typer.BadParameter("Pass exactly one of --collector or --profile.")
 
     settings = load_config(config)
-    pipeline = ReportPipeline(RuntimeContext(config=settings))
-    try:
-        if collector:
-            result = asyncio.run(pipeline.collect_collector(collector))
-            _run_retention_after_pipeline(settings)
-            console.print_json(json.dumps(_collection_run_to_jsonable(result)))
-            return
-
-        result = asyncio.run(pipeline.run_report(profile or ""))
-        _run_retention_after_pipeline(settings)
-        console.print_json(json.dumps(_pipeline_result_to_jsonable(result)))
-    except StockSumError as exc:
-        console.print(str(exc))
-        _run_retention_after_pipeline(settings)
-        raise typer.Exit(code=1) from exc
+    code = run_cli_worker(settings, "cli_collect", {"collector": collector, "profile": profile})
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @app.command()
@@ -756,36 +739,20 @@ def llm_summarize(
     env_file = _resolve_env_file_option(env_file)
     _load_env_file(env_file)
     settings = load_config(config)
-    try:
-        if payload is not None:
-            payload_data = json.loads(payload.read_text(encoding="utf-8"))
-        else:
-            repository = SQLiteStorageRepository(settings.storage.sqlite_path)
-            builder = SummaryInputBuilder(config=settings, repository=repository)
-            summary_input = asyncio.run(builder.build(profile=profile, download_images=False))
-            payload_data = summary_input.to_dict(
-                mode="compact",
-                max_images_per_post=max_images_per_post,
-                max_images_total=max_images_total,
-            )
-        client = build_llm_client(settings.llm)
-        summary = asyncio.run(client.summarize(payload_data, instructions=instructions))
-    except (OSError, RuntimeError, ValueError, StockSumError) as exc:
-        console.print(str(exc))
-        raise typer.Exit(code=1) from exc
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    response_data = {
-        "profile": profile,
-        "provider": settings.llm.provider,
-        "model": summary.model,
-        "summary_text": summary.text,
-        "summary": summary.metadata.get("parsed"),
-        "input_media": payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
-        "metadata": {key: value for key, value in summary.metadata.items() if key != "parsed"},
-    }
-    output.write_text(json.dumps(response_data, indent=2, ensure_ascii=False), encoding="utf-8")
-    console.print(f"Wrote {output}")
+    code = run_cli_worker(
+        settings,
+        "cli_llm_summarize",
+        {
+            "profile": profile,
+            "payload_path": str(payload) if payload is not None else None,
+            "output_path": str(output),
+            "instructions": instructions,
+            "max_images_per_post": max_images_per_post,
+            "max_images_total": max_images_total,
+        },
+    )
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @llm_app.command("analyze")
@@ -804,44 +771,19 @@ def llm_analyze(
     env_file = _resolve_env_file_option(env_file)
     _load_env_file(env_file)
     settings = load_config(config)
-    repository = SQLiteStorageRepository(settings.storage.sqlite_path)
-    try:
-        builder = SummaryInputBuilder(config=settings, repository=repository)
-        summary_input = asyncio.run(builder.build(profile=profile, download_images=False))
-        result = asyncio.run(
-            LLMAnalysisService(
-                config=settings,
-                repository=repository,
-                llm_client=build_llm_client(settings.llm),
-            ).analyze(
-                summary_input,
-                instructions=instructions,
-                max_images_per_post=max_images_per_post,
-                max_images_total=max_images_total,
-            )
-        )
-    except (OSError, RuntimeError, ValueError, StockSumError) as exc:
-        console.print(str(exc))
-        raise typer.Exit(code=1) from exc
-
-    response_data = {
-        "profile": profile,
-        "provider": settings.llm.provider,
-        "model": result.model,
-        "summary_text": json.dumps(result.summary, ensure_ascii=False),
-        "summary": result.summary,
-        "metadata": {
-            "analysis_run_id": result.analysis_run_id,
-            "prompt_version": result.prompt_version,
-            "chunk_count": result.chunk_count,
-            "succeeded_count": result.succeeded_count,
-            "failed_count": result.failed_count,
+    code = run_cli_worker(
+        settings,
+        "cli_llm_analyze",
+        {
+            "profile": profile,
+            "output_path": str(output),
+            "instructions": instructions,
+            "max_images_per_post": max_images_per_post,
+            "max_images_total": max_images_total,
         },
-        "pipeline_warnings": [asdict(warning) for warning in result.warnings],
-    }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(response_data, indent=2, ensure_ascii=False), encoding="utf-8")
-    console.print(f"Wrote {output}")
+    )
+    if code != 0:
+        raise typer.Exit(code=code)
 
 
 @llm_app.command("providers")
@@ -1176,8 +1118,8 @@ def house_ptr_set(
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether House PTR can be collected."),
     year: int = typer.Option(0, "--year", min=0, help="Disclosure year, or 0 for current UTC year."),
     refresh_ttl_seconds: int = typer.Option(21600, "--refresh-ttl-seconds", min=0, help="Seconds before House PTR data is considered stale."),
-    download_concurrency: int = typer.Option(4, "--download-concurrency", min=1, help="Concurrent PDF downloads."),
-    parse_concurrency: int = typer.Option(2, "--parse-concurrency", min=1, help="Concurrent PDF table parse jobs."),
+    download_concurrency: int = typer.Option(1, "--download-concurrency", min=1, help="Concurrent PDF downloads."),
+    parse_concurrency: int = typer.Option(1, "--parse-concurrency", min=1, help="Concurrent PDF table parse jobs."),
     zip_url_template: str = typer.Option(
         "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.zip",
         "--zip-url-template",

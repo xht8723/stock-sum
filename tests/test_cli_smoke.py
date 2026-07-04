@@ -781,11 +781,19 @@ def test_config_subreddit_add_defaults_to_comments_enabled(tmp_path) -> None:
 def test_collect_collector_uses_pipeline(monkeypatch) -> None:
     import stock_sum.cli as cli
 
-    monkeypatch.setattr(cli, "ReportPipeline", FakeCollectPipeline)
+    calls = []
+
+    def fake_run_cli_worker(config, operation, payload):
+        calls.append({"operation": operation, "payload": payload})
+        print(json.dumps({"collector_id": payload["collector"], "inserted_count": 1}, indent=2))
+        return 0
+
+    monkeypatch.setattr(cli, "run_cli_worker", fake_run_cli_worker)
     runner = CliRunner()
     result = runner.invoke(app, ["collect", "--collector", "api.market_watch"])
 
     assert result.exit_code == 0
+    assert calls == [{"operation": "cli_collect", "payload": {"collector": "api.market_watch", "profile": None}}]
     assert '"collector_id": "api.market_watch"' in result.output
     assert '"inserted_count": 1' in result.output
 
@@ -828,7 +836,22 @@ def test_llm_summarize_writes_json_from_payload(monkeypatch, tmp_path) -> None:
     payload = tmp_path / "payload.json"
     payload.write_text('{"sources":{"x":[],"reddit":[]},"media":{"m1":{"source_ref":"x1","remote_url":"https://cdn.example/1.jpg"}}}', encoding="utf-8")
     output = tmp_path / "summary.json"
-    monkeypatch.setattr(cli, "build_llm_client", lambda config: FakeLLMClient())
+    calls = []
+
+    def fake_run_cli_worker(config, operation, worker_payload):
+        calls.append({"operation": operation, "payload": worker_payload})
+        response_data = {
+            "profile": worker_payload["profile"],
+            "provider": config.llm.provider,
+            "model": config.llm.model,
+            "summary": {"executive_summary": "ok"},
+            "input_media": {"m1": {"remote_url": "https://cdn.example/1.jpg"}},
+        }
+        output.write_text(json.dumps(response_data, indent=2), encoding="utf-8")
+        print(f"Wrote {output}")
+        return 0
+
+    monkeypatch.setattr(cli, "run_cli_worker", fake_run_cli_worker)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -848,6 +871,19 @@ def test_llm_summarize_writes_json_from_payload(monkeypatch, tmp_path) -> None:
     )
 
     assert result.exit_code == 0
+    assert calls == [
+        {
+            "operation": "cli_llm_summarize",
+            "payload": {
+                "profile": "default",
+                "payload_path": str(payload),
+                "output_path": str(output),
+                "instructions": None,
+                "max_images_per_post": 3,
+                "max_images_total": 20,
+            },
+        }
+    ]
     assert output.exists()
     text = output.read_text(encoding="utf-8")
     assert '"provider": "deepseek"' in text

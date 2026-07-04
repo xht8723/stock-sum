@@ -166,6 +166,7 @@ def build_router(
     manager_holder: dict[str, Any] = {
         "version": runtime.version if runtime is not None else 0,
         "manager": job_manager or (HttpJobManager(runtime.config) if runtime is not None else None),
+        "stale_recovery_done": job_manager is not None or runtime is not None,
     }
 
     def current_config() -> AppConfig | None:
@@ -177,7 +178,11 @@ def build_router(
         if runtime is None:
             return None
         if manager_holder["manager"] is None or manager_holder["version"] != runtime.version:
-            manager_holder["manager"] = HttpJobManager(runtime.config)
+            manager_holder["manager"] = HttpJobManager(
+                runtime.config,
+                recover_stale_jobs=not manager_holder["stale_recovery_done"],
+            )
+            manager_holder["stale_recovery_done"] = True
             manager_holder["version"] = runtime.version
         return manager_holder["manager"]
 

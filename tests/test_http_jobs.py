@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
 from stock_sum.storage.models import StoredCollectionRun, StoredHousePtrTradeRow, StoredSec13FHolding, StoredXPost
+from stock_sum.worker import _run_request
 
 
 async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
@@ -622,6 +625,114 @@ async def test_completed_memory_record_is_evicted_when_status_file_is_deleted(tm
 
     assert evicted == 1
     assert job.job_id not in manager._jobs
+
+
+async def test_default_http_jobs_spawn_subprocess_worker_and_record_metadata(monkeypatch, tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = HttpJobManager(config)
+    job = manager.create_collect_job("default")
+    calls = []
+
+    class FakeProcess:
+        pid = 4321
+        returncode = 0
+
+        async def communicate(self):
+            request_path = Path(calls[0][4])
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            status_path = Path(config.server.artifact_dir) / request["job_id"] / "status.json"
+            data = json.loads(status_path.read_text(encoding="utf-8"))
+            data.update(
+                {
+                    "status": "succeeded",
+                    "phase": "succeeded",
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "artifact_path": str(status_path),
+                    "artifact_media_type": "application/json",
+                }
+            )
+            status_path.write_text(json.dumps(data), encoding="utf-8")
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        calls.append(args)
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await manager.run_collect_job(job.job_id)
+
+    status = manager.get_job(job.job_id)
+    assert calls[0][:3] == (sys.executable, "-m", "stock_sum.worker")
+    assert calls[0][3] == "--request"
+    assert status.status == "succeeded"
+    assert status.worker_pid == 4321
+    assert status.worker_exit_code == 0
+    assert status.worker_mode == "subprocess"
+    assert status.worker_runtime_seconds is not None
+
+
+async def test_stale_running_jobs_are_marked_failed_on_manager_startup(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = HttpJobManager(config, recover_stale_jobs=False)
+    job = manager.create_collect_job("default")
+    manager._mark_running(job.job_id, phase="collecting")
+
+    restarted = HttpJobManager(config)
+    status = restarted.get_job(job.job_id)
+
+    assert status.status == "failed"
+    assert status.phase == "failed"
+    assert status.error == "Job was interrupted by daemon restart before completion."
+    assert status.finished_at is not None
+
+
+async def test_worker_entrypoint_renders_cached_report_and_updates_status(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = HttpJobManager(config, use_subprocess_workers=False, recover_stale_jobs=False)
+    source_options = ReportJobOptions(mode="json")
+    source = manager.create_report_job("default", source_options)
+    summary_path = manager._job_dir(source.job_id) / "summary.json"
+    manager._write_json(
+        summary_path,
+        {
+            "profile": "default",
+            "summary": {"executive_summary": "Cached result"},
+            "pipeline_warnings": [],
+            "failed_sections": [],
+        },
+    )
+    manager._mark_succeeded(
+        source.job_id,
+        artifact_path=str(summary_path),
+        artifact_media_type="application/json",
+        summary_path=str(summary_path),
+        cache_key=source.cache_key,
+    )
+    current_options = ReportJobOptions(mode="text")
+    current = manager.create_report_job("default", current_options)
+    request_path = manager._job_dir(current.job_id) / "worker-request.json"
+    manager._write_json(
+        request_path,
+        {
+            "schema_version": 1,
+            "operation": "http_render_cached_report",
+            "job_id": current.job_id,
+            "config": config.model_dump(mode="json"),
+            "payload": {"options": asdict(current_options), "cache_hit_job_id": source.job_id},
+        },
+    )
+
+    code = await _run_request(request_path)
+
+    status = manager.get_job(current.job_id)
+    assert code == 0
+    assert status.status == "succeeded"
+    assert status.cache_hit is True
+    assert status.cached_from_job_id == source.job_id
+    assert status.artifact_path is not None
+    assert Path(status.artifact_path).exists()
+    assert status.cleanup_result is not None
 
 
 class FakePipeline:

@@ -29,7 +29,8 @@ def test_house_ptr_source_resolves_to_collector_config() -> None:
     config = load_config("stock_sum/config/example.toml")
 
     assert source_type_for_collector_id(config, "house.ptr") == HOUSE_PTR_SOURCE_TYPE
-    assert get_collector_config(config, "house.ptr").download_concurrency == 4
+    assert get_collector_config(config, "house.ptr").download_concurrency == 1
+    assert get_collector_config(config, "house.ptr").parse_concurrency == 1
 
 
 def test_sec_13f_source_resolves_to_collector_config() -> None:
