@@ -376,6 +376,25 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     ]
 
 
+async def test_socialreport_rejects_invalid_parameters_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.socialreport(interaction, profile="bad profile!", format="discord", detail="minimum", private=False)
+
+    assert client.social_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: profile must be 1-64 characters using letters, numbers, dot, underscore, or dash.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+    assert interaction.followup.messages == []
+
+
 async def test_tradingreport_command_rejects_missing_filters(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
@@ -386,14 +405,52 @@ async def test_tradingreport_command_rejects_missing_filters(monkeypatch) -> Non
 
     await report.tradingreport(interaction, format="discord", private=False)
 
-    assert interaction.response.messages == []
-    assert interaction.followup.messages == [
+    assert interaction.response.messages == [
         {
             "content": "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
             "ephemeral": True,
             "suppress_embeds": True,
         }
     ]
+    assert interaction.followup.messages == []
+
+
+async def test_tradingreport_rejects_invalid_date_and_limit_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.tradingreport(
+        interaction,
+        name="Pelosi",
+        start_date="2026-13-01",
+        limit=0,
+        format="discord",
+        private=False,
+    )
+
+    assert client.trading_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: start_date must be in YYYY-MM-DD format.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+    assert interaction.followup.messages == []
+
+
+async def test_tradingreport_rejects_unknown_asset_type_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.tradingreport(interaction, asset_type="bad!", format="discord", private=False)
+
+    assert client.trading_calls == []
+    assert "asset_type must be" in interaction.response.messages[0]["content"]
 
 
 async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
@@ -435,6 +492,33 @@ async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
         }
     ]
     assert interaction.channel.messages == [{"content": "trade one\n\ntrade two", "suppress_embeds": True}]
+
+
+async def test_13freport_rejects_invalid_filters_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.thirteenfreport(
+        interaction,
+        issuer="NVIDIA",
+        period_start="2026-04-01",
+        period_end="2026-03-31",
+        limit=101,
+        format="discord",
+        private=False,
+    )
+
+    assert client.sec_13f_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: period_start must be on or before period_end.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+    assert interaction.followup.messages == []
 
 
 async def test_13freport_command_sends_discord_report(monkeypatch) -> None:
@@ -533,6 +617,18 @@ async def test_management_source_add_calls_api_for_owner(monkeypatch) -> None:
     assert "Added X source @aleabitoreddit" in interaction.response.messages[0]["content"]
 
 
+async def test_management_source_add_rejects_invalid_handle_and_limit(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=True))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.sources_add_x(interaction, handle="bad/handle", limit=999)
+
+    assert client.calls == []
+    assert "X handle must be" in interaction.response.messages[0]["content"]
+
+
 async def test_management_reddit_source_add_defaults_to_comments(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
@@ -590,6 +686,19 @@ async def test_management_house_ptr_source_set(monkeypatch) -> None:
     ]
     assert interaction.response.messages[0]["ephemeral"] is True
     assert "Updated House PTR source" in interaction.response.messages[0]["content"]
+
+
+async def test_secret_set_rejects_invalid_name_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=True))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.secrets_set(interaction, name="not-a-secret", value="secret")
+
+    assert client.calls == []
+    assert "Secret name must be" in interaction.response.messages[0]["content"]
+    assert interaction.followup.messages == []
 
 
 async def test_secret_set_command_is_ephemeral_and_redacted(monkeypatch) -> None:

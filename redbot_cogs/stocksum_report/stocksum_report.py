@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from io import BytesIO
 from typing import Any, Protocol
 from urllib.parse import quote
 import asyncio
 import os
+import re
 
 try:  # pragma: no cover - exercised in a Redbot runtime, not the project venv.
     import discord
@@ -68,6 +70,29 @@ DEFAULT_TIMEOUT_SECONDS = 30 * 60
 DISCORD_INLINE_LIMIT = 1900
 DISCORD_FAILURE_LIMIT = 1900
 SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
+SUPPORTED_SOCIAL_DETAILS = {"minimum", "medium", "full"}
+SUPPORTED_PUT_CALL = {"PUT", "CALL"}
+MAX_SOURCE_FETCH_LIMIT = 300
+MAX_LOOKBACK_HOURS = 24 * 31
+MAX_COMMENTS_PER_POST = 500
+MAX_13F_LIMIT = 100
+MAX_TRADING_LIMIT = 1000
+MAX_DAYS_FILTER = 3650
+MAX_CONCURRENCY = 20
+MAX_REFRESH_TTL_SECONDS = 365 * 24 * 60 * 60
+KNOWN_HOUSE_ASSET_TYPES = {"ST", "GS", "OI", "CS", "OT", "HN", "OP", "PS", "VA", "CT", "OL", "RS", "AB"}
+
+_PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_COLLECTOR_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
+_X_HANDLE_RE = re.compile(r"^@?[A-Za-z0-9_]{1,15}$")
+_SUBREDDIT_RE = re.compile(r"^(?:r/)?[A-Za-z0-9_]{2,21}$", re.IGNORECASE)
+_SECRET_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_ASSET_TYPE_RE = re.compile(r"^[A-Z0-9]{1,8}$")
+_TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
+_CUSIP_RE = re.compile(r"^[A-Z0-9]{1,12}$")
+_FIGI_RE = re.compile(r"^[A-Z0-9]{1,24}$")
+_CIK_RE = re.compile(r"^[0-9]{1,10}$")
+_ACCESSION_RE = re.compile(r"^[A-Za-z0-9-]{1,32}$")
 
 
 class StockSumCogError(Exception):
@@ -551,6 +576,13 @@ class StockSumReport(commands.Cog):
     ) -> None:
         """Slash command handler for social report generation."""
 
+        if error := _validate_report_options(output_format=format, detail=detail):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_profile_name(profile):
+            await _send_validation_error(interaction, error)
+            return
+
         await interaction.response.send_message(
             "Social report is being generated, please wait a few minutes.",
             ephemeral=private,
@@ -621,15 +653,36 @@ class StockSumReport(commands.Cog):
         """Slash command handler for House PTR trading disclosure reports."""
 
         name_filter = name.strip() or None
-        start_filter = start_date.strip() or None
-        end_filter = end_date.strip() or None
+        start_filter, end_filter, error = _validate_date_range(
+            start_date,
+            end_date,
+            start_label="start_date",
+            end_label="end_date",
+        )
+        if error:
+            await _send_validation_error(interaction, error)
+            return
         asset_type_filter = asset_type.strip().upper() or None
         ticker_filter = ticker.strip().upper() or None
+        if error := _validate_report_options(output_format=format):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(days, label="days", maximum=MAX_DAYS_FILTER):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(limit, label="limit", maximum=MAX_TRADING_LIMIT):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_asset_type(asset_type_filter):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_ticker(ticker_filter):
+            await _send_validation_error(interaction, error)
+            return
         if not any((name_filter, start_filter, end_filter, days, asset_type_filter, ticker_filter)):
-            await _send_report_output(
+            await _send_validation_error(
                 interaction,
-                "stock-sum report failed: tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
-                private=True,
+                "tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
             )
             return
 
@@ -646,7 +699,7 @@ class StockSumReport(commands.Cog):
                 days=days,
                 asset_type=asset_type_filter,
                 ticker=ticker_filter,
-                limit=limit if limit is None else max(1, limit),
+                limit=limit,
                 force_refresh=force_refresh,
             )
         except StockSumCogError as exc:
@@ -733,15 +786,52 @@ class StockSumReport(commands.Cog):
         cusip_filter = cusip.strip().upper() or None
         figi_filter = figi.strip().upper() or None
         put_call_filter = put_call.strip().upper() or None
-        period_start_filter = period_start.strip() or None
-        period_end_filter = period_end.strip() or None
-        filing_start_filter = filing_start.strip() or None
-        filing_end_filter = filing_end.strip() or None
+        period_start_filter, period_end_filter, error = _validate_date_range(
+            period_start,
+            period_end,
+            start_label="period_start",
+            end_label="period_end",
+        )
+        if error:
+            await _send_validation_error(interaction, error)
+            return
+        filing_start_filter, filing_end_filter, error = _validate_date_range(
+            filing_start,
+            filing_end,
+            start_label="filing_start",
+            end_label="filing_end",
+        )
+        if error:
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_report_options(output_format=format):
+            await _send_validation_error(interaction, error)
+            return
+        if put_call_filter and put_call_filter not in SUPPORTED_PUT_CALL:
+            await _send_validation_error(interaction, "put_call must be PUT or CALL.")
+            return
+        for value, label, pattern in (
+            (cik_filter, "cik", _CIK_RE),
+            (accession_filter, "accession_number", _ACCESSION_RE),
+            (cusip_filter, "cusip", _CUSIP_RE),
+            (figi_filter, "figi", _FIGI_RE),
+        ):
+            if error := _validate_13f_identifier(value, label=label, pattern=pattern):
+                await _send_validation_error(interaction, error)
+                return
+        if error := _validate_positive_int(min_value, label="min_value", allow_zero=True):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(min_shares, label="min_shares", allow_zero=True):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(limit, label="limit", maximum=MAX_13F_LIMIT):
+            await _send_validation_error(interaction, error)
+            return
         if not any((manager_filter, issuer_filter, cik_filter, accession_filter, cusip_filter, figi_filter, put_call_filter, period_start_filter, period_end_filter, filing_start_filter, filing_end_filter, min_value is not None, min_shares is not None)):
-            await _send_report_output(
+            await _send_validation_error(
                 interaction,
-                "stock-sum report failed: 13freport requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.",
-                private=True,
+                "13freport requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.",
             )
             return
 
@@ -795,6 +885,9 @@ class StockSumReport(commands.Cog):
 
     @profiles.command(name="show", description="Show one stock-sum profile.")
     async def profiles_show(self, interaction, name: str = "default") -> None:
+        if error := _validate_profile_name(name, label="profile name"):
+            await _send_validation_error(interaction, error)
+            return
         await self._send_api_json(interaction, f"/v1/profiles/{quote(name, safe='')}", title=f"Profile {name}")
 
     @profiles.command(name="add", description="Add a stock-sum profile.")
@@ -806,6 +899,12 @@ class StockSumReport(commands.Cog):
     ) -> None:
         if not await self._require_owner(interaction):
             return
+        if error := _validate_profile_name(name, label="profile name"):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_collector_ids(collectors):
+            await _send_validation_error(interaction, error)
+            return
         payload = {
             "name": name,
             "collector_ids": _csv(collectors),
@@ -815,6 +914,12 @@ class StockSumReport(commands.Cog):
     @profiles.command(name="edit", description="Edit a stock-sum profile collector list.")
     async def profiles_edit(self, interaction, name: str, collectors: str) -> None:
         if not await self._require_owner(interaction):
+            return
+        if error := _validate_profile_name(name, label="profile name"):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_collector_ids(collectors):
+            await _send_validation_error(interaction, error)
             return
         await self._send_api_json(
             interaction,
@@ -828,6 +933,9 @@ class StockSumReport(commands.Cog):
     @profiles.command(name="delete", description="Delete a stock-sum profile.")
     async def profiles_delete(self, interaction, name: str) -> None:
         if not await self._require_owner(interaction):
+            return
+        if error := _validate_profile_name(name, label="profile name"):
+            await _send_validation_error(interaction, error)
             return
         await self._send_api_json(interaction, f"/v1/profiles/{quote(name, safe='')}", method="delete", title=f"Deleted profile {name}", private=True)
 
@@ -847,12 +955,30 @@ class StockSumReport(commands.Cog):
     ) -> None:
         if not await self._require_owner(interaction):
             return
+        if error := _validate_x_handle(handle):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_profile_name(profile):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(limit, label="limit", maximum=MAX_SOURCE_FETCH_LIMIT):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(lookback_hours, label="lookback_hours", maximum=MAX_LOOKBACK_HOURS):
+            await _send_validation_error(interaction, error)
+            return
         payload = {"handle": handle, "profile": profile, "limit": limit, "lookback_hours": lookback_hours, "enabled": enabled}
         await self._send_api_json(interaction, "/v1/sources/x-users", method="post", payload=payload, title=f"Added X source {handle}", private=True)
 
     @sources.command(name="delete-x", description="Delete an X user source.")
     async def sources_delete_x(self, interaction, handle: str, profile: str = "default") -> None:
         if not await self._require_owner(interaction):
+            return
+        if error := _validate_x_handle(handle):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_profile_name(profile):
+            await _send_validation_error(interaction, error)
             return
         path = f"/v1/sources/x-users/{quote(handle, safe='')}?profile={quote(profile, safe='')}"
         await self._send_api_json(interaction, path, method="delete", title=f"Deleted X source {handle}", private=True)
@@ -870,6 +996,21 @@ class StockSumReport(commands.Cog):
     ) -> None:
         if not await self._require_owner(interaction):
             return
+        if error := _validate_subreddit(subreddit):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_profile_name(profile):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(limit, label="limit", maximum=MAX_SOURCE_FETCH_LIMIT):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(lookback_hours, label="lookback_hours", maximum=MAX_LOOKBACK_HOURS):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(comments_per_post, label="comments_per_post", maximum=MAX_COMMENTS_PER_POST, allow_zero=True):
+            await _send_validation_error(interaction, error)
+            return
         payload = {
             "subreddit": subreddit,
             "profile": profile,
@@ -883,6 +1024,12 @@ class StockSumReport(commands.Cog):
     @sources.command(name="delete-reddit", description="Delete a subreddit source.")
     async def sources_delete_reddit(self, interaction, subreddit: str, profile: str = "default") -> None:
         if not await self._require_owner(interaction):
+            return
+        if error := _validate_subreddit(subreddit):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_profile_name(profile):
+            await _send_validation_error(interaction, error)
             return
         path = f"/v1/sources/subreddits/{quote(subreddit, safe='')}?profile={quote(profile, safe='')}"
         await self._send_api_json(interaction, path, method="delete", title=f"Deleted subreddit {subreddit}", private=True)
@@ -903,6 +1050,22 @@ class StockSumReport(commands.Cog):
         parse_concurrency: int = 2,
     ) -> None:
         if not await self._require_owner(interaction):
+            return
+        if error := _validate_profile_name(profile):
+            await _send_validation_error(interaction, error)
+            return
+        current_year = date.today().year
+        if year != 0 and (year < 2008 or year > current_year + 1):
+            await _send_validation_error(interaction, f"year must be 0 or between 2008 and {current_year + 1}.")
+            return
+        if error := _validate_positive_int(refresh_ttl_seconds, label="refresh_ttl_seconds", maximum=MAX_REFRESH_TTL_SECONDS, allow_zero=True):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(download_concurrency, label="download_concurrency", maximum=MAX_CONCURRENCY):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(parse_concurrency, label="parse_concurrency", maximum=MAX_CONCURRENCY):
+            await _send_validation_error(interaction, error)
             return
         payload = {
             "profile": profile,
@@ -926,6 +1089,12 @@ class StockSumReport(commands.Cog):
     async def llm_select(self, interaction, provider: str = "deepseek", model: str = "") -> None:
         if not await self._require_owner(interaction):
             return
+        if not _PROFILE_RE.fullmatch(provider):
+            await _send_validation_error(interaction, "provider must use letters, numbers, dot, underscore, or dash.")
+            return
+        if model and len(model.strip()) > 128:
+            await _send_validation_error(interaction, "model must be 128 characters or less.")
+            return
         payload = {"provider": provider}
         if model:
             payload["model"] = model
@@ -941,6 +1110,12 @@ class StockSumReport(commands.Cog):
     async def secrets_set(self, interaction, name: str, value: str) -> None:
         if not await self._require_owner(interaction):
             return
+        if error := _validate_secret_name(name):
+            await _send_validation_error(interaction, error)
+            return
+        if not value:
+            await _send_validation_error(interaction, "secret value cannot be empty.")
+            return
         await self._send_api_json(
             interaction,
             f"/v1/secrets/{quote(name, safe='')}",
@@ -954,10 +1129,16 @@ class StockSumReport(commands.Cog):
     async def secrets_remove(self, interaction, name: str) -> None:
         if not await self._require_owner(interaction):
             return
+        if error := _validate_secret_name(name):
+            await _send_validation_error(interaction, error)
+            return
         await self._send_api_json(interaction, f"/v1/secrets/{quote(name, safe='')}", method="delete", title=f"Removed secret {name}", private=True)
 
     @collect_group.command(name="profile", description="Run collection for one profile.")
     async def collect_profile(self, interaction, profile: str = "default") -> None:
+        if error := _validate_profile_name(profile):
+            await _send_validation_error(interaction, error)
+            return
         await interaction.response.send_message("Collection is running, please wait.", ephemeral=True)
         try:
             payload = await StockSumHttpClient.from_env().run_collect_profile(profile=profile)
@@ -1046,6 +1227,112 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise StockSumRequestError(f"stock-sum response is missing {key}.")
     return value
+
+
+def _validate_report_options(*, output_format: str, detail: str | None = None) -> str | None:
+    if output_format not in SUPPORTED_FORMATS:
+        return f"Unsupported report format: {output_format}. Use one of: {', '.join(sorted(SUPPORTED_FORMATS))}."
+    if detail is not None and detail not in SUPPORTED_SOCIAL_DETAILS:
+        return f"Unsupported social report detail: {detail}. Use minimum, medium, or full."
+    return None
+
+
+def _validate_profile_name(value: str, *, label: str = "profile") -> str | None:
+    if not value or not _PROFILE_RE.fullmatch(value):
+        return f"{label} must be 1-64 characters using letters, numbers, dot, underscore, or dash."
+    return None
+
+
+def _validate_collector_ids(value: str) -> str | None:
+    collector_ids = _csv(value)
+    for collector_id in collector_ids:
+        if not _COLLECTOR_ID_RE.fullmatch(collector_id):
+            return "collector IDs must use only letters, numbers, dot, underscore, or dash."
+    return None
+
+
+def _validate_x_handle(value: str) -> str | None:
+    if not _X_HANDLE_RE.fullmatch(value.strip()):
+        return "X handle must be 1-15 characters using letters, numbers, or underscore, with optional @."
+    return None
+
+
+def _validate_subreddit(value: str) -> str | None:
+    if not _SUBREDDIT_RE.fullmatch(value.strip()):
+        return "Subreddit must be 2-21 characters using letters, numbers, or underscore, with optional r/ prefix."
+    return None
+
+
+def _validate_secret_name(value: str) -> str | None:
+    if not _SECRET_NAME_RE.fullmatch(value.strip()):
+        return "Secret name must be an environment variable name like XPOZ_API_KEY."
+    return None
+
+
+def _validate_optional_date(value: str | None, *, label: str) -> tuple[str | None, date | None, str | None]:
+    clean = value.strip() if isinstance(value, str) else value
+    if not clean:
+        return None, None, None
+    try:
+        parsed = datetime.strptime(clean, "%Y-%m-%d").date()
+    except ValueError:
+        return clean, None, f"{label} must be in YYYY-MM-DD format."
+    return clean, parsed, None
+
+
+def _validate_date_range(
+    start: str | None,
+    end: str | None,
+    *,
+    start_label: str,
+    end_label: str,
+) -> tuple[str | None, str | None, str | None]:
+    clean_start, start_date, error = _validate_optional_date(start, label=start_label)
+    if error:
+        return clean_start, end, error
+    clean_end, end_date, error = _validate_optional_date(end, label=end_label)
+    if error:
+        return clean_start, clean_end, error
+    if start_date is not None and end_date is not None and start_date > end_date:
+        return clean_start, clean_end, f"{start_label} must be on or before {end_label}."
+    return clean_start, clean_end, None
+
+
+def _validate_positive_int(value: int | None, *, label: str, maximum: int | None = None, allow_zero: bool = False) -> str | None:
+    if value is None:
+        return None
+    minimum = 0 if allow_zero else 1
+    if value < minimum:
+        return f"{label} must be {'0 or greater' if allow_zero else '1 or greater'}."
+    if maximum is not None and value > maximum:
+        return f"{label} must be {maximum} or less."
+    return None
+
+
+def _validate_asset_type(value: str | None) -> str | None:
+    if not value:
+        return None
+    if not _ASSET_TYPE_RE.fullmatch(value):
+        return "asset_type must be a short alphanumeric House asset code, such as ST, GS, OI, CS, OT, HN, OP, PS, VA, CT, OL, RS, or AB."
+    if value not in KNOWN_HOUSE_ASSET_TYPES:
+        return f"asset_type {value} is not a known House asset code. Known codes: {', '.join(sorted(KNOWN_HOUSE_ASSET_TYPES))}."
+    return None
+
+
+def _validate_ticker(value: str | None) -> str | None:
+    if value and not _TICKER_RE.fullmatch(value):
+        return "ticker must be 1-16 characters using letters, numbers, dot, or dash."
+    return None
+
+
+def _validate_13f_identifier(value: str | None, *, label: str, pattern: re.Pattern[str]) -> str | None:
+    if value and not pattern.fullmatch(value):
+        return f"{label} has an invalid format."
+    return None
+
+
+async def _send_validation_error(interaction, message: str) -> None:
+    await _send_command_output(interaction, f"stock-sum report failed: {message}", private=True)
 
 
 def _failure_message(exc: Exception) -> str:

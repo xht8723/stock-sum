@@ -49,6 +49,11 @@ The default format for report commands is Discord-specific markdown and is sent
 inline in message chunks. Choose `html`, `markdown`, `text`, or `json` to
 receive the report as a file attachment instead.
 
+Slash commands validate common input mistakes before calling stock-sum:
+malformed dates, invalid source names, unsupported report formats, invalid
+asset/ticker identifiers, and out-of-range numeric limits return an immediate
+private error message.
+
 The cog polls stock-sum job status once per minute while a report is running.
 
 ## Management Commands
