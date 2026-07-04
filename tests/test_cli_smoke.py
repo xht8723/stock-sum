@@ -189,6 +189,29 @@ def test_secrets_set_list_remove_without_printing_value(tmp_path) -> None:
     assert "TEST_SECRET" not in list_after_remove.output
 
 
+def test_secrets_commands_use_remembered_env_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / "stock-sum.env"
+    state_file = tmp_path / ".stock-sum-state.json"
+    state_file.write_text(json.dumps({"env_file": str(env_file)}), encoding="utf-8")
+    runner = CliRunner()
+
+    set_result = runner.invoke(app, ["secrets", "set", "TEST_SECRET", "--value", "remembered-secret"])
+    env_text_after_set = env_file.read_text(encoding="utf-8")
+    list_result = runner.invoke(app, ["secrets", "list"])
+    remove_result = runner.invoke(app, ["secrets", "remove", "TEST_SECRET"])
+
+    assert set_result.exit_code == 0
+    assert "Set TEST_SECRET" in set_result.output
+    assert "stock-sum.env" in set_result.output
+    assert env_text_after_set == "TEST_SECRET=remembered-secret\n"
+    assert list_result.exit_code == 0
+    assert "stock-sum.env" in list_result.output
+    assert "TEST_SECRET" in list_result.output
+    assert remove_result.exit_code == 0
+    assert "remembered-secret" not in set_result.output
+
+
 def test_database_reset_requires_confirmation_and_removes_sqlite_sidecars(tmp_path) -> None:
     db_path = tmp_path / "stock_sum.sqlite3"
     wal_path = tmp_path / "stock_sum.sqlite3-wal"
@@ -368,6 +391,29 @@ def test_setup_check_reports_missing_and_present_secrets(tmp_path) -> None:
     assert "Setup check passed" in passed_result.output
 
 
+def test_setup_check_uses_remembered_config_and_env_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "active-config.toml"
+    env_file = tmp_path / "active.env"
+    state_file = tmp_path / ".stock-sum-state.json"
+    state_file.write_text(
+        json.dumps({"config": str(config_path), "env_file": str(env_file)}),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    set_xpoz = runner.invoke(app, ["secrets", "set", "XPOZ_API_KEY", "--value", "xpoz-secret"])
+    set_llm = runner.invoke(app, ["secrets", "set", "DEEPSEEK_API_KEY", "--value", "deepseek-secret"])
+    check_result = runner.invoke(app, ["setup", "check"])
+
+    assert init_result.exit_code == 0
+    assert set_xpoz.exit_code == 0
+    assert set_llm.exit_code == 0
+    assert check_result.exit_code == 0
+    assert "Setup check passed" in check_result.output
+
+
 def test_setup_reset_requires_confirmation_and_removes_targets(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     env_file = tmp_path / ".env"
@@ -517,6 +563,36 @@ def test_daemon_env_file_overrides_stale_process_env(tmp_path, monkeypatch) -> N
     assert seen["deepseek"] == "fresh-deepseek"
 
 
+def test_daemon_uses_remembered_config_and_env_file(tmp_path, monkeypatch) -> None:
+    import stock_sum.cli as cli
+
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "active-config.toml"
+    env_file = tmp_path / "stock-sum.env"
+    (tmp_path / ".stock-sum-state.json").write_text(
+        json.dumps({"config": str(config_path), "env_file": str(env_file)}),
+        encoding="utf-8",
+    )
+    env_file.write_text("XPOZ_API_KEY=fresh-xpoz\nDEEPSEEK_API_KEY=fresh-deepseek\n", encoding="utf-8")
+    seen: dict[str, str | int] = {}
+
+    def fake_run(app_obj, *, host, port):
+        seen["xpoz"] = os.environ["XPOZ_API_KEY"]
+        seen["deepseek"] = os.environ["DEEPSEEK_API_KEY"]
+        seen["host"] = host
+        seen["port"] = port
+
+    monkeypatch.setattr(cli.uvicorn, "run", fake_run)
+    runner = CliRunner()
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    result = runner.invoke(app, ["daemon"])
+
+    assert init_result.exit_code == 0
+    assert result.exit_code == 0
+    assert seen["xpoz"] == "fresh-xpoz"
+    assert seen["deepseek"] == "fresh-deepseek"
+
+
 def test_config_profile_add_edit_delete(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     runner = CliRunner()
@@ -558,6 +634,46 @@ def test_config_profile_add_edit_delete(tmp_path) -> None:
     assert '"api.market_watch"' in show_result.output
     assert '"api.news"' in show_result.output
     assert delete_result.exit_code == 0
+
+
+def test_config_get_set_use_remembered_config_and_keep_legacy_path_form(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "active-config.toml"
+    (tmp_path / ".stock-sum-state.json").write_text(json.dumps({"config": str(config_path)}), encoding="utf-8")
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    remembered_set = runner.invoke(app, ["config", "set", "server.port", "9090"])
+    remembered_get = runner.invoke(app, ["config", "get", "server.port"])
+    legacy_set = runner.invoke(app, ["config", "set", str(config_path), "server.host", "'0.0.0.0'"])
+    legacy_get = runner.invoke(app, ["config", "get", str(config_path), "server.host"])
+
+    assert init_result.exit_code == 0
+    assert remembered_set.exit_code == 0
+    assert remembered_get.exit_code == 0
+    assert "9090" in remembered_get.output
+    assert legacy_set.exit_code == 0
+    assert legacy_get.exit_code == 0
+    assert "0.0.0.0" in legacy_get.output
+
+
+def test_config_source_commands_use_remembered_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "active-config.toml"
+    (tmp_path / ".stock-sum-state.json").write_text(json.dumps({"config": str(config_path)}), encoding="utf-8")
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    add_result = runner.invoke(app, ["config", "x-user", "add", "remembered", "--profile", "default"])
+    list_result = runner.invoke(app, ["config", "x-user", "list"])
+    profile_result = runner.invoke(app, ["config", "profile", "show", "default"])
+
+    assert init_result.exit_code == 0
+    assert add_result.exit_code == 0
+    assert list_result.exit_code == 0
+    assert '"handle": "remembered"' in list_result.output
+    assert profile_result.exit_code == 0
+    assert '"x.remembered"' in profile_result.output
 
 
 def test_config_x_user_add_list_delete_updates_profile(tmp_path) -> None:

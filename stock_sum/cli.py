@@ -86,6 +86,65 @@ config_app.add_typer(house_ptr_app, name="house-ptr")
 console = Console()
 
 DEFAULT_SETUP_STATE_FILE = Path(".stock-sum-state.json")
+DEFAULT_ENV_FILE = Path(".env")
+DEFAULT_LOCAL_CONFIG_PATH = Path("config.toml")
+DEFAULT_EXAMPLE_CONFIG_PATH = Path("stock_sum/config/example.toml")
+
+
+def _state_file_path(state_file: Path | None = None) -> Path:
+    return state_file or DEFAULT_SETUP_STATE_FILE
+
+
+def _remembered_path(key: str, *, state_file: Path | None = None) -> Path | None:
+    state = _read_setup_state(_state_file_path(state_file))
+    value = state.get(key)
+    return Path(value) if value else None
+
+
+def _resolve_remembered_path(
+    explicit: Path | None,
+    *,
+    state_key: str,
+    fallback: Path,
+    state_file: Path | None = None,
+) -> Path:
+    if explicit is not None:
+        return explicit
+    return _remembered_path(state_key, state_file=state_file) or fallback
+
+
+def _resolve_config_option(
+    config: Path | None,
+    *,
+    fallback: Path = DEFAULT_EXAMPLE_CONFIG_PATH,
+    state_file: Path | None = None,
+) -> Path:
+    return _resolve_remembered_path(config, state_key="config", fallback=fallback, state_file=state_file)
+
+
+def _resolve_env_file_option(env_file: Path | None, *, state_file: Path | None = None) -> Path:
+    return _resolve_remembered_path(env_file, state_key="env_file", fallback=DEFAULT_ENV_FILE, state_file=state_file)
+
+
+def _resolve_data_dir_option(data_dir: Path | None, *, state_file: Path | None = None) -> Path:
+    return _resolve_remembered_path(data_dir, state_key="data_dir", fallback=Path("data"), state_file=state_file)
+
+
+def _parse_config_get_args(args: list[str]) -> tuple[Path, str]:
+    if len(args) == 1:
+        return _resolve_config_option(None, fallback=DEFAULT_LOCAL_CONFIG_PATH), args[0]
+    if len(args) == 2:
+        return Path(args[0]), args[1]
+    raise typer.BadParameter("Use `config get KEY` or `config get PATH KEY`.")
+
+
+def _parse_config_set_args(args: list[str]) -> tuple[Path, str, str]:
+    if len(args) == 2:
+        config = _resolve_config_option(None, fallback=DEFAULT_LOCAL_CONFIG_PATH)
+        return config, args[0], args[1]
+    if len(args) == 3:
+        return Path(args[0]), args[1], args[2]
+    raise typer.BadParameter("Use `config set KEY VALUE` or `config set PATH KEY VALUE`.")
 
 
 def _parse_value(raw: str) -> Any:
@@ -283,11 +342,14 @@ def _run_retention_after_pipeline(settings) -> RetentionSummary | None:
 @app.command("run-report")
 def run_report(
     profile: str = typer.Option(..., "--profile", "-p", help="Report profile name."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
 ) -> None:
     """Manually request a report pipeline run."""
 
-    _load_env_file()
+    config = _resolve_config_option(config)
+    env_file = _resolve_env_file_option(env_file)
+    _load_env_file(env_file)
     settings = load_config(config)
     pipeline = ReportPipeline(RuntimeContext(config=settings))
     try:
@@ -304,11 +366,14 @@ def run_report(
 def collect(
     collector: str | None = typer.Option(None, "--collector", help="Configured collector id to run."),
     profile: str | None = typer.Option(None, "--profile", help="Configured report profile whose collectors should run."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
 ) -> None:
     """Collect configured source data and persist it to SQLite."""
 
-    _load_env_file()
+    config = _resolve_config_option(config)
+    env_file = _resolve_env_file_option(env_file)
+    _load_env_file(env_file)
     if bool(collector) == bool(profile):
         raise typer.BadParameter("Pass exactly one of --collector or --profile.")
 
@@ -332,13 +397,15 @@ def collect(
 
 @app.command()
 def daemon(
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
-    env_file: Path = typer.Option(Path(".env"), "--env-file", help="Env file path for runtime secret updates."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path for runtime secret updates. Defaults to remembered setup path, then .env."),
     host: str | None = typer.Option(None, "--host"),
     port: int | None = typer.Option(None, "--port"),
 ) -> None:
     """Run the HTTP service."""
 
+    config = _resolve_config_option(config)
+    env_file = _resolve_env_file_option(env_file)
     _load_env_file(env_file, override=True)
     settings = load_config(config)
     try:
@@ -457,11 +524,13 @@ def setup_init(
 
 @setup_app.command("check")
 def setup_check(
-    config: Path = typer.Option(Path("config.toml"), "--config", "-c"),
-    env_file: Path = typer.Option(Path(".env"), "--env-file"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then config.toml."),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
 ) -> None:
     """Validate config, required secrets, and local runtime paths."""
 
+    config = _resolve_config_option(config, fallback=DEFAULT_LOCAL_CONFIG_PATH)
+    env_file = _resolve_env_file_option(env_file)
     issues = _setup_issues(config, env_file)
     if issues:
         for issue in issues:
@@ -480,10 +549,9 @@ def setup_reset(
 ) -> None:
     """Reset local stock-sum state to a clean first-run install."""
 
-    state = _read_setup_state(state_file)
-    config_path = config or Path(state.get("config", "config.toml"))
-    env_path = env_file or Path(state.get("env_file", ".env"))
-    data_path = data_dir or Path(state.get("data_dir", "data"))
+    config_path = _resolve_config_option(config, fallback=DEFAULT_LOCAL_CONFIG_PATH, state_file=state_file)
+    env_path = _resolve_env_file_option(env_file, state_file=state_file)
+    data_path = _resolve_data_dir_option(data_dir, state_file=state_file)
     targets = _unique_paths(
         [
             config_path,
@@ -520,11 +588,12 @@ def setup_reset(
 @secrets_app.command("set")
 def secrets_set(
     name: str = typer.Argument(..., help="Environment variable name."),
-    env_file: Path = typer.Option(Path(".env"), "--env-file"),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
     value: str | None = typer.Option(None, "--value", help="Secret value. Omit to prompt securely."),
 ) -> None:
     """Set one env-file secret without printing its value."""
 
+    env_file = _resolve_env_file_option(env_file)
     try:
         secret_value = value if value is not None else typer.prompt(f"Value for {name}")
         set_secret(env_file, name, secret_value)
@@ -535,9 +604,10 @@ def secrets_set(
 
 
 @secrets_app.command("list")
-def secrets_list(env_file: Path = typer.Option(Path(".env"), "--env-file")) -> None:
+def secrets_list(env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env.")) -> None:
     """List env-file secret names without values."""
 
+    env_file = _resolve_env_file_option(env_file)
     names = sorted(read_env_file(env_file).keys())
     console.print_json(json.dumps({"env_file": str(env_file), "secrets": names}))
 
@@ -545,10 +615,11 @@ def secrets_list(env_file: Path = typer.Option(Path(".env"), "--env-file")) -> N
 @secrets_app.command("remove")
 def secrets_remove(
     name: str = typer.Argument(..., help="Environment variable name."),
-    env_file: Path = typer.Option(Path(".env"), "--env-file"),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
 ) -> None:
     """Remove one env-file secret."""
 
+    env_file = _resolve_env_file_option(env_file)
     try:
         removed = remove_secret(env_file, name)
     except (OSError, ValueError) as exc:
@@ -561,7 +632,7 @@ def secrets_remove(
 def payload_build(
     profile: str = typer.Option(..., "--profile", "-p", help="Report profile name."),
     output: Path = typer.Option(..., "--output", "-o", help="JSON output path."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     download_images: bool = typer.Option(
         False,
         "--download-images/--no-download-images",
@@ -573,6 +644,7 @@ def payload_build(
 ) -> None:
     """Build an LLM-ready summary input payload from stored collection data."""
 
+    config = _resolve_config_option(config)
     settings = load_config(config)
     repository = SQLiteStorageRepository(settings.storage.sqlite_path)
     downloader = MediaDownloader(settings.media, repository) if download_images else None
@@ -597,10 +669,11 @@ def payload_build(
 
 @retention_app.command("status")
 def retention_status(
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
 ) -> None:
     """Show managed runtime data usage without deleting anything."""
 
+    config = _resolve_config_option(config)
     settings = load_config(config)
     summary = asyncio.run(DataRetentionService(settings).status())
     console.print_json(json.dumps(summary.to_dict()))
@@ -608,11 +681,12 @@ def retention_status(
 
 @retention_app.command("prune")
 def retention_prune(
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview deletions unless --apply is used."),
 ) -> None:
     """Prune managed runtime data according to retention limits."""
 
+    config = _resolve_config_option(config)
     settings = load_config(config)
     summary = asyncio.run(DataRetentionService(settings).prune(dry_run=dry_run))
     console.print_json(json.dumps(summary.to_dict()))
@@ -620,13 +694,14 @@ def retention_prune(
 
 @database_app.command("reset")
 def database_reset(
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     sqlite_path: Path | None = typer.Option(None, "--sqlite-path", help="Override the SQLite file path from config."),
     yes: bool = typer.Option(False, "--yes", help="Skip interactive confirmations."),
 ) -> None:
     """Delete the SQLite database and sidecar files so schema is recreated cleanly."""
 
     if sqlite_path is None:
+        config = _resolve_config_option(config)
         settings = load_config(config)
         sqlite_path = Path(settings.storage.sqlite_path)
     if str(sqlite_path) == ":memory:":
@@ -669,14 +744,17 @@ def llm_summarize(
     profile: str = typer.Option("default", "--profile", "-p", help="Report profile name."),
     payload: Path | None = typer.Option(None, "--payload", help="Existing compact/vision payload JSON file."),
     output: Path = typer.Option(..., "--output", "-o", help="Summary response JSON output path."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
     instructions: str | None = typer.Option(None, "--instructions", help="Additional summarization instructions."),
     max_images_per_post: int = typer.Option(3, "--max-images-per-post", min=0, help="Maximum image refs per post when building payload."),
     max_images_total: int = typer.Option(20, "--max-images-total", min=0, help="Maximum image refs when building payload."),
 ) -> None:
     """Summarize an LLM-ready payload with the configured LLM provider."""
 
-    _load_env_file()
+    config = _resolve_config_option(config)
+    env_file = _resolve_env_file_option(env_file)
+    _load_env_file(env_file)
     settings = load_config(config)
     try:
         if payload is not None:
@@ -714,14 +792,17 @@ def llm_summarize(
 def llm_analyze(
     profile: str = typer.Option("default", "--profile", "-p", help="Report profile name."),
     output: Path = typer.Option(..., "--output", "-o", help="Analysis summary JSON output path."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
+    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
     instructions: str | None = typer.Option(None, "--instructions", help="Additional analysis instructions."),
     max_images_per_post: int = typer.Option(3, "--max-images-per-post", min=0, help="Maximum image refs per post when building payload."),
     max_images_total: int = typer.Option(20, "--max-images-total", min=0, help="Maximum image refs when building payload."),
 ) -> None:
     """Run chunked LLM analysis from stored collection data and persist analysis rows."""
 
-    _load_env_file()
+    config = _resolve_config_option(config)
+    env_file = _resolve_env_file_option(env_file)
+    _load_env_file(env_file)
     settings = load_config(config)
     repository = SQLiteStorageRepository(settings.storage.sqlite_path)
     try:
@@ -822,36 +903,40 @@ def config_init(
 
 
 @config_app.command("validate")
-def config_validate(path: Path) -> None:
+def config_validate(path: Path | None = typer.Argument(None, help="Config path. Defaults to remembered setup path, then config.toml.")) -> None:
     """Validate a TOML config file."""
 
+    path = _resolve_config_option(path, fallback=DEFAULT_LOCAL_CONFIG_PATH)
     load_config(path)
     console.print("Config is valid.")
 
 
 @config_app.command("get")
-def config_get(path: Path, key: str) -> None:
+def config_get(args: list[str] = typer.Argument(..., help="KEY, or PATH KEY for explicit config.")) -> None:
     """Get a dotted config value."""
 
+    path, key = _parse_config_get_args(args)
     document = read_toml_document(path)
     console.print(get_dotted_value(document, key))
 
 
 @config_app.command("set")
-def config_set(path: Path, key: str, value: str) -> None:
+def config_set(args: list[str] = typer.Argument(..., help="KEY VALUE, or PATH KEY VALUE for explicit config.")) -> None:
     """Set a dotted config value."""
 
+    path, key, value = _parse_config_set_args(args)
     set_dotted_value(path, key, _parse_value(value))
     console.print(f"Updated {key}")
 
 
 @config_app.command("sync")
 def config_sync(
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     force: bool = typer.Option(False, "--force", help="Force a models.dev refresh."),
 ) -> None:
     """Refresh cache-backed external configuration metadata."""
 
+    config = _resolve_config_option(config)
     settings = load_config(config)
     cache_entry = asyncio.run(
         load_models_dev_catalog(
@@ -865,19 +950,21 @@ def config_sync(
 
 
 @profile_app.command("list")
-def profile_list(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+def profile_list(config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config.")) -> None:
     """List report profile names."""
 
+    config = _resolve_config_option(config)
     console.print_json(json.dumps({"profiles": list_profiles(config)}))
 
 
 @profile_app.command("show")
 def profile_show(
     name: str = typer.Argument(..., help="Profile name."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
 ) -> None:
     """Show one report profile."""
 
+    config = _resolve_config_option(config)
     try:
         profile = get_profile(config, name)
     except KeyError as exc:
@@ -889,12 +976,13 @@ def profile_show(
 @profile_app.command("add")
 def profile_add(
     name: str = typer.Argument(..., help="Profile name."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     collectors: str = typer.Option("", "--collectors", help="Comma-separated collector ids."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing profile."),
 ) -> None:
     """Add a report profile."""
 
+    config = _resolve_config_option(config)
     try:
         add_profile(
             config,
@@ -912,11 +1000,12 @@ def profile_add(
 @profile_app.command("edit")
 def profile_edit(
     name: str = typer.Argument(..., help="Profile name."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     collectors: str | None = typer.Option(None, "--collectors", help="Comma-separated collector ids."),
 ) -> None:
     """Edit a report profile."""
 
+    config = _resolve_config_option(config)
     try:
         edit_profile(
             config,
@@ -933,10 +1022,11 @@ def profile_edit(
 @profile_app.command("delete")
 def profile_delete(
     name: str = typer.Argument(..., help="Profile name."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
 ) -> None:
     """Delete a report profile."""
 
+    config = _resolve_config_option(config)
     try:
         delete_profile(config, name)
     except KeyError as exc:
@@ -947,16 +1037,17 @@ def profile_delete(
 
 
 @x_user_app.command("list")
-def x_user_list(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+def x_user_list(config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config.")) -> None:
     """List X user sources."""
 
+    config = _resolve_config_option(config)
     console.print_json(json.dumps({"x_users": list_x_users(config)}))
 
 
 @x_user_app.command("add")
 def x_user_add(
     handle: str = typer.Argument(..., help="X handle, with or without @."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     limit: int = typer.Option(100, "--limit", min=1, help="Provider fetch cap before 24-hour filtering."),
     lookback_hours: int = typer.Option(24, "--lookback-hours", min=1, help="Only keep posts from this many recent hours."),
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether this source can be collected."),
@@ -965,6 +1056,7 @@ def x_user_add(
 ) -> None:
     """Add an X user source."""
 
+    config = _resolve_config_option(config)
     try:
         collector_id = add_x_user(
             config,
@@ -985,11 +1077,12 @@ def x_user_add(
 @x_user_app.command("delete")
 def x_user_delete(
     handle: str = typer.Argument(..., help="X handle, with or without @."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     profile: str | None = typer.Option(None, "--profile", help="Also remove x.<handle> from this report profile."),
 ) -> None:
     """Delete an X user source."""
 
+    config = _resolve_config_option(config)
     try:
         collector_id = delete_x_user(config, handle, profile=profile)
     except KeyError as exc:
@@ -1000,16 +1093,17 @@ def x_user_delete(
 
 
 @subreddit_app.command("list")
-def subreddit_list(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+def subreddit_list(config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config.")) -> None:
     """List subreddit sources."""
 
+    config = _resolve_config_option(config)
     console.print_json(json.dumps({"subreddits": list_subreddits(config)}))
 
 
 @subreddit_app.command("add")
 def subreddit_add(
     subreddit: str = typer.Argument(..., help="Subreddit name, with or without r/."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     sort: str = typer.Option("new", "--sort", help="Reddit sort mode."),
     timeframe: str = typer.Option("day", "--timeframe", help="Timeframe used when sort=top."),
     limit: int = typer.Option(100, "--limit", min=1, help="Provider fetch cap before lookback filtering."),
@@ -1023,6 +1117,7 @@ def subreddit_add(
 ) -> None:
     """Add a subreddit source."""
 
+    config = _resolve_config_option(config)
     try:
         collector_id = add_subreddit(
             config,
@@ -1048,7 +1143,7 @@ def subreddit_add(
 @subreddit_app.command("delete")
 def subreddit_delete(
     subreddit: str = typer.Argument(..., help="Subreddit name, with or without r/."),
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     profile: str | None = typer.Option(
         None,
         "--profile",
@@ -1057,6 +1152,7 @@ def subreddit_delete(
 ) -> None:
     """Delete a subreddit source."""
 
+    config = _resolve_config_option(config)
     try:
         collector_id = delete_subreddit(config, subreddit, profile=profile)
     except KeyError as exc:
@@ -1067,15 +1163,16 @@ def subreddit_delete(
 
 
 @house_ptr_app.command("show")
-def house_ptr_show(config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c")) -> None:
+def house_ptr_show(config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config.")) -> None:
     """Show House PTR source settings."""
 
+    config = _resolve_config_option(config)
     console.print_json(json.dumps({"house_ptr": get_house_ptr_source(config)}))
 
 
 @house_ptr_app.command("set")
 def house_ptr_set(
-    config: Path = typer.Option(Path("stock_sum/config/example.toml"), "--config", "-c"),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether House PTR can be collected."),
     year: int = typer.Option(0, "--year", min=0, help="Disclosure year, or 0 for current UTC year."),
     refresh_ttl_seconds: int = typer.Option(21600, "--refresh-ttl-seconds", min=0, help="Seconds before House PTR data is considered stale."),
@@ -1093,6 +1190,7 @@ def house_ptr_set(
 ) -> None:
     """Set House PTR source settings."""
 
+    config = _resolve_config_option(config)
     try:
         collector_id = set_house_ptr_source(
             config,

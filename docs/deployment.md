@@ -28,15 +28,20 @@ Create config and secrets:
 
 ```bash
 stock-sum setup init --config config.toml --env-file .env --overwrite
-stock-sum secrets set XPOZ_API_KEY --env-file .env
-stock-sum secrets set DEEPSEEK_API_KEY --env-file .env
-stock-sum setup check --config config.toml --env-file .env
+stock-sum secrets set XPOZ_API_KEY
+stock-sum secrets set DEEPSEEK_API_KEY
+stock-sum setup check
 ```
+
+After `setup init`, stock-sum remembers the active config and env file paths in
+`.stock-sum-state.json`. Most CLI commands use those remembered paths by
+default. Pass `--config` or `--env-file` only when intentionally overriding the
+active setup.
 
 Run locally:
 
 ```bash
-stock-sum daemon --config config.toml --env-file .env --host 127.0.0.1 --port 8000
+stock-sum daemon --host 127.0.0.1 --port 8000
 ```
 
 Expose to trusted clients by binding to `0.0.0.0` only behind an appropriate
@@ -155,7 +160,7 @@ history and provider response records are preserved.
 Missing secrets:
 
 ```bash
-stock-sum setup check --config config.toml --env-file .env
+stock-sum setup check
 ```
 
 Provider failures:

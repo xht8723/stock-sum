@@ -23,10 +23,14 @@ Set these secrets in `.env` or through `stock-sum secrets`:
 - `XPOZ_API_KEY`
 - `DEEPSEEK_API_KEY`
 
+After `setup init`, stock-sum remembers the active config and env file paths in
+`.stock-sum-state.json`. Related CLI commands use those remembered paths by
+default; explicit `--config` and `--env-file` flags still override them.
+
 Run a setup check:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe setup check --config config.toml --env-file .env
+.\.venv\Scripts\stock-sum.exe setup check
 ```
 
 ## Configuration
@@ -51,17 +55,17 @@ Important sections:
 Profile management:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe config profile add closing --config config.toml --collectors x.aleabitoreddit,reddit.wallstreetbets
-.\.venv\Scripts\stock-sum.exe config profile edit closing --config config.toml --collectors x.aleabitoreddit,reddit.wallstreetbets,house.ptr
-.\.venv\Scripts\stock-sum.exe config profile show closing --config config.toml
+.\.venv\Scripts\stock-sum.exe config profile add closing --collectors x.aleabitoreddit,reddit.wallstreetbets
+.\.venv\Scripts\stock-sum.exe config profile edit closing --collectors x.aleabitoreddit,reddit.wallstreetbets,house.ptr
+.\.venv\Scripts\stock-sum.exe config profile show closing
 ```
 
 Source management:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe config x-user add aleabitoreddit --config config.toml --profile default
-.\.venv\Scripts\stock-sum.exe config subreddit add wallstreetbets --config config.toml --profile default
-.\.venv\Scripts\stock-sum.exe config house-ptr set --config config.toml --profile default
+.\.venv\Scripts\stock-sum.exe config x-user add aleabitoreddit --profile default
+.\.venv\Scripts\stock-sum.exe config subreddit add wallstreetbets --profile default
+.\.venv\Scripts\stock-sum.exe config house-ptr set --profile default
 ```
 
 ## CLI Workflows
@@ -69,19 +73,19 @@ Source management:
 Collect configured source data:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe collect --profile default --config config.toml
+.\.venv\Scripts\stock-sum.exe collect --profile default
 ```
 
 Build an LLM payload from SQLite:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe payload build --profile default --config config.toml --output payload.json
+.\.venv\Scripts\stock-sum.exe payload build --profile default --output payload.json
 ```
 
 Run LLM analysis:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe llm analyze --profile default --config config.toml --output response.json
+.\.venv\Scripts\stock-sum.exe llm analyze --profile default --output response.json
 ```
 
 Render a stored LLM response:
@@ -95,7 +99,7 @@ Render a stored LLM response:
 Start the service:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe daemon --config config.toml --env-file .env --host 127.0.0.1 --port 8000
+.\.venv\Scripts\stock-sum.exe daemon --host 127.0.0.1 --port 8000
 ```
 
 Canonical job endpoints:
