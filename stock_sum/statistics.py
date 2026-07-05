@@ -365,6 +365,9 @@ def _render_trading_png(summary: dict[str, Any], output_path: Path, plt: Any) ->
     sell_usd = [-item["sell_estimated_usd"] for item in buckets]
     purchase_count = [item["purchase_count"] for item in buckets]
     sell_count = [-item["sell_count"] for item in buckets]
+    bar_width = 0.38
+    purchase_positions = [position - bar_width / 2 for position in x_positions]
+    sell_positions = [position + bar_width / 2 for position in x_positions]
 
     fig, (ax_usd, ax_count) = plt.subplots(2, 1, figsize=(11, 8.1), facecolor="#1f2329", sharex=True)
     for ax in (ax_usd, ax_count):
@@ -372,11 +375,14 @@ def _render_trading_png(summary: dict[str, Any], output_path: Path, plt: Any) ->
         ax.axhline(0, color="#c0caf5", linewidth=0.8, alpha=0.45)
         _style_single_axis(ax)
 
-    purchase_usd_bars = ax_usd.bar(x_positions, purchase_usd, color="#2dd4bf", alpha=0.8, label="Purchases est. USD")
-    sell_usd_bars = ax_usd.bar(x_positions, sell_usd, color="#f59e0b", alpha=0.8, label="Sales est. USD")
-    purchase_count_bars = ax_count.bar(x_positions, purchase_count, color="#2dd4bf", alpha=0.8, label="Purchase count")
-    sell_count_bars = ax_count.bar(x_positions, sell_count, color="#f59e0b", alpha=0.8, label="Sale count")
+    purchase_usd_bars = ax_usd.bar(purchase_positions, purchase_usd, width=bar_width, color="#2dd4bf", alpha=0.8, label="Purchases est. USD")
+    sell_usd_bars = ax_usd.bar(sell_positions, sell_usd, width=bar_width, color="#f59e0b", alpha=0.8, label="Sales est. USD")
+    purchase_count_bars = ax_count.bar(purchase_positions, purchase_count, width=bar_width, color="#2dd4bf", alpha=0.8, label="Purchase count")
+    sell_count_bars = ax_count.bar(sell_positions, sell_count, width=bar_width, color="#f59e0b", alpha=0.8, label="Sale count")
+    uses_log_scale = _apply_usd_axis_scale(ax_usd, purchase_usd + sell_usd)
     ax_usd.set_ylabel("Estimated USD", color="#f4f4f5")
+    if uses_log_scale:
+        ax_usd.set_ylabel("Estimated USD (symmetric log)", color="#f4f4f5")
     ax_count.set_ylabel("Trade count", color="#f4f4f5")
     ax_usd.set_title(_chart_title(summary, default_title="Financial Disclosure Statistic"), color="#f4f4f5", pad=14)
     _apply_x_labels(ax_count, labels, x_positions)
@@ -482,8 +488,24 @@ def _format_filter_summary(filters: dict[str, Any]) -> str:
     return ", ".join(displayed) if displayed else "all matching records"
 
 
+def _apply_usd_axis_scale(ax: Any, values: list[float | int]) -> bool:
+    nonzero = [abs(float(value)) for value in values if value]
+    if len(nonzero) < 2:
+        return False
+    smallest = min(nonzero)
+    largest = max(nonzero)
+    if smallest <= 0 or largest / smallest < 100:
+        return False
+    ax.set_yscale("symlog", linthresh=max(1000.0, smallest))
+    ax.margins(y=0.25)
+    return True
+
+
 def _annotate_bars(ax: Any, bars: Any, values: list[float | int], *, formatter: Any, color: str) -> None:
     if not bars:
+        return
+    if ax.get_yscale() == "symlog":
+        _annotate_symlog_bars(ax, bars, values, formatter=formatter, color=color)
         return
     y_min, y_max = ax.get_ylim()
     offset = (y_max - y_min) * 0.025 if y_max != y_min else 0.1
@@ -499,6 +521,27 @@ def _annotate_bars(ax: Any, bars: Any, values: list[float | int], *, formatter: 
         else:
             y = height - offset
             va = "top"
+        ax.text(
+            x,
+            y,
+            formatter(value),
+            ha="center",
+            va=va,
+            color=color,
+            fontsize=8,
+            rotation=0,
+            clip_on=False,
+        )
+
+
+def _annotate_symlog_bars(ax: Any, bars: Any, values: list[float | int], *, formatter: Any, color: str) -> None:
+    for bar, value in zip(bars, values, strict=False):
+        if value == 0:
+            continue
+        height = float(bar.get_height())
+        x = bar.get_x() + bar.get_width() / 2
+        y = height * 1.18
+        va = "bottom" if height >= 0 else "top"
         ax.text(
             x,
             y,
