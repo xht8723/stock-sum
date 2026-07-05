@@ -260,7 +260,8 @@ async def test_statistic_job_creates_png_and_summary(tmp_path, monkeypatch) -> N
     assert Path(status.artifact_path or "").read_bytes() == b"fake-png"
     summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
     assert summary["statistic_mode"] == "social"
-    assert summary["buckets"][0]["avg_sentiment_score"] == 1.0
+    populated_bucket = next(item for item in summary["buckets"] if item["post_count"] == 1)
+    assert populated_bucket["avg_sentiment_score"] == 1.0
 
 
 async def test_trading_report_sorts_rows_by_transaction_date(tmp_path) -> None:

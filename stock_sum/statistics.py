@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 import re
@@ -44,20 +44,14 @@ def build_social_statistic_summary(
     if not dated:
         raise ValueError("No social statistic rows had usable post dates.")
 
-    resolved_bucket = resolve_bucket(bucket, min(item[0] for item in dated), max(item[0] for item in dated))
+    window_start, window_end = statistic_window(filters, dated)
+    resolved_bucket = resolve_bucket(bucket, window_start, window_end)
     grouped: dict[str, dict[str, Any]] = {}
+    for key in bucket_keys_between(window_start, window_end, resolved_bucket):
+        grouped[key] = _empty_social_bucket(key)
     for posted_at, point in dated:
         key = bucket_key(posted_at, resolved_bucket)
-        group = grouped.setdefault(
-            key,
-            {
-                "bucket": key,
-                "post_count": 0,
-                "sentiment_score_sum": 0.0,
-                "sentiment_counts": {sentiment: 0 for sentiment in SENTIMENT_SCORES},
-                "sources": {"x": 0, "reddit": 0},
-            },
-        )
+        group = grouped.setdefault(key, _empty_social_bucket(key))
         sentiment = normalize_sentiment(point.sentiment)
         group["post_count"] += 1
         group["sentiment_score_sum"] += SENTIMENT_SCORES[sentiment]
@@ -78,6 +72,7 @@ def build_social_statistic_summary(
         "title": title,
         "bucket": resolved_bucket,
         "filters": filters,
+        "date_range": {"start": window_start.date().isoformat(), "end": window_end.date().isoformat()},
         "row_count": len(points),
         "plotted_count": len(dated),
         "skipped": {"missing_date": skipped_missing_date},
@@ -105,8 +100,11 @@ def build_trading_statistic_summary(
     if not dated:
         raise ValueError("No trading statistic rows had usable transaction dates.")
 
-    resolved_bucket = resolve_bucket(bucket, min(item[0] for item in dated), max(item[0] for item in dated))
+    window_start, window_end = statistic_window(filters, dated)
+    resolved_bucket = resolve_bucket(bucket, window_start, window_end)
     grouped: dict[str, dict[str, Any]] = {}
+    for key in bucket_keys_between(window_start, window_end, resolved_bucket):
+        grouped[key] = _empty_trading_bucket(key)
     skipped_unknown_amount = 0
     open_ended_amounts = 0
     unknown_actions = 0
@@ -123,17 +121,7 @@ def build_trading_statistic_summary(
             open_ended_amounts += 1
 
         key = bucket_key(traded_at, resolved_bucket)
-        group = grouped.setdefault(
-            key,
-            {
-                "bucket": key,
-                "purchase_count": 0,
-                "sell_count": 0,
-                "purchase_estimated_usd": 0.0,
-                "sell_estimated_usd": 0.0,
-                "net_estimated_usd": 0.0,
-            },
-        )
+        group = grouped.setdefault(key, _empty_trading_bucket(key))
         if action == "purchase":
             group["purchase_count"] += 1
             group["purchase_estimated_usd"] += estimate
@@ -157,6 +145,7 @@ def build_trading_statistic_summary(
         "title": title,
         "bucket": resolved_bucket,
         "filters": filters,
+        "date_range": {"start": window_start.date().isoformat(), "end": window_end.date().isoformat()},
         "row_count": len(points),
         "plotted_count": sum(item["purchase_count"] + item["sell_count"] for item in buckets),
         "skipped": {
@@ -195,6 +184,71 @@ def resolve_bucket(bucket: StatisticBucket, start: datetime, end: datetime) -> L
     if span_days <= 365:
         return "week"
     return "month"
+
+
+def statistic_window(filters: dict[str, Any], dated: list[tuple[datetime, Any]]) -> tuple[datetime, datetime]:
+    """Return the requested statistic window, falling back to the data span."""
+
+    window_start = parse_datetime(str(filters.get("window_start") or ""))
+    window_end = parse_datetime(str(filters.get("window_end") or ""))
+    if window_start is not None and window_end is not None and window_start <= window_end:
+        return window_start, window_end
+    return min(item[0] for item in dated), max(item[0] for item in dated)
+
+
+def bucket_keys_between(start: datetime, end: datetime, bucket: Literal["day", "week", "month"]) -> list[str]:
+    """Return every bucket key touched by the requested window."""
+
+    current = bucket_start(start, bucket)
+    final = bucket_start(end, bucket)
+    keys = []
+    while current <= final:
+        keys.append(bucket_key(current, bucket))
+        current = next_bucket_start(current, bucket)
+    return keys
+
+
+def bucket_start(value: datetime, bucket: Literal["day", "week", "month"]) -> datetime:
+    current = value.astimezone(timezone.utc).date()
+    if bucket == "week":
+        current = current.fromordinal(current.toordinal() - current.weekday())
+    elif bucket == "month":
+        current = date(current.year, current.month, 1)
+    return datetime.combine(current, time.min, tzinfo=timezone.utc)
+
+
+def next_bucket_start(value: datetime, bucket: Literal["day", "week", "month"]) -> datetime:
+    if bucket == "day":
+        return value + timedelta(days=1)
+    if bucket == "week":
+        return value + timedelta(days=7)
+    month = value.month + 1
+    year = value.year
+    if month == 13:
+        month = 1
+        year += 1
+    return datetime(year, month, 1, tzinfo=timezone.utc)
+
+
+def _empty_social_bucket(key: str) -> dict[str, Any]:
+    return {
+        "bucket": key,
+        "post_count": 0,
+        "sentiment_score_sum": 0.0,
+        "sentiment_counts": {sentiment: 0 for sentiment in SENTIMENT_SCORES},
+        "sources": {"x": 0, "reddit": 0},
+    }
+
+
+def _empty_trading_bucket(key: str) -> dict[str, Any]:
+    return {
+        "bucket": key,
+        "purchase_count": 0,
+        "sell_count": 0,
+        "purchase_estimated_usd": 0.0,
+        "sell_estimated_usd": 0.0,
+        "net_estimated_usd": 0.0,
+    }
 
 
 def bucket_key(value: datetime, bucket: Literal["day", "week", "month"]) -> str:
@@ -380,8 +434,7 @@ def _chart_title(summary: dict[str, Any], *, default_title: str) -> str:
     title = str(summary.get("title") or default_title).strip() or default_title
     buckets = summary.get("buckets") or []
     bucket = str(summary.get("bucket") or "bucket")
-    labels = [str(item.get("bucket") or "") for item in buckets if item.get("bucket")]
-    date_range = f"{labels[0]} to {labels[-1]}" if labels else "no dated rows"
+    date_range = _summary_date_range(summary, buckets)
     filters = _format_filter_summary(summary.get("filters") or {})
     if summary.get("statistic_mode") == "trading":
         total_buys = sum(int(item.get("purchase_count") or 0) for item in buckets)
@@ -394,6 +447,17 @@ def _chart_title(summary: dict[str, Any], *, default_title: str) -> str:
         total_posts = sum(int(item.get("post_count") or 0) for item in buckets)
         subtitle = f"{filters} | {date_range} | {bucket} buckets | {total_posts} analyzed posts"
     return f"{title}\n{subtitle}"
+
+
+def _summary_date_range(summary: dict[str, Any], buckets: list[dict[str, Any]]) -> str:
+    explicit = summary.get("date_range")
+    if isinstance(explicit, dict):
+        start = str(explicit.get("start") or "").strip()
+        end = str(explicit.get("end") or "").strip()
+        if start and end:
+            return f"{start} to {end}"
+    labels = [str(item.get("bucket") or "") for item in buckets if item.get("bucket")]
+    return f"{labels[0]} to {labels[-1]}" if labels else "no dated rows"
 
 
 def _format_filter_summary(filters: dict[str, Any]) -> str:

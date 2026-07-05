@@ -71,6 +71,28 @@ def test_auto_bucket_selection_and_amount_estimation() -> None:
     assert estimate_amount("unknown") == (None, False)
 
 
+def test_trading_statistic_uses_requested_window_for_buckets() -> None:
+    summary = build_trading_statistic_summary(
+        [
+            _trading_point("2026-06-05T00:00:00+00:00", "sell", "$1,001 - $15,000"),
+            _trading_point("2026-06-16T00:00:00+00:00", "sell", "$1,001 - $15,000"),
+        ],
+        filters={
+            "ticker": "AMZN",
+            "days": 60,
+            "window_start": "2026-04-17T00:00:00+00:00",
+            "window_end": "2026-06-16T00:00:00+00:00",
+        },
+        bucket="auto",
+    )
+
+    assert summary["bucket"] == "week"
+    assert summary["date_range"] == {"start": "2026-04-17", "end": "2026-06-16"}
+    assert summary["buckets"][0]["bucket"] == "2026-04-13"
+    assert summary["buckets"][-1]["bucket"] == "2026-06-15"
+    assert sum(item["sell_count"] for item in summary["buckets"]) == 2
+
+
 def _social_point(posted_at: str, sentiment: str, *, source: str) -> StoredSocialStatisticPoint:
     return StoredSocialStatisticPoint(
         source=source,
