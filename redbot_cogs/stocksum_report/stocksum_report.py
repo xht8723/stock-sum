@@ -1157,7 +1157,7 @@ class StockSumReport(commands.Cog):
         )
         if not matches:
             raise StockSumRequestError(f"No fuzzy_search matches found for {query!r}.")
-        message = await _send_public_interaction_message(interaction, _format_fuzzy_match_prompt(query, matches))
+        message = await _send_fuzzy_selection_message(interaction, _format_fuzzy_match_prompt(query, matches))
         usable_reactions = FUZZY_REACTION_OPTIONS[: len(matches)]
         for emoji in usable_reactions:
             if hasattr(message, "add_reaction"):
@@ -1167,19 +1167,17 @@ class StockSumReport(commands.Cog):
                     continue
         usable_indexes = set(range(len(usable_reactions)))
 
-        def check(reaction, user) -> bool:
-            selected_index = _fuzzy_reaction_index(getattr(reaction, "emoji", reaction))
-            reacted_message = getattr(reaction, "message", None)
-            same_message = reacted_message is None or getattr(reacted_message, "id", None) == getattr(message, "id", None)
+        def check(payload) -> bool:
+            selected_index = _fuzzy_reaction_index(getattr(payload, "emoji", payload))
             return (
-                same_message
-                and getattr(user, "id", None) == getattr(interaction.user, "id", None)
+                getattr(payload, "message_id", None) == getattr(message, "id", None)
+                and getattr(payload, "user_id", None) == getattr(interaction.user, "id", None)
                 and selected_index in usable_indexes
             )
 
         try:
-            reaction, _user = await self.bot.wait_for(
-                "reaction_add",
+            payload = await self.bot.wait_for(
+                "raw_reaction_add",
                 timeout=FUZZY_SELECTION_TIMEOUT_SECONDS,
                 check=check,
             )
@@ -1187,7 +1185,7 @@ class StockSumReport(commands.Cog):
             await _edit_message_content(message, "Selection timed out. Run /statistic again to retry.")
             return {}
 
-        selected_index = _fuzzy_reaction_index(getattr(reaction, "emoji", reaction))
+        selected_index = _fuzzy_reaction_index(getattr(payload, "emoji", payload))
         if selected_index is None or selected_index >= len(matches):
             await _edit_message_content(message, "Selection timed out. Run /statistic again to retry.")
             return {}
@@ -1750,6 +1748,29 @@ async def _send_public_interaction_message(interaction, content: str) -> Any:
     if callable(original_response):
         return await original_response()
     raise StockSumRequestError("Could not create fuzzy search selection message.")
+
+
+async def _send_fuzzy_selection_message(interaction, content: str) -> Any:
+    response = getattr(interaction, "response", None)
+    is_done = getattr(response, "is_done", None)
+    done = is_done() if callable(is_done) else False
+    if response is not None and not done and hasattr(response, "defer"):
+        await response.defer(ephemeral=False, thinking=True)
+
+    followup = getattr(interaction, "followup", None)
+    if followup is not None and hasattr(followup, "send"):
+        try:
+            maybe_message = await followup.send(content, ephemeral=False, suppress_embeds=True, wait=True)
+        except TypeError:
+            maybe_message = await followup.send(content, ephemeral=False, suppress_embeds=True)
+        if maybe_message is not None:
+            return maybe_message
+
+    channel = getattr(interaction, "channel", None)
+    if channel is not None and hasattr(channel, "send"):
+        return await channel.send(content, suppress_embeds=True)
+
+    return await _send_public_interaction_message(interaction, content)
 
 
 async def _edit_message_content(message: Any, content: str) -> None:

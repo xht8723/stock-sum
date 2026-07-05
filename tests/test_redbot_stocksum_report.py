@@ -743,8 +743,9 @@ async def test_statistic_fuzzy_search_selects_social_tag_with_reaction(monkeypat
             "bucket": "auto",
         }
     ]
-    assert "Select a fuzzy_search match" in interaction.response.messages[0]["content"]
-    assert interaction.response.sent_messages[0].reactions == ["1️⃣", "2️⃣"]
+    assert interaction.response.deferred == [{"ephemeral": False, "thinking": True}]
+    assert "Select a fuzzy_search match" in interaction.followup.messages[0]["content"]
+    assert interaction.followup.sent_messages[0].reactions == ["1️⃣", "2️⃣"]
     assert interaction.channel.messages[0]["content"] == "Selected: nvidia. Generating statistic chart..."
     assert interaction.channel.messages[1]["content"] == "Statistic chart is being generated, please wait a few minutes."
     assert interaction.channel.messages[2]["file"] == "statistic.png"
@@ -800,8 +801,8 @@ async def test_statistic_fuzzy_search_timeout_edits_selection_message(monkeypatc
     await report.statistic(interaction, mode="trading", fuzzy_search="Apple", days=180)
 
     assert client.statistic_calls == []
-    assert interaction.response.messages[0]["content"] == "Select a fuzzy_search match for `Apple`:\n1️⃣ Apple Inc. - Common Stock (AAPL) [ST] - 3 rows, AAPL, ST\nClick one of the numbered reactions below to choose."
-    assert interaction.response.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+    assert interaction.followup.messages[0]["content"] == "Select a fuzzy_search match for `Apple`:\n1️⃣ Apple Inc. - Common Stock (AAPL) [ST] - 3 rows, AAPL, ST\nClick one of the numbered reactions below to choose."
+    assert interaction.followup.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
 
 
 async def test_statistic_fuzzy_search_ignores_other_user_reaction(monkeypatch) -> None:
@@ -823,7 +824,7 @@ async def test_statistic_fuzzy_search_ignores_other_user_reaction(monkeypatch) -
     await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
 
     assert client.statistic_calls == []
-    assert interaction.response.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+    assert interaction.followup.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
 
 
 async def test_statistic_fuzzy_search_ignores_unsupported_reaction(monkeypatch) -> None:
@@ -845,7 +846,7 @@ async def test_statistic_fuzzy_search_ignores_unsupported_reaction(monkeypatch) 
     await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
 
     assert client.statistic_calls == []
-    assert interaction.response.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+    assert interaction.followup.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
 
 
 async def test_statistic_fuzzy_search_reaction_add_failure_does_not_crash(monkeypatch) -> None:
@@ -1207,9 +1208,13 @@ class FakeResponseSender:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
         self.sent_messages: list[FakeMessage] = []
+        self.deferred: list[dict[str, Any]] = []
 
     def is_done(self) -> bool:
-        return bool(self.messages)
+        return bool(self.messages or self.deferred)
+
+    async def defer(self, *, ephemeral: bool, thinking: bool = False) -> None:
+        self.deferred.append({"ephemeral": ephemeral, "thinking": thinking})
 
     async def send_message(
         self,
@@ -1233,6 +1238,7 @@ class FakeResponseSender:
 class FakeFollowupSender:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
+        self.sent_messages: list[FakeMessage] = []
 
     async def send(
         self,
@@ -1241,13 +1247,17 @@ class FakeFollowupSender:
         ephemeral: bool,
         file: Any | None = None,
         suppress_embeds: bool = False,
-    ) -> None:
+        wait: bool = False,
+    ) -> Any:
         message = {"content": content, "ephemeral": ephemeral}
         if file is not None:
             message["file"] = file.filename
         if suppress_embeds:
             message["suppress_embeds"] = suppress_embeds
         self.messages.append(message)
+        sent_message = FakeMessage(content)
+        self.sent_messages.append(sent_message)
+        return sent_message if wait else None
 
 
 class FakeChannelSender:
@@ -1281,13 +1291,13 @@ class FakeBot:
     async def is_owner(self, _user: object) -> bool:
         return self.owner
 
-    async def wait_for(self, _event: str, *, timeout: float, check: Any) -> tuple[Any, Any]:
+    async def wait_for(self, _event: str, *, timeout: float, check: Any) -> Any:
         if self.timeout:
             raise asyncio.TimeoutError
-        reaction = FakeReaction(self.reaction_emoji)
-        user = FakeUser(self.reaction_user_id)
-        if check(reaction, user):
-            return reaction, user
+        message_id = FakeMessage._last_id
+        reaction = FakeRawReaction(self.reaction_emoji, message_id=message_id, user_id=self.reaction_user_id)
+        if check(reaction):
+            return reaction
         raise asyncio.TimeoutError
 
 
@@ -1302,12 +1312,21 @@ class FakeReaction:
         self.message = None
 
 
+class FakeRawReaction:
+    def __init__(self, emoji: str, *, message_id: int, user_id: int) -> None:
+        self.emoji = emoji
+        self.message_id = message_id
+        self.user_id = user_id
+
+
 class FakeMessage:
     _next_id = 1
+    _last_id = 0
 
     def __init__(self, content: str) -> None:
         self.id = FakeMessage._next_id
         FakeMessage._next_id += 1
+        FakeMessage._last_id = self.id
         self.content = content
         self.reactions: list[str] = []
         self.edits: list[str] = []
