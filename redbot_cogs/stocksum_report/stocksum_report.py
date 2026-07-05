@@ -78,6 +78,7 @@ SUPPORTED_STATISTIC_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral", "unc
 SUPPORTED_STATISTIC_ACTIONS = {"purchase", "sell", "sell_partial", "all"}
 SUPPORTED_PUT_CALL = {"PUT", "CALL"}
 FUZZY_REACTION_OPTIONS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+FUZZY_REACTION_DIGITS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4}
 FUZZY_SELECTION_TIMEOUT_SECONDS = 60.0
 MAX_SOURCE_FETCH_LIMIT = 300
 MAX_LOOKBACK_HOURS = 24 * 31
@@ -1160,13 +1161,21 @@ class StockSumReport(commands.Cog):
         usable_reactions = FUZZY_REACTION_OPTIONS[: len(matches)]
         for emoji in usable_reactions:
             if hasattr(message, "add_reaction"):
-                await message.add_reaction(emoji)
+                try:
+                    await message.add_reaction(emoji)
+                except Exception:
+                    continue
+        usable_indexes = set(range(len(usable_reactions)))
 
         def check(reaction, user) -> bool:
-            emoji = str(getattr(reaction, "emoji", reaction))
+            selected_index = _fuzzy_reaction_index(getattr(reaction, "emoji", reaction))
             reacted_message = getattr(reaction, "message", None)
             same_message = reacted_message is None or getattr(reacted_message, "id", None) == getattr(message, "id", None)
-            return same_message and getattr(user, "id", None) == getattr(interaction.user, "id", None) and emoji in usable_reactions
+            return (
+                same_message
+                and getattr(user, "id", None) == getattr(interaction.user, "id", None)
+                and selected_index in usable_indexes
+            )
 
         try:
             reaction, _user = await self.bot.wait_for(
@@ -1178,7 +1187,10 @@ class StockSumReport(commands.Cog):
             await _edit_message_content(message, "Selection timed out. Run /statistic again to retry.")
             return {}
 
-        selected_index = usable_reactions.index(str(getattr(reaction, "emoji", reaction)))
+        selected_index = _fuzzy_reaction_index(getattr(reaction, "emoji", reaction))
+        if selected_index is None or selected_index >= len(matches):
+            await _edit_message_content(message, "Selection timed out. Run /statistic again to retry.")
+            return {}
         selected = matches[selected_index]
         label = str(selected.get("label") or selected.get("match_value") or "selection")
         await _send_report_output(interaction, f"Selected: {label}. Generating statistic chart...", private=False)
@@ -1765,8 +1777,13 @@ def _format_fuzzy_match_prompt(query: str, matches: list[dict[str, Any]]) -> str
             extras = ", ".join(item for item in (ticker, asset_type) if item)
             detail = f"{row_count} rows" + (f", {extras}" if extras else "")
         lines.append(f"{FUZZY_REACTION_OPTIONS[index - 1]} {label} - {detail}")
-    lines.append("React with the matching number.")
+    lines.append("Click one of the numbered reactions below to choose.")
     return "\n".join(lines)
+
+
+def _fuzzy_reaction_index(value: Any) -> int | None:
+    emoji = str(value).strip().replace("\ufe0f", "").replace("\u20e3", "")
+    return FUZZY_REACTION_DIGITS.get(emoji)
 
 
 def _format_json_message(title: str, payload: dict[str, Any]) -> str:

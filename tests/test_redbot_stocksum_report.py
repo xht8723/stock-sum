@@ -744,9 +744,41 @@ async def test_statistic_fuzzy_search_selects_social_tag_with_reaction(monkeypat
         }
     ]
     assert "Select a fuzzy_search match" in interaction.response.messages[0]["content"]
+    assert interaction.response.sent_messages[0].reactions == ["1️⃣", "2️⃣"]
     assert interaction.channel.messages[0]["content"] == "Selected: nvidia. Generating statistic chart..."
     assert interaction.channel.messages[1]["content"] == "Statistic chart is being generated, please wait a few minutes."
     assert interaction.channel.messages[2]["file"] == "statistic.png"
+
+
+async def test_statistic_fuzzy_search_accepts_plain_digit_reaction(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(reaction_emoji="2"))
+    client = FakeStockSumClient(content=b"png", filename="statistic.png")
+    client.fuzzy_matches = [
+        {
+            "mode": "social",
+            "label": "ai",
+            "row_count": 1,
+            "x_count": 1,
+            "reddit_count": 0,
+            "statistic_filters": {"fuzzy_tag": "ai"},
+        },
+        {
+            "mode": "social",
+            "label": "openai",
+            "row_count": 2,
+            "x_count": 0,
+            "reddit_count": 2,
+            "statistic_filters": {"fuzzy_tag": "openai"},
+        },
+    ]
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
+
+    assert client.statistic_calls[0]["fuzzy_tag"] == "openai"
+    assert interaction.channel.messages[0]["content"] == "Selected: openai. Generating statistic chart..."
 
 
 async def test_statistic_fuzzy_search_timeout_edits_selection_message(monkeypatch) -> None:
@@ -768,8 +800,80 @@ async def test_statistic_fuzzy_search_timeout_edits_selection_message(monkeypatc
     await report.statistic(interaction, mode="trading", fuzzy_search="Apple", days=180)
 
     assert client.statistic_calls == []
-    assert interaction.response.messages[0]["content"] == "Select a fuzzy_search match for `Apple`:\n1️⃣ Apple Inc. - Common Stock (AAPL) [ST] - 3 rows, AAPL, ST\nReact with the matching number."
+    assert interaction.response.messages[0]["content"] == "Select a fuzzy_search match for `Apple`:\n1️⃣ Apple Inc. - Common Stock (AAPL) [ST] - 3 rows, AAPL, ST\nClick one of the numbered reactions below to choose."
     assert interaction.response.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+
+
+async def test_statistic_fuzzy_search_ignores_other_user_reaction(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(reaction_user_id=999))
+    client = FakeStockSumClient(content=b"unused")
+    client.fuzzy_matches = [
+        {
+            "mode": "social",
+            "label": "ai",
+            "row_count": 1,
+            "x_count": 1,
+            "reddit_count": 0,
+            "statistic_filters": {"fuzzy_tag": "ai"},
+        }
+    ]
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
+
+    assert client.statistic_calls == []
+    assert interaction.response.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+
+
+async def test_statistic_fuzzy_search_ignores_unsupported_reaction(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(reaction_emoji="🐍"))
+    client = FakeStockSumClient(content=b"unused")
+    client.fuzzy_matches = [
+        {
+            "mode": "social",
+            "label": "ai",
+            "row_count": 1,
+            "x_count": 1,
+            "reddit_count": 0,
+            "statistic_filters": {"fuzzy_tag": "ai"},
+        }
+    ]
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
+
+    assert client.statistic_calls == []
+    assert interaction.response.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+
+
+async def test_statistic_fuzzy_search_reaction_add_failure_does_not_crash(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(reaction_emoji="1"))
+    client = FakeStockSumClient(content=b"png", filename="statistic.png")
+    client.fuzzy_matches = [
+        {
+            "mode": "social",
+            "label": "ai",
+            "row_count": 1,
+            "x_count": 1,
+            "reddit_count": 0,
+            "statistic_filters": {"fuzzy_tag": "ai"},
+        }
+    ]
+
+    async def failing_add_reaction(self, emoji: str) -> None:
+        raise RuntimeError("missing permission")
+
+    monkeypatch.setattr(FakeMessage, "add_reaction", failing_add_reaction)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
+
+    assert client.statistic_calls[0]["fuzzy_tag"] == "ai"
+    assert interaction.channel.messages[0]["content"] == "Selected: ai. Generating statistic chart..."
 
 
 async def test_management_command_blocks_non_owner(monkeypatch) -> None:
