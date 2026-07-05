@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -330,15 +331,15 @@ async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.socialreport(interaction, profile="default", format="discord", private=True)
+    await report.socialreport(interaction, profile="default", format="discord")
 
     assert interaction.response.messages == [
         {
             "content": "Social report is being generated, please wait a few minutes.",
-            "ephemeral": True,
+            "ephemeral": False,
         }
     ]
-    sent_text = [message["content"] for message in interaction.followup.messages]
+    sent_text = [message["content"] for message in interaction.channel.messages]
     assert len(sent_text) == 3
     assert sent_text[0] == "first paragraph"
     assert "job:" not in "\n".join(sent_text)
@@ -356,7 +357,7 @@ async def test_report_command_sends_public_discord_report_directly_to_channel(mo
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.socialreport(interaction, profile="default", format="discord", detail="medium", private=False)
+    await report.socialreport(interaction, profile="default", format="discord", detail="medium")
 
     assert client.social_calls == [{"profile": "default", "output_format": "discord", "detail": "medium"}]
     assert interaction.response.messages == [
@@ -381,7 +382,7 @@ async def test_report_command_sends_file_for_non_discord_format(monkeypatch) -> 
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.socialreport(interaction, profile="default", format="html", detail="full", private=False)
+    await report.socialreport(interaction, profile="default", format="html", detail="full")
 
     assert client.social_calls == [{"profile": "default", "output_format": "html", "detail": "full"}]
     assert interaction.response.messages[0]["content"] == "Social report is being generated, please wait a few minutes."
@@ -404,13 +405,12 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.socialreport(interaction, profile="default", format="discord", private=True)
+    await report.socialreport(interaction, profile="default", format="discord")
 
     assert interaction.response.messages[0]["content"] == "Social report is being generated, please wait a few minutes."
-    assert interaction.followup.messages == [
+    assert interaction.channel.messages == [
         {
             "content": "stock-sum report failed: broken",
-            "ephemeral": True,
             "suppress_embeds": True,
         }
     ]
@@ -422,7 +422,7 @@ async def test_socialreport_rejects_invalid_parameters_before_api_call(monkeypat
     client = FakeStockSumClient(content=b"unused")
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.socialreport(interaction, profile="bad profile!", format="discord", detail="minimum", private=False)
+    await report.socialreport(interaction, profile="bad profile!", format="discord", detail="minimum")
 
     assert client.social_calls == []
     assert interaction.response.messages == [
@@ -443,7 +443,7 @@ async def test_tradingreport_command_rejects_missing_filters(monkeypatch) -> Non
         lambda: FakeStockSumClient(content=b"unused"),
     )
 
-    await report.tradingreport(interaction, format="discord", private=False)
+    await report.tradingreport(interaction, format="discord")
 
     assert interaction.response.messages == [
         {
@@ -467,7 +467,6 @@ async def test_tradingreport_rejects_invalid_date_and_limit_before_api_call(monk
         start_date="2026-13-01",
         limit=0,
         format="discord",
-        private=False,
     )
 
     assert client.trading_calls == []
@@ -487,7 +486,7 @@ async def test_tradingreport_rejects_unknown_asset_type_before_api_call(monkeypa
     client = FakeStockSumClient(content=b"unused")
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.tradingreport(interaction, asset_type="bad!", format="discord", private=False)
+    await report.tradingreport(interaction, asset_type="bad!", format="discord")
 
     assert client.trading_calls == []
     assert "asset_type must be" in interaction.response.messages[0]["content"]
@@ -508,7 +507,6 @@ async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
         ticker="amzn",
         limit=25,
         format="discord",
-        private=False,
         force_refresh=True,
     )
 
@@ -547,7 +545,6 @@ async def test_13freport_rejects_invalid_filters_before_api_call(monkeypatch) ->
         period_end="2026-03-31",
         limit=101,
         format="discord",
-        private=False,
     )
 
     assert client.sec_13f_calls == []
@@ -580,7 +577,6 @@ async def test_13freport_command_sends_discord_report(monkeypatch) -> None:
         min_value=1000,
         limit=25,
         format="discord",
-        private=False,
         force_refresh=True,
     )
 
@@ -619,7 +615,7 @@ async def test_statistic_rejects_invalid_parameters_before_api_call(monkeypatch)
     client = FakeStockSumClient(content=b"unused")
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.statistic(interaction, mode="social", ticker="bad ticker!", days=30, private=False)
+    await report.statistic(interaction, mode="social", ticker="bad ticker!", days=30)
 
     assert client.statistic_calls == []
     assert interaction.response.messages == [
@@ -647,7 +643,6 @@ async def test_statistic_command_sends_png_file(monkeypatch) -> None:
         action="sell",
         days=180,
         bucket="week",
-        private=False,
     )
 
     assert client.statistic_calls == [
@@ -655,7 +650,9 @@ async def test_statistic_command_sends_png_file(monkeypatch) -> None:
             "mode": "trading",
             "profile": "default",
             "ticker": "AAPL",
+            "fuzzy_tag": None,
             "name": "Pelosi",
+            "asset_name": None,
             "asset_type": "ST",
             "action": "sell",
             "source": "all",
@@ -679,6 +676,100 @@ async def test_statistic_command_sends_png_file(monkeypatch) -> None:
             "suppress_embeds": True,
         }
     ]
+
+
+async def test_statistic_rejects_ticker_and_fuzzy_search_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot())
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.statistic(interaction, mode="social", ticker="NVDA", fuzzy_search="nvidia", days=30)
+
+    assert client.fuzzy_calls == []
+    assert client.statistic_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: Use either ticker or fuzzy_search, not both.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_statistic_fuzzy_search_selects_social_tag_with_reaction(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(reaction_emoji="2️⃣"))
+    client = FakeStockSumClient(content=b"png", filename="statistic.png")
+    client.fuzzy_matches = [
+        {
+            "mode": "social",
+            "label": "ai",
+            "row_count": 4,
+            "x_count": 2,
+            "reddit_count": 2,
+            "statistic_filters": {"fuzzy_tag": "ai"},
+        },
+        {
+            "mode": "social",
+            "label": "nvidia",
+            "row_count": 17,
+            "x_count": 9,
+            "reddit_count": 8,
+            "statistic_filters": {"fuzzy_tag": "nvidia"},
+        },
+    ]
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.statistic(interaction, mode="social", fuzzy_search="NVIDIA", days=30)
+
+    assert client.fuzzy_calls == [{"mode": "social", "profile": "default", "query": "NVIDIA", "limit": 5}]
+    assert client.statistic_calls == [
+        {
+            "mode": "social",
+            "profile": "default",
+            "ticker": None,
+            "fuzzy_tag": "nvidia",
+            "name": None,
+            "asset_name": None,
+            "asset_type": None,
+            "action": "all",
+            "source": "all",
+            "sentiment": "all",
+            "days": 30,
+            "start_date": None,
+            "end_date": None,
+            "bucket": "auto",
+        }
+    ]
+    assert "Select a fuzzy_search match" in interaction.response.messages[0]["content"]
+    assert interaction.channel.messages[0]["content"] == "Selected: nvidia. Generating statistic chart..."
+    assert interaction.channel.messages[1]["content"] == "Statistic chart is being generated, please wait a few minutes."
+    assert interaction.channel.messages[2]["file"] == "statistic.png"
+
+
+async def test_statistic_fuzzy_search_timeout_edits_selection_message(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(timeout=True))
+    client = FakeStockSumClient(content=b"unused")
+    client.fuzzy_matches = [
+        {
+            "mode": "trading",
+            "label": "Apple Inc. - Common Stock (AAPL) [ST]",
+            "row_count": 3,
+            "ticker": "AAPL",
+            "asset_type_code": "ST",
+            "statistic_filters": {"asset_name": "Apple Inc. - Common Stock (AAPL) [ST]", "ticker": "AAPL"},
+        }
+    ]
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.statistic(interaction, mode="trading", fuzzy_search="Apple", days=180)
+
+    assert client.statistic_calls == []
+    assert interaction.response.messages[0]["content"] == "Select a fuzzy_search match for `Apple`:\n1️⃣ Apple Inc. - Common Stock (AAPL) [ST] - 3 rows, AAPL, ST\nReact with the matching number."
+    assert interaction.response.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
 
 
 async def test_management_command_blocks_non_owner(monkeypatch) -> None:
@@ -914,6 +1005,8 @@ class FakeStockSumClient:
         self.trading_calls: list[dict[str, Any]] = []
         self.sec_13f_calls: list[dict[str, Any]] = []
         self.statistic_calls: list[dict[str, Any]] = []
+        self.fuzzy_matches: list[dict[str, Any]] = []
+        self.fuzzy_calls: list[dict[str, Any]] = []
 
     async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
         self.social_calls.append({"profile": profile, "output_format": output_format, "detail": detail})
@@ -979,6 +1072,10 @@ class FakeStockSumClient:
             status={"status": "succeeded"},
         )
 
+    async def statistic_fuzzy_matches(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.fuzzy_calls.append(kwargs)
+        return self.fuzzy_matches
+
 
 class FakeFailingStockSumClient:
     async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
@@ -999,12 +1096,13 @@ class FakeInteraction:
         self.response = FakeResponseSender()
         self.followup = FakeFollowupSender()
         self.channel = FakeChannelSender()
-        self.user = object()
+        self.user = FakeUser(100)
 
 
 class FakeResponseSender:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
+        self.sent_messages: list[FakeMessage] = []
 
     def is_done(self) -> bool:
         return bool(self.messages)
@@ -1016,13 +1114,16 @@ class FakeResponseSender:
         ephemeral: bool,
         file: Any | None = None,
         suppress_embeds: bool = False,
-    ) -> None:
+    ) -> Any:
         message = {"content": content, "ephemeral": ephemeral}
         if file is not None:
             message["file"] = file.filename
         if suppress_embeds:
             message["suppress_embeds"] = suppress_embeds
         self.messages.append(message)
+        sent_message = FakeMessage(content)
+        self.sent_messages.append(sent_message)
+        return sent_message
 
 
 class FakeFollowupSender:
@@ -1049,13 +1150,14 @@ class FakeChannelSender:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
 
-    async def send(self, content: str, file: Any | None = None, suppress_embeds: bool = False) -> None:
+    async def send(self, content: str, file: Any | None = None, suppress_embeds: bool = False) -> Any:
         message = {"content": content}
         if file is not None:
             message["file"] = file.filename
         if suppress_embeds:
             message["suppress_embeds"] = suppress_embeds
         self.messages.append(message)
+        return FakeMessage(content)
 
 
 class FakeDiscord:
@@ -1066,11 +1168,52 @@ class FakeDiscord:
 
 
 class FakeBot:
-    def __init__(self, *, owner: bool) -> None:
+    def __init__(self, *, owner: bool = True, reaction_emoji: str = "1️⃣", reaction_user_id: int = 100, timeout: bool = False) -> None:
         self.owner = owner
+        self.reaction_emoji = reaction_emoji
+        self.reaction_user_id = reaction_user_id
+        self.timeout = timeout
 
     async def is_owner(self, _user: object) -> bool:
         return self.owner
+
+    async def wait_for(self, _event: str, *, timeout: float, check: Any) -> tuple[Any, Any]:
+        if self.timeout:
+            raise asyncio.TimeoutError
+        reaction = FakeReaction(self.reaction_emoji)
+        user = FakeUser(self.reaction_user_id)
+        if check(reaction, user):
+            return reaction, user
+        raise asyncio.TimeoutError
+
+
+class FakeUser:
+    def __init__(self, user_id: int) -> None:
+        self.id = user_id
+
+
+class FakeReaction:
+    def __init__(self, emoji: str) -> None:
+        self.emoji = emoji
+        self.message = None
+
+
+class FakeMessage:
+    _next_id = 1
+
+    def __init__(self, content: str) -> None:
+        self.id = FakeMessage._next_id
+        FakeMessage._next_id += 1
+        self.content = content
+        self.reactions: list[str] = []
+        self.edits: list[str] = []
+
+    async def add_reaction(self, emoji: str) -> None:
+        self.reactions.append(emoji)
+
+    async def edit(self, *, content: str) -> None:
+        self.content = content
+        self.edits.append(content)
 
 
 class FakeManagementClient:

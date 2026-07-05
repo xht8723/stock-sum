@@ -94,7 +94,9 @@ class StatisticJobOptions:
     mode: StatisticMode = "social"
     profile: str = "default"
     ticker: str | None = None
+    fuzzy_tag: str | None = None
     name: str | None = None
+    asset_name: str | None = None
     asset_type: str | None = None
     action: Literal["purchase", "sell", "sell_partial", "all"] = "all"
     source: Literal["x", "reddit", "all"] = "all"
@@ -277,6 +279,38 @@ class HttpJobManager:
         self._save(record)
         self._refresh_memory_status(record.job_id)
         return record
+
+    async def statistic_fuzzy_matches(
+        self,
+        *,
+        mode: StatisticMode,
+        query: str,
+        profile: str = "default",
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Return fuzzy statistic candidates from SQLite."""
+
+        normalized_query = query.strip()
+        if mode not in {"social", "trading"}:
+            raise ValueError("Statistic fuzzy mode must be social or trading.")
+        if not normalized_query:
+            raise ValueError("Statistic fuzzy search query is required.")
+        bounded_limit = max(1, min(5, limit))
+        if mode == "social":
+            self._validate_profile(profile)
+        repository = self._repository_factory()
+        if mode == "social":
+            matches = await repository.search_social_statistic_tags(
+                profile=profile,
+                query=normalized_query,
+                limit=bounded_limit,
+            )
+        else:
+            matches = await repository.search_trading_statistic_assets(
+                query=normalized_query,
+                limit=bounded_limit,
+            )
+        return [asdict(match) for match in matches]
 
     def create_collect_job(self, profile: str) -> HttpJobRecord:
         """Create a queued collection-only job."""
@@ -692,6 +726,7 @@ class HttpJobManager:
                 points = await repository.read_social_statistic_points(
                     profile=options.profile,
                     ticker=options.ticker,
+                    fuzzy_tag=options.fuzzy_tag,
                     source=options.source,
                     sentiment=None if options.sentiment == "all" else options.sentiment,
                     posted_start=start_at,
@@ -708,6 +743,7 @@ class HttpJobManager:
             else:
                 points = await repository.read_trading_statistic_points(
                     name_contains=options.name,
+                    asset_name=options.asset_name,
                     transaction_start=start_at,
                     transaction_end=end_at,
                     asset_type=options.asset_type,
@@ -1410,9 +1446,20 @@ def _validate_statistic_filters(options: StatisticJobOptions) -> None:
             raise ValueError("Statistic sentiment must be bullish, bearish, mixed, neutral, unclear, or all.")
     if options.mode == "trading" and options.action not in {"purchase", "sell", "sell_partial", "all"}:
         raise ValueError("Statistic action must be purchase, sell, sell_partial, or all.")
-    has_filter = any((options.ticker, options.name, options.asset_type, options.days, options.start_date, options.end_date))
+    has_filter = any(
+        (
+            options.ticker,
+            options.fuzzy_tag,
+            options.name,
+            options.asset_name,
+            options.asset_type,
+            options.days,
+            options.start_date,
+            options.end_date,
+        )
+    )
     if not has_filter:
-        raise ValueError("Statistic requires at least one filter: ticker, name, asset_type, days, or date range.")
+        raise ValueError("Statistic requires at least one filter: ticker, fuzzy_tag, name, asset_name, asset_type, days, or date range.")
 
 
 def _trading_date_window(options: TradingReportJobOptions) -> tuple[datetime | None, datetime | None]:
@@ -1501,7 +1548,9 @@ def _statistic_filter_data(
         "mode": options.mode,
         "profile": options.profile if options.mode == "social" else None,
         "ticker": options.ticker,
+        "fuzzy_tag": options.fuzzy_tag if options.mode == "social" else None,
         "name": options.name,
+        "asset_name": options.asset_name if options.mode == "trading" else None,
         "asset_type": options.asset_type,
         "action": options.action,
         "source": options.source if options.mode == "social" else None,

@@ -211,3 +211,20 @@ class StoredTradingStatisticPoint:
     transaction_date: str | None
     transaction_date_utc: str | None
     amount: str | None
+
+
+@dataclass(frozen=True)
+class StoredStatisticFuzzyMatch:
+    """Candidate returned by statistic fuzzy search."""
+
+    mode: str
+    label: str
+    source: str
+    match_value: str
+    row_count: int
+    x_count: int = 0
+    reddit_count: int = 0
+    ticker: str | None = None
+    asset_name: str | None = None
+    asset_type_code: str | None = None
+    statistic_filters: dict[str, Any] = field(default_factory=dict)

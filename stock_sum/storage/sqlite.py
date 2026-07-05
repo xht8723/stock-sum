@@ -30,6 +30,7 @@ from stock_sum.storage.models import (
     StoredRedditPost,
     StoredSec13FHolding,
     StoredSocialStatisticPoint,
+    StoredStatisticFuzzyMatch,
     StoredTradingStatisticPoint,
     StoredXPost,
 )
@@ -1030,6 +1031,7 @@ class SQLiteStorageRepository:
         *,
         profile: str,
         ticker: str | None = None,
+        fuzzy_tag: str | None = None,
         source: str | None = None,
         sentiment: str | None = None,
         posted_start: datetime | None = None,
@@ -1040,6 +1042,7 @@ class SQLiteStorageRepository:
 
         await self.initialize()
         normalized_ticker = _normalized_ticker(ticker) if ticker else None
+        normalized_fuzzy_tag = _normalized_tag_filter(fuzzy_tag)
         normalized_source = (source or "all").strip().lower()
         normalized_sentiment = (sentiment or "").strip().lower() or None
         if normalized_source not in {"all", "x", "reddit"}:
@@ -1056,6 +1059,7 @@ class SQLiteStorageRepository:
                         profile=profile,
                         analysis_run_id=run_id,
                         ticker=normalized_ticker,
+                        fuzzy_tag=normalized_fuzzy_tag,
                         sentiment=normalized_sentiment,
                         posted_start=posted_start,
                         posted_end=posted_end,
@@ -1068,6 +1072,7 @@ class SQLiteStorageRepository:
                         profile=profile,
                         analysis_run_id=run_id,
                         ticker=normalized_ticker,
+                        fuzzy_tag=normalized_fuzzy_tag,
                         sentiment=normalized_sentiment,
                         posted_start=posted_start,
                         posted_end=posted_end,
@@ -1075,6 +1080,77 @@ class SQLiteStorageRepository:
                 )
         points.sort(key=lambda item: item.posted_at or "", reverse=True)
         return points
+
+    async def search_social_statistic_tags(
+        self,
+        *,
+        profile: str,
+        query: str,
+        limit: int = 5,
+    ) -> list[StoredStatisticFuzzyMatch]:
+        """Return tag candidates from the latest social analysis run."""
+
+        await self.initialize()
+        query_text = _normalized_tag_filter(query)
+        if not query_text:
+            return []
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            run_id = await _latest_analysis_run_id(db, profile)
+            if run_id is None:
+                return []
+            cursor = await db.execute(
+                """
+                SELECT 'x' AS source, tags_json
+                FROM llm_x_post_analyses
+                WHERE profile = ? AND analysis_run_id = ?
+                UNION ALL
+                SELECT 'reddit' AS source, tags_json
+                FROM llm_reddit_post_analyses
+                WHERE profile = ? AND analysis_run_id = ?
+                """,
+                (profile, run_id, profile, run_id),
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+
+        counts: dict[str, dict[str, Any]] = {}
+        for source, tags_json in rows:
+            seen_in_row: set[str] = set()
+            for tag_value in _json_list(tags_json):
+                tag = _normalized_tag_filter(str(tag_value))
+                if not tag or query_text not in tag or tag in seen_in_row:
+                    continue
+                seen_in_row.add(tag)
+                item = counts.setdefault(tag, {"row_count": 0, "x_count": 0, "reddit_count": 0})
+                item["row_count"] += 1
+                if source == "x":
+                    item["x_count"] += 1
+                elif source == "reddit":
+                    item["reddit_count"] += 1
+
+        sorted_tags = sorted(
+            counts.items(),
+            key=lambda item: (
+                0 if item[0] == query_text else 1 if item[0].startswith(query_text) else 2,
+                -int(item[1]["row_count"]),
+                item[0],
+            ),
+        )[: max(1, limit)]
+        return [
+            StoredStatisticFuzzyMatch(
+                mode="social",
+                label=tag,
+                source="social_tags",
+                match_value=tag,
+                row_count=int(data["row_count"]),
+                x_count=int(data["x_count"]),
+                reddit_count=int(data["reddit_count"]),
+                statistic_filters={"fuzzy_tag": tag},
+            )
+            for tag, data in sorted_tags
+        ]
 
     async def list_collection_runs(
         self,
@@ -1357,6 +1433,7 @@ class SQLiteStorageRepository:
         self,
         *,
         name_contains: str | None = None,
+        asset_name: str | None = None,
         transaction_start: datetime | None = None,
         transaction_end: datetime | None = None,
         asset_type: str | None = None,
@@ -1379,6 +1456,10 @@ class SQLiteStorageRepository:
         if normalized_name:
             conditions.append("f.name_normalized LIKE ?")
             params.append(f"%{normalized_name}%")
+        normalized_asset_name = _normalized_contains_filter(asset_name)
+        if normalized_asset_name:
+            conditions.append("LOWER(COALESCE(r.asset, '')) LIKE ?")
+            params.append(f"%{normalized_asset_name}%")
         if transaction_start is not None:
             conditions.append("r.transaction_date_utc >= ?")
             params.append(_datetime_param(transaction_start))
@@ -1424,6 +1505,64 @@ class SQLiteStorageRepository:
             )
             for row in rows
         ]
+
+    async def search_trading_statistic_assets(
+        self,
+        *,
+        query: str,
+        limit: int = 5,
+    ) -> list[StoredStatisticFuzzyMatch]:
+        """Return House PTR asset candidates for statistic fuzzy search."""
+
+        await self.initialize()
+        normalized_query = _normalized_contains_filter(query)
+        if not normalized_query:
+            return []
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT r.asset, r.asset_type_code, r.stock_ticker, COUNT(*) AS row_count
+                FROM raw_house_ptr_trade_rows r
+                WHERE LOWER(COALESCE(r.asset, '')) LIKE ?
+                GROUP BY r.asset, r.asset_type_code, r.stock_ticker
+                ORDER BY
+                    CASE
+                        WHEN LOWER(COALESCE(r.asset, '')) = ? THEN 0
+                        WHEN LOWER(COALESCE(r.asset, '')) LIKE ? THEN 1
+                        ELSE 2
+                    END,
+                    row_count DESC,
+                    r.asset ASC
+                LIMIT ?
+                """,
+                (f"%{normalized_query}%", normalized_query, f"{normalized_query}%", max(1, limit)),
+            )
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+
+        matches: list[StoredStatisticFuzzyMatch] = []
+        for asset, asset_type_code, stock_ticker, row_count in rows:
+            filters: dict[str, Any] = {"asset_name": asset}
+            if asset_type_code:
+                filters["asset_type"] = asset_type_code
+            if stock_ticker:
+                filters["ticker"] = stock_ticker
+            matches.append(
+                StoredStatisticFuzzyMatch(
+                    mode="trading",
+                    label=str(asset or "Unknown asset"),
+                    source="house_ptr_assets",
+                    match_value=str(asset or ""),
+                    row_count=int(row_count or 0),
+                    ticker=stock_ticker,
+                    asset_name=asset,
+                    asset_type_code=asset_type_code,
+                    statistic_filters=filters,
+                )
+            )
+        return matches
 
     async def read_sec_13f_holdings(
         self,
@@ -1601,6 +1740,31 @@ def _normalized_upper_filter(value: str | None) -> str | None:
         return None
     normalized = value.strip().upper()
     return normalized or None
+
+
+def _normalized_contains_filter(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = " ".join(value.strip().lower().split())
+    return normalized or None
+
+
+def _normalized_tag_filter(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _tags_contain(tags_json: str | None, fuzzy_tag: str) -> bool:
+    normalized_tag = _normalized_tag_filter(fuzzy_tag)
+    if not normalized_tag:
+        return False
+    for item in _json_list(tags_json):
+        tag = _normalized_tag_filter(str(item))
+        if tag == normalized_tag:
+            return True
+    return False
 
 
 def _normalized_action_filter(value: str | None) -> str | None:
@@ -1892,6 +2056,7 @@ async def _read_x_statistic_points(
     profile: str,
     analysis_run_id: str,
     ticker: str | None,
+    fuzzy_tag: str | None,
     sentiment: str | None,
     posted_start: datetime | None,
     posted_end: datetime | None,
@@ -1914,6 +2079,9 @@ async def _read_x_statistic_points(
     if sentiment:
         conditions.append("x.sentiment = ?")
         params.append(sentiment)
+    if fuzzy_tag:
+        conditions.append("LOWER(x.tags_json) LIKE ?")
+        params.append(f"%{fuzzy_tag}%")
     if posted_start is not None:
         conditions.append("x.posted_at_text >= ?")
         params.append(_datetime_param(posted_start))
@@ -1923,7 +2091,7 @@ async def _read_x_statistic_points(
     cursor = await db.execute(
         f"""
         SELECT {select_ticker}, x.status_id, x.source_ref, x.handle, x.sentiment,
-               x.importance, x.posted_at_text, x.analyzed_at
+               x.importance, x.posted_at_text, x.analyzed_at, x.tags_json
         FROM llm_x_post_analyses x
         {join_ticker}
         WHERE {" AND ".join(conditions)}
@@ -1949,6 +2117,7 @@ async def _read_x_statistic_points(
             analyzed_at=row[7],
         )
         for row in rows
+        if fuzzy_tag is None or _tags_contain(row[8], fuzzy_tag)
     ]
 
 
@@ -1958,6 +2127,7 @@ async def _read_reddit_statistic_points(
     profile: str,
     analysis_run_id: str,
     ticker: str | None,
+    fuzzy_tag: str | None,
     sentiment: str | None,
     posted_start: datetime | None,
     posted_end: datetime | None,
@@ -1980,6 +2150,9 @@ async def _read_reddit_statistic_points(
     if sentiment:
         conditions.append("r.sentiment = ?")
         params.append(sentiment)
+    if fuzzy_tag:
+        conditions.append("LOWER(r.tags_json) LIKE ?")
+        params.append(f"%{fuzzy_tag}%")
     if posted_start is not None:
         conditions.append("r.created_at_text >= ?")
         params.append(_datetime_param(posted_start))
@@ -1989,7 +2162,7 @@ async def _read_reddit_statistic_points(
     cursor = await db.execute(
         f"""
         SELECT {select_ticker}, r.post_id, r.source_ref, r.subreddit, r.sentiment,
-               r.importance, r.created_at_text, r.analyzed_at
+               r.importance, r.created_at_text, r.analyzed_at, r.tags_json
         FROM llm_reddit_post_analyses r
         {join_ticker}
         WHERE {" AND ".join(conditions)}
@@ -2015,6 +2188,7 @@ async def _read_reddit_statistic_points(
             analyzed_at=row[7],
         )
         for row in rows
+        if fuzzy_tag is None or _tags_contain(row[8], fuzzy_tag)
     ]
 
 

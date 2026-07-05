@@ -77,6 +77,8 @@ SUPPORTED_STATISTIC_SOURCES = {"x", "reddit", "all"}
 SUPPORTED_STATISTIC_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral", "unclear", "all"}
 SUPPORTED_STATISTIC_ACTIONS = {"purchase", "sell", "sell_partial", "all"}
 SUPPORTED_PUT_CALL = {"PUT", "CALL"}
+FUZZY_REACTION_OPTIONS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+FUZZY_SELECTION_TIMEOUT_SECONDS = 60.0
 MAX_SOURCE_FETCH_LIMIT = 300
 MAX_LOOKBACK_HOURS = 24 * 31
 MAX_COMMENTS_PER_POST = 500
@@ -347,7 +349,9 @@ class StockSumHttpClient:
         mode: str,
         profile: str = "default",
         ticker: str | None = None,
+        fuzzy_tag: str | None = None,
         name: str | None = None,
+        asset_name: str | None = None,
         asset_type: str | None = None,
         action: str = "all",
         source: str = "all",
@@ -363,8 +367,8 @@ class StockSumHttpClient:
             raise StockSumRequestError(f"Unsupported statistic mode: {mode}")
         if bucket not in SUPPORTED_STATISTIC_BUCKETS:
             raise StockSumRequestError(f"Unsupported statistic bucket: {bucket}")
-        if not any((ticker, name, asset_type, days, start_date, end_date)):
-            raise StockSumRequestError("statistic requires at least one filter: ticker, name, asset_type, days, or date range.")
+        if not any((ticker, fuzzy_tag, name, asset_name, asset_type, days, start_date, end_date)):
+            raise StockSumRequestError("statistic requires at least one filter: ticker, fuzzy_tag, name, asset_name, asset_type, days, or date range.")
 
         session, owns_session = await self._session()
         try:
@@ -372,7 +376,9 @@ class StockSumHttpClient:
                 "mode": mode,
                 "profile": profile,
                 "ticker": ticker,
+                "fuzzy_tag": fuzzy_tag,
                 "name": name,
+                "asset_name": asset_name,
                 "asset_type": asset_type,
                 "action": action,
                 "source": source,
@@ -399,6 +405,25 @@ class StockSumHttpClient:
         finally:
             if owns_session:
                 await session.close()
+
+    async def statistic_fuzzy_matches(
+        self,
+        *,
+        mode: str,
+        query: str,
+        profile: str = "default",
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Return statistic fuzzy-match candidates."""
+
+        if mode not in SUPPORTED_STATISTIC_MODES:
+            raise StockSumRequestError(f"Unsupported statistic mode: {mode}")
+        params = f"mode={quote(mode, safe='')}&q={quote(query, safe='')}&profile={quote(profile, safe='')}&limit={max(1, min(5, limit))}"
+        payload = await self.get_json(f"/v1/statistics/fuzzy-matches?{params}")
+        matches = payload.get("matches")
+        if not isinstance(matches, list):
+            raise StockSumRequestError("stock-sum returned malformed fuzzy search matches.")
+        return [item for item in matches if isinstance(item, dict)]
 
     async def run_collect_profile(self, *, profile: str) -> dict[str, Any]:
         """Create and poll a collection-only job for one profile."""
@@ -627,7 +652,6 @@ class StockSumReport(commands.Cog):
         profile="stock-sum report profile name",
         format="report artifact format",
         detail="how many social sentiment items to include",
-        private="send the response only to you",
     )
     @app_commands.choices(
         format=[
@@ -651,7 +675,6 @@ class StockSumReport(commands.Cog):
         profile: str = "default",
         format: str = "discord",
         detail: str = "minimum",
-        private: bool = False,
     ) -> None:
         """Slash command handler for social report generation."""
 
@@ -664,7 +687,7 @@ class StockSumReport(commands.Cog):
 
         await interaction.response.send_message(
             "Social report is being generated, please wait a few minutes.",
-            ephemeral=private,
+            ephemeral=False,
         )
         try:
             artifact = await StockSumHttpClient.from_env().run_report(
@@ -673,25 +696,25 @@ class StockSumReport(commands.Cog):
                 detail=detail,
             )
         except StockSumCogError as exc:
-            await _send_report_output(interaction, _failure_message(exc), private=private)
+            await _send_report_output(interaction, _failure_message(exc), private=False)
             return
 
         if discord is None:
             await _send_report_output(
                 interaction,
                 "stock-sum report is ready, but discord.py is not available.",
-                private=private,
+                private=False,
             )
             return
 
         if format == "discord":
             report_text = artifact.content.decode("utf-8", errors="replace").strip()
             for chunk in _split_discord_markdown(report_text):
-                await _send_report_output(interaction, chunk, private=private)
+                await _send_report_output(interaction, chunk, private=False)
             return
 
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await _send_report_output(interaction, "Report generated.", private=private, file=file)
+        await _send_report_output(interaction, "Report generated.", private=False, file=file)
 
     @app_commands.command(name="tradingreport", description="Generate an official House trading disclosure report.")
     @app_commands.describe(
@@ -703,7 +726,6 @@ class StockSumReport(commands.Cog):
         ticker="stock ticker for ST rows, e.g. AMZN",
         limit="optional maximum rows to return",
         format="report artifact format",
-        private="send the response only to you",
         force_refresh="force a House PTR refresh before querying",
     )
     @app_commands.choices(
@@ -726,7 +748,6 @@ class StockSumReport(commands.Cog):
         ticker: str = "",
         limit: int | None = None,
         format: str = "discord",
-        private: bool = False,
         force_refresh: bool = False,
     ) -> None:
         """Slash command handler for House PTR trading disclosure reports."""
@@ -767,7 +788,7 @@ class StockSumReport(commands.Cog):
 
         await interaction.response.send_message(
             "Trading disclosure report is being generated, please wait a few minutes.",
-            ephemeral=private,
+            ephemeral=False,
         )
         try:
             artifact = await StockSumHttpClient.from_env().run_trading_report(
@@ -782,25 +803,25 @@ class StockSumReport(commands.Cog):
                 force_refresh=force_refresh,
             )
         except StockSumCogError as exc:
-            await _send_report_output(interaction, _failure_message(exc), private=private)
+            await _send_report_output(interaction, _failure_message(exc), private=False)
             return
 
         if discord is None:
             await _send_report_output(
                 interaction,
                 "stock-sum report is ready, but discord.py is not available.",
-                private=private,
+                private=False,
             )
             return
 
         if format == "discord":
             report_text = artifact.content.decode("utf-8", errors="replace").strip()
             for chunk in _split_discord_markdown(report_text):
-                await _send_report_output(interaction, chunk, private=private)
+                await _send_report_output(interaction, chunk, private=False)
             return
 
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await _send_report_output(interaction, "Report generated.", private=private, file=file)
+        await _send_report_output(interaction, "Report generated.", private=False, file=file)
 
     @app_commands.command(name="13freport", description="Generate an SEC 13F holdings report.")
     @app_commands.describe(
@@ -819,7 +840,6 @@ class StockSumReport(commands.Cog):
         min_shares="minimum shares/principal amount",
         limit="maximum rows to return, 1-100",
         format="report artifact format",
-        private="send the response only to you",
         force_refresh="force latest SEC 13F dataset refresh before querying",
     )
     @app_commands.choices(
@@ -853,7 +873,6 @@ class StockSumReport(commands.Cog):
         min_shares: int | None = None,
         limit: int = 20,
         format: str = "discord",
-        private: bool = False,
         force_refresh: bool = False,
     ) -> None:
         """Slash command handler for SEC 13F holdings reports."""
@@ -916,7 +935,7 @@ class StockSumReport(commands.Cog):
 
         await interaction.response.send_message(
             "SEC 13F report is being generated, please wait a few minutes.",
-            ephemeral=private,
+            ephemeral=False,
         )
         try:
             artifact = await StockSumHttpClient.from_env().run_13f_report(
@@ -938,30 +957,31 @@ class StockSumReport(commands.Cog):
                 force_refresh=force_refresh,
             )
         except StockSumCogError as exc:
-            await _send_report_output(interaction, _failure_message(exc), private=private)
+            await _send_report_output(interaction, _failure_message(exc), private=False)
             return
 
         if discord is None:
             await _send_report_output(
                 interaction,
                 "stock-sum report is ready, but discord.py is not available.",
-                private=private,
+                private=False,
             )
             return
 
         if format == "discord":
             report_text = artifact.content.decode("utf-8", errors="replace").strip()
             for chunk in _split_discord_markdown(report_text):
-                await _send_report_output(interaction, chunk, private=private)
+                await _send_report_output(interaction, chunk, private=False)
             return
 
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await _send_report_output(interaction, "Report generated.", private=private, file=file)
+        await _send_report_output(interaction, "Report generated.", private=False, file=file)
 
     @app_commands.command(name="statistic", description="Generate a stock-sum statistics chart.")
     @app_commands.describe(
         mode="statistic mode",
         ticker="stock ticker filter, e.g. NVDA",
+        fuzzy_search="fuzzy search text; social searches tags, trading searches assets",
         name="House filer name filter for trading mode",
         asset_type="House asset type code for trading mode, e.g. ST",
         action="House trading action filter",
@@ -972,7 +992,6 @@ class StockSumReport(commands.Cog):
         start_date="start date, YYYY-MM-DD",
         end_date="end date, YYYY-MM-DD",
         bucket="time bucket",
-        private="send the chart only to you",
     )
     @app_commands.choices(
         mode=[
@@ -1010,6 +1029,7 @@ class StockSumReport(commands.Cog):
         interaction,
         mode: str = "social",
         ticker: str = "",
+        fuzzy_search: str = "",
         name: str = "",
         asset_type: str = "",
         action: str = "all",
@@ -1020,12 +1040,12 @@ class StockSumReport(commands.Cog):
         start_date: str = "",
         end_date: str = "",
         bucket: str = "auto",
-        private: bool = False,
     ) -> None:
         """Slash command handler for statistic PNG charts."""
 
         mode_filter = mode.strip().lower()
         ticker_filter = ticker.strip().upper() or None
+        fuzzy_search_filter = fuzzy_search.strip() or None
         name_filter = name.strip() or None
         asset_type_filter = asset_type.strip().upper() or None
         action_filter = action.strip().lower() or "all"
@@ -1041,11 +1061,16 @@ class StockSumReport(commands.Cog):
         if error:
             await _send_validation_error(interaction, error)
             return
+        if ticker_filter and fuzzy_search_filter:
+            await _send_validation_error(interaction, "Use either ticker or fuzzy_search, not both.")
+            return
         if error := _validate_statistic_options(
             mode=mode_filter,
             profile=profile,
             ticker=ticker_filter,
+            fuzzy_tag=fuzzy_search_filter,
             name=name_filter,
+            asset_name=None,
             asset_type=asset_type_filter,
             action=action_filter,
             source=source_filter,
@@ -1058,17 +1083,41 @@ class StockSumReport(commands.Cog):
             await _send_validation_error(interaction, error)
             return
 
-        await interaction.response.send_message(
-            "Statistic chart is being generated, please wait a few minutes.",
-            ephemeral=private,
-        )
+        selected_filters: dict[str, Any] = {}
+        if fuzzy_search_filter:
+            try:
+                selected_filters = await self._select_statistic_fuzzy_match(
+                    interaction,
+                    mode=mode_filter,
+                    profile=profile,
+                    query=fuzzy_search_filter,
+                )
+            except StockSumCogError as exc:
+                await _send_validation_error(interaction, str(exc))
+                return
+            if not selected_filters:
+                return
+
+        if selected_filters:
+            await _send_report_output(
+                interaction,
+                "Statistic chart is being generated, please wait a few minutes.",
+                private=False,
+            )
+        else:
+            await interaction.response.send_message(
+                "Statistic chart is being generated, please wait a few minutes.",
+                ephemeral=False,
+            )
         try:
             artifact = await StockSumHttpClient.from_env().run_statistic(
                 mode=mode_filter,
                 profile=profile,
-                ticker=ticker_filter,
+                ticker=selected_filters.get("ticker") or ticker_filter,
+                fuzzy_tag=selected_filters.get("fuzzy_tag"),
                 name=name_filter,
-                asset_type=asset_type_filter,
+                asset_name=selected_filters.get("asset_name"),
+                asset_type=asset_type_filter or selected_filters.get("asset_type"),
                 action=action_filter,
                 source=source_filter,
                 sentiment=sentiment_filter,
@@ -1078,18 +1127,63 @@ class StockSumReport(commands.Cog):
                 bucket=bucket_filter,
             )
         except StockSumCogError as exc:
-            await _send_report_output(interaction, _failure_message(exc), private=private)
+            await _send_report_output(interaction, _failure_message(exc), private=False)
             return
 
         if discord is None:
             await _send_report_output(
                 interaction,
                 "stock-sum statistic is ready, but discord.py is not available.",
-                private=private,
+                private=False,
             )
             return
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await _send_report_output(interaction, "Statistic generated.", private=private, file=file)
+        await _send_report_output(interaction, "Statistic generated.", private=False, file=file)
+
+    async def _select_statistic_fuzzy_match(
+        self,
+        interaction,
+        *,
+        mode: str,
+        profile: str,
+        query: str,
+    ) -> dict[str, Any]:
+        matches = await StockSumHttpClient.from_env().statistic_fuzzy_matches(
+            mode=mode,
+            profile=profile,
+            query=query,
+            limit=len(FUZZY_REACTION_OPTIONS),
+        )
+        if not matches:
+            raise StockSumRequestError(f"No fuzzy_search matches found for {query!r}.")
+        message = await _send_public_interaction_message(interaction, _format_fuzzy_match_prompt(query, matches))
+        usable_reactions = FUZZY_REACTION_OPTIONS[: len(matches)]
+        for emoji in usable_reactions:
+            if hasattr(message, "add_reaction"):
+                await message.add_reaction(emoji)
+
+        def check(reaction, user) -> bool:
+            emoji = str(getattr(reaction, "emoji", reaction))
+            reacted_message = getattr(reaction, "message", None)
+            same_message = reacted_message is None or getattr(reacted_message, "id", None) == getattr(message, "id", None)
+            return same_message and getattr(user, "id", None) == getattr(interaction.user, "id", None) and emoji in usable_reactions
+
+        try:
+            reaction, _user = await self.bot.wait_for(
+                "reaction_add",
+                timeout=FUZZY_SELECTION_TIMEOUT_SECONDS,
+                check=check,
+            )
+        except asyncio.TimeoutError:
+            await _edit_message_content(message, "Selection timed out. Run /statistic again to retry.")
+            return {}
+
+        selected_index = usable_reactions.index(str(getattr(reaction, "emoji", reaction)))
+        selected = matches[selected_index]
+        label = str(selected.get("label") or selected.get("match_value") or "selection")
+        await _send_report_output(interaction, f"Selected: {label}. Generating statistic chart...", private=False)
+        filters = selected.get("statistic_filters")
+        return filters if isinstance(filters, dict) else {}
 
     @profiles.command(name="list", description="List stock-sum profiles.")
     async def profiles_list(self, interaction) -> None:
@@ -1542,7 +1636,9 @@ def _validate_statistic_options(
     mode: str,
     profile: str,
     ticker: str | None,
+    fuzzy_tag: str | None,
     name: str | None,
+    asset_name: str | None,
     asset_type: str | None,
     action: str,
     source: str,
@@ -1572,8 +1668,8 @@ def _validate_statistic_options(
         return error
     if days is not None and (start_date or end_date):
         return "statistic accepts either days or explicit start/end dates, not both."
-    if not any((ticker, name, asset_type, days, start_date, end_date)):
-        return "statistic requires at least one filter: ticker, name, asset_type, days, or date range."
+    if not any((ticker, fuzzy_tag, name, asset_name, asset_type, days, start_date, end_date)):
+        return "statistic requires at least one filter: ticker, fuzzy_search, name, asset_type, days, or date range."
     return None
 
 
@@ -1621,6 +1717,56 @@ async def _send_report_output(interaction, content: str, *, private: bool, file:
         return
 
     await interaction.followup.send(content, ephemeral=False, file=file, suppress_embeds=True)
+
+
+async def _send_public_interaction_message(interaction, content: str) -> Any:
+    response = getattr(interaction, "response", None)
+    is_done = getattr(response, "is_done", None)
+    done = is_done() if callable(is_done) else False
+    if response is not None and hasattr(response, "send_message") and not done:
+        maybe_message = await response.send_message(content, ephemeral=False, suppress_embeds=True)
+        if maybe_message is not None:
+            return maybe_message
+        original_response = getattr(interaction, "original_response", None)
+        if callable(original_response):
+            return await original_response()
+    channel = getattr(interaction, "channel", None)
+    if channel is not None and hasattr(channel, "send"):
+        return await channel.send(content, suppress_embeds=True)
+    await interaction.followup.send(content, ephemeral=False, suppress_embeds=True)
+    original_response = getattr(interaction, "original_response", None)
+    if callable(original_response):
+        return await original_response()
+    raise StockSumRequestError("Could not create fuzzy search selection message.")
+
+
+async def _edit_message_content(message: Any, content: str) -> None:
+    if hasattr(message, "edit"):
+        await message.edit(content=content)
+        return
+    channel = getattr(message, "channel", None)
+    if channel is not None and hasattr(channel, "send"):
+        await channel.send(content, suppress_embeds=True)
+
+
+def _format_fuzzy_match_prompt(query: str, matches: list[dict[str, Any]]) -> str:
+    lines = [f"Select a fuzzy_search match for `{query}`:"]
+    for index, match in enumerate(matches[: len(FUZZY_REACTION_OPTIONS)], start=1):
+        label = str(match.get("label") or match.get("match_value") or "Unknown")
+        row_count = int(match.get("row_count") or 0)
+        mode = str(match.get("mode") or "")
+        if mode == "social":
+            x_count = int(match.get("x_count") or 0)
+            reddit_count = int(match.get("reddit_count") or 0)
+            detail = f"{row_count} posts, X {x_count}, Reddit {reddit_count}"
+        else:
+            ticker = str(match.get("ticker") or "").strip()
+            asset_type = str(match.get("asset_type_code") or "").strip()
+            extras = ", ".join(item for item in (ticker, asset_type) if item)
+            detail = f"{row_count} rows" + (f", {extras}" if extras else "")
+        lines.append(f"{FUZZY_REACTION_OPTIONS[index - 1]} {label} - {detail}")
+    lines.append("React with the matching number.")
+    return "\n".join(lines)
 
 
 def _format_json_message(title: str, payload: dict[str, Any]) -> str:

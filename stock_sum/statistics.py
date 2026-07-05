@@ -282,19 +282,21 @@ def _render_social_png(summary: dict[str, Any], output_path: Path, plt: Any) -> 
     scores = [item["avg_sentiment_score"] for item in buckets]
     counts = [item["post_count"] for item in buckets]
 
-    fig, ax_score = plt.subplots(figsize=(10, 5.4), facecolor="#1f2329")
+    fig, ax_score = plt.subplots(figsize=(11, 6.1), facecolor="#1f2329")
     ax_score.set_facecolor("#252a31")
     ax_count = ax_score.twinx()
     x_positions = list(range(len(labels)))
-    ax_count.bar(x_positions, counts, color="#7aa2f7", alpha=0.22, label="Post count")
+    count_bars = ax_count.bar(x_positions, counts, color="#7aa2f7", alpha=0.22, label="Post count")
     ax_score.plot(x_positions, scores, color="#a6e3a1", marker="o", linewidth=2.2, label="Average sentiment")
     ax_score.axhline(0, color="#c0caf5", linewidth=0.8, alpha=0.45)
     _style_axes(ax_score, ax_count)
     ax_score.set_ylim(-1.05, 1.05)
     ax_score.set_ylabel("Sentiment score", color="#f4f4f5")
     ax_count.set_ylabel("Post count", color="#f4f4f5")
-    ax_score.set_title(str(summary.get("title") or "Social Sentiment Statistic"), color="#f4f4f5", pad=14)
+    ax_score.set_title(_chart_title(summary, default_title="Social Sentiment Statistic"), color="#f4f4f5", pad=14)
     _apply_x_labels(ax_score, labels, x_positions)
+    _annotate_bars(ax_count, count_bars, counts, formatter=lambda value: f"{int(value)} posts", color="#c0caf5")
+    _annotate_points(ax_score, x_positions, scores)
     _combined_legend(fig, ax_score, ax_count)
     fig.tight_layout()
     fig.savefig(output_path, dpi=160, facecolor=fig.get_facecolor())
@@ -310,20 +312,24 @@ def _render_trading_png(summary: dict[str, Any], output_path: Path, plt: Any) ->
     purchase_count = [item["purchase_count"] for item in buckets]
     sell_count = [-item["sell_count"] for item in buckets]
 
-    fig, (ax_usd, ax_count) = plt.subplots(2, 1, figsize=(10, 7.2), facecolor="#1f2329", sharex=True)
+    fig, (ax_usd, ax_count) = plt.subplots(2, 1, figsize=(11, 8.1), facecolor="#1f2329", sharex=True)
     for ax in (ax_usd, ax_count):
         ax.set_facecolor("#252a31")
         ax.axhline(0, color="#c0caf5", linewidth=0.8, alpha=0.45)
         _style_single_axis(ax)
 
-    ax_usd.bar(x_positions, purchase_usd, color="#2dd4bf", alpha=0.8, label="Purchases est. USD")
-    ax_usd.bar(x_positions, sell_usd, color="#f59e0b", alpha=0.8, label="Sales est. USD")
-    ax_count.bar(x_positions, purchase_count, color="#2dd4bf", alpha=0.8, label="Purchase count")
-    ax_count.bar(x_positions, sell_count, color="#f59e0b", alpha=0.8, label="Sale count")
+    purchase_usd_bars = ax_usd.bar(x_positions, purchase_usd, color="#2dd4bf", alpha=0.8, label="Purchases est. USD")
+    sell_usd_bars = ax_usd.bar(x_positions, sell_usd, color="#f59e0b", alpha=0.8, label="Sales est. USD")
+    purchase_count_bars = ax_count.bar(x_positions, purchase_count, color="#2dd4bf", alpha=0.8, label="Purchase count")
+    sell_count_bars = ax_count.bar(x_positions, sell_count, color="#f59e0b", alpha=0.8, label="Sale count")
     ax_usd.set_ylabel("Estimated USD", color="#f4f4f5")
     ax_count.set_ylabel("Trade count", color="#f4f4f5")
-    ax_usd.set_title(str(summary.get("title") or "Financial Disclosure Statistic"), color="#f4f4f5", pad=14)
+    ax_usd.set_title(_chart_title(summary, default_title="Financial Disclosure Statistic"), color="#f4f4f5", pad=14)
     _apply_x_labels(ax_count, labels, x_positions)
+    _annotate_bars(ax_usd, purchase_usd_bars, purchase_usd, formatter=_format_usd_compact, color="#d1fae5")
+    _annotate_bars(ax_usd, sell_usd_bars, sell_usd, formatter=_format_usd_compact, color="#ffedd5")
+    _annotate_bars(ax_count, purchase_count_bars, purchase_count, formatter=lambda value: f"{int(abs(value))} buys", color="#d1fae5")
+    _annotate_bars(ax_count, sell_count_bars, sell_count, formatter=lambda value: f"{int(abs(value))} sells", color="#ffedd5")
     ax_usd.legend(loc="best", facecolor="#252a31", edgecolor="#4b5563", labelcolor="#f4f4f5")
     ax_count.legend(loc="best", facecolor="#252a31", edgecolor="#4b5563", labelcolor="#f4f4f5")
     fig.tight_layout()
@@ -368,3 +374,103 @@ def _combined_legend(fig: Any, primary: Any, secondary: Any) -> None:
         edgecolor="#4b5563",
         labelcolor="#f4f4f5",
     )
+
+
+def _chart_title(summary: dict[str, Any], *, default_title: str) -> str:
+    title = str(summary.get("title") or default_title).strip() or default_title
+    buckets = summary.get("buckets") or []
+    bucket = str(summary.get("bucket") or "bucket")
+    labels = [str(item.get("bucket") or "") for item in buckets if item.get("bucket")]
+    date_range = f"{labels[0]} to {labels[-1]}" if labels else "no dated rows"
+    filters = _format_filter_summary(summary.get("filters") or {})
+    if summary.get("statistic_mode") == "trading":
+        total_buys = sum(int(item.get("purchase_count") or 0) for item in buckets)
+        total_sells = sum(int(item.get("sell_count") or 0) for item in buckets)
+        subtitle = (
+            f"{filters} | {date_range} | {bucket} buckets | "
+            f"{total_buys} purchases, {total_sells} sales"
+        )
+    else:
+        total_posts = sum(int(item.get("post_count") or 0) for item in buckets)
+        subtitle = f"{filters} | {date_range} | {bucket} buckets | {total_posts} analyzed posts"
+    return f"{title}\n{subtitle}"
+
+
+def _format_filter_summary(filters: dict[str, Any]) -> str:
+    displayed: list[str] = []
+    for key in (
+        "ticker",
+        "name",
+        "asset_type",
+        "action",
+        "profile",
+        "source",
+        "sentiment",
+        "days",
+        "start_date",
+        "end_date",
+    ):
+        value = filters.get(key)
+        if value in (None, "", "all"):
+            continue
+        label = key.replace("_", " ")
+        displayed.append(f"{label}: {value}")
+    return ", ".join(displayed) if displayed else "all matching records"
+
+
+def _annotate_bars(ax: Any, bars: Any, values: list[float | int], *, formatter: Any, color: str) -> None:
+    if not bars:
+        return
+    y_min, y_max = ax.get_ylim()
+    offset = (y_max - y_min) * 0.025 if y_max != y_min else 0.1
+    ax.set_ylim(y_min - offset * 2, y_max + offset * 2)
+    for bar, value in zip(bars, values, strict=False):
+        if value == 0:
+            continue
+        height = float(bar.get_height())
+        x = bar.get_x() + bar.get_width() / 2
+        if height >= 0:
+            y = height + offset
+            va = "bottom"
+        else:
+            y = height - offset
+            va = "top"
+        ax.text(
+            x,
+            y,
+            formatter(value),
+            ha="center",
+            va=va,
+            color=color,
+            fontsize=8,
+            rotation=0,
+            clip_on=False,
+        )
+
+
+def _annotate_points(ax: Any, x_positions: list[int], values: list[float]) -> None:
+    for x, value in zip(x_positions, values, strict=False):
+        offset = 0.08 if value < 0.9 else -0.12
+        va = "bottom" if offset > 0 else "top"
+        ax.text(
+            x,
+            value + offset,
+            f"{value:+.2f}",
+            ha="center",
+            va=va,
+            color="#d9f99d",
+            fontsize=8,
+            clip_on=False,
+        )
+
+
+def _format_usd_compact(value: float | int) -> str:
+    absolute = abs(float(value))
+    sign = "-" if float(value) < 0 else ""
+    if absolute >= 1_000_000_000:
+        return f"{sign}${absolute / 1_000_000_000:.1f}B"
+    if absolute >= 1_000_000:
+        return f"{sign}${absolute / 1_000_000:.1f}M"
+    if absolute >= 1_000:
+        return f"{sign}${absolute / 1_000:.1f}K"
+    return f"{sign}${absolute:.0f}"

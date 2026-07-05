@@ -554,6 +554,17 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
     assert [(point.source, point.ticker, point.sentiment, point.posted_at) for point in social_points] == [
         ("x", "MSTR", "bearish", "2026-06-30T00:00:00+00:00")
     ]
+    tag_matches = await repository.search_social_statistic_tags(profile="default", query="GROW", limit=5)
+    assert [(match.label, match.row_count, match.x_count, match.reddit_count, match.statistic_filters) for match in tag_matches] == [
+        ("growth", 1, 1, 0, {"fuzzy_tag": "growth"})
+    ]
+    tagged_points = await repository.read_social_statistic_points(
+        profile="default",
+        fuzzy_tag="GROWTH",
+        source="all",
+        analysis_run_id="analysis-1",
+    )
+    assert [(point.source, point.source_id, point.sentiment) for point in tagged_points] == [("x", "123", "bearish")]
 
 
 async def test_downloaded_media_upsert_is_idempotent(tmp_path) -> None:
@@ -640,6 +651,27 @@ async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
     trading_points = await repository.read_trading_statistic_points(ticker="aapl", action="purchase")
     assert [(point.doc_id, point.stock_ticker, point.transaction_action, point.amount) for point in trading_points] == [
         ("20024228", "AAPL", "purchase", "$1,001 - $15,000")
+    ]
+    asset_points = await repository.read_trading_statistic_points(asset_name="apple inc")
+    assert [(point.doc_id, point.asset) for point in asset_points] == [
+        ("20024228", "Apple Inc. - Common Stock (AAPL) [ST]")
+    ]
+    asset_matches = await repository.search_trading_statistic_assets(query="apple", limit=5)
+    assert [
+        (match.label, match.row_count, match.ticker, match.asset_type_code, match.statistic_filters)
+        for match in asset_matches
+    ] == [
+        (
+            "Apple Inc. - Common Stock (AAPL) [ST]",
+            1,
+            "AAPL",
+            "ST",
+            {
+                "asset_name": "Apple Inc. - Common Stock (AAPL) [ST]",
+                "asset_type": "ST",
+                "ticker": "AAPL",
+            },
+        )
     ]
 
 

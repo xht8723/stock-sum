@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -145,7 +145,9 @@ class StatisticJobRequest(BaseModel):
     mode: StatisticModePath = "social"
     profile: str = "default"
     ticker: str | None = None
+    fuzzy_tag: str | None = None
     name: str | None = None
+    asset_name: str | None = None
     asset_type: str | None = None
     action: StatisticActionPath = "all"
     source: StatisticSourcePath = "all"
@@ -287,6 +289,29 @@ def build_router(
         request: StatisticJobRequest = StatisticJobRequest(),
     ) -> dict:
         return _create_statistic_job(current_manager(), request, background_tasks)
+
+    @v1.get("/statistics/fuzzy-matches")
+    async def statistic_fuzzy_matches(
+        mode: StatisticModePath,
+        q: str = Query(min_length=1),
+        profile: str = "default",
+        limit: int = Query(default=5, ge=1, le=5),
+    ) -> dict:
+        manager = current_manager()
+        if manager is None:
+            raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
+        try:
+            matches = await manager.statistic_fuzzy_matches(
+                mode=mode,
+                query=q,
+                profile=profile,
+                limit=limit,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"matches": matches}
 
     def _create_social_report_job(
         manager: HttpJobManager | None,

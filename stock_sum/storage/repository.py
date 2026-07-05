@@ -13,6 +13,7 @@ from stock_sum.storage.models import (
     StoredRedditPost,
     StoredSec13FHolding,
     StoredSocialStatisticPoint,
+    StoredStatisticFuzzyMatch,
     StoredTradingStatisticPoint,
     StoredXPost,
 )
@@ -110,6 +111,7 @@ class StorageRepository(Protocol):
         *,
         profile: str,
         ticker: str | None = None,
+        fuzzy_tag: str | None = None,
         source: str | None = None,
         sentiment: str | None = None,
         posted_start: datetime | None = None,
@@ -117,6 +119,15 @@ class StorageRepository(Protocol):
         analysis_run_id: str | None = None,
     ) -> list[StoredSocialStatisticPoint]:
         """Read analyzed social post rows for statistic charting."""
+
+    async def search_social_statistic_tags(
+        self,
+        *,
+        profile: str,
+        query: str,
+        limit: int = 5,
+    ) -> list[StoredStatisticFuzzyMatch]:
+        """Return tag candidates for social statistic fuzzy search."""
 
     async def list_collection_runs(self, *, profile: str | None = None, limit: int | None = None) -> list[StoredCollectionRun]:
         """Return stored collection runs."""
@@ -158,6 +169,7 @@ class StorageRepository(Protocol):
         self,
         *,
         name_contains: str | None = None,
+        asset_name: str | None = None,
         transaction_start: datetime | None = None,
         transaction_end: datetime | None = None,
         asset_type: str | None = None,
@@ -165,6 +177,14 @@ class StorageRepository(Protocol):
         action: str | None = None,
     ) -> list[StoredTradingStatisticPoint]:
         """Read House PTR trade rows for statistic charting."""
+
+    async def search_trading_statistic_assets(
+        self,
+        *,
+        query: str,
+        limit: int = 5,
+    ) -> list[StoredStatisticFuzzyMatch]:
+        """Return asset candidates for trading statistic fuzzy search."""
 
     async def read_sec_13f_holdings(
         self,

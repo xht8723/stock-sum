@@ -157,6 +157,25 @@ def test_statistic_job_accepts_filters(tmp_path) -> None:
     assert manager.last_statistic_ticker == "NVDA"
 
 
+def test_statistic_fuzzy_matches_endpoint(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    response = client.get("/v1/statistics/fuzzy-matches", params={"mode": "social", "q": "Nvidia", "profile": "default"})
+
+    assert response.status_code == 200
+    assert response.json()["matches"] == [
+        {
+            "mode": "social",
+            "label": "nvidia",
+            "row_count": 3,
+            "statistic_filters": {"fuzzy_tag": "nvidia"},
+        }
+    ]
+    assert manager.last_fuzzy_match == {"mode": "social", "query": "Nvidia", "profile": "default", "limit": 5}
+
+
 def test_statistic_job_rejects_missing_filters(tmp_path) -> None:
     config = _test_config(tmp_path)
     client = TestClient(create_app(config, job_manager=FakeJobManager(tmp_path)))
@@ -195,6 +214,7 @@ class FakeJobManager:
         self.last_trading_ticker: str | None = None
         self.last_statistic_mode: str | None = None
         self.last_statistic_ticker: str | None = None
+        self.last_fuzzy_match: dict[str, Any] | None = None
 
     def create_report_job(self, profile: str, options) -> FakeJob:
         if profile != "default":
@@ -214,13 +234,17 @@ class FakeJobManager:
         return job
 
     def create_statistic_job(self, options) -> FakeJob:
-        if not any((options.ticker, options.name, options.asset_type, options.days, options.start_date, options.end_date)):
-            raise ValueError("Statistic requires at least one filter: ticker, name, asset_type, days, or date range.")
+        if not any((options.ticker, options.fuzzy_tag, options.name, options.asset_name, options.asset_type, options.days, options.start_date, options.end_date)):
+            raise ValueError("Statistic requires at least one filter: ticker, fuzzy_tag, name, asset_name, asset_type, days, or date range.")
         self.last_statistic_mode = options.mode
         self.last_statistic_ticker = options.ticker
         job = FakeJob(job_id="job-statistic", kind="statistic", profile=options.profile)
         self.jobs[job.job_id] = job
         return job
+
+    async def statistic_fuzzy_matches(self, *, mode: str, query: str, profile: str = "default", limit: int = 5) -> list[dict[str, Any]]:
+        self.last_fuzzy_match = {"mode": mode, "query": query, "profile": profile, "limit": limit}
+        return [{"mode": mode, "label": "nvidia", "row_count": 3, "statistic_filters": {"fuzzy_tag": "nvidia"}}]
 
     def create_collect_job(self, profile: str) -> FakeJob:
         if profile != "default":

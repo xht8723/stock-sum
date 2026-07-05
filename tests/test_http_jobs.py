@@ -937,6 +937,7 @@ class FakeRepository:
         *,
         profile="default",
         ticker=None,
+        fuzzy_tag=None,
         source=None,
         sentiment=None,
         posted_start=None,
@@ -946,6 +947,8 @@ class FakeRepository:
         rows = list(self.social_statistic_points)
         if ticker:
             rows = [row for row in rows if (row.ticker or "").upper() == ticker.upper()]
+        if fuzzy_tag:
+            rows = [row for row in rows if fuzzy_tag.lower() in (row.label or "").lower()]
         if source and source != "all":
             rows = [row for row in rows if row.source == source]
         if sentiment:
@@ -956,6 +959,7 @@ class FakeRepository:
         self,
         *,
         name_contains=None,
+        asset_name=None,
         transaction_start=None,
         transaction_end=None,
         asset_type=None,
@@ -965,6 +969,8 @@ class FakeRepository:
         rows = list(self.trading_statistic_points or self.house_rows)
         if ticker:
             rows = [row for row in rows if (row.stock_ticker or "").upper() == ticker.upper()]
+        if asset_name:
+            rows = [row for row in rows if asset_name.lower() in (row.asset or "").lower()]
         if asset_type:
             rows = [row for row in rows if (row.asset_type_code or "").upper() == asset_type.upper()]
         if action:

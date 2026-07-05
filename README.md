@@ -119,6 +119,7 @@ Canonical job endpoints:
 - `POST /v1/13f-reports/jobs`
 - `POST /v1/13f-reports/jobs/{mode}`
 - `POST /v1/statistics/jobs`
+- `GET /v1/statistics/fuzzy-matches`
 - `POST /v1/collect/{profile}/jobs`
 - `GET /v1/jobs/{job_id}`
 - `GET /v1/jobs/{job_id}/artifact`
@@ -126,6 +127,8 @@ Canonical job endpoints:
 Supported modes are `html`, `markdown`, `discord`, `text`, and `json`.
 Statistics jobs are separate from report modes: they render a PNG chart plus a
 JSON summary sidecar from existing SQLite social analysis or House PTR rows.
+Statistic fuzzy matching can resolve Discord `fuzzy_search` input from social
+analysis tags or House PTR asset names before a PNG job is created.
 
 HTTP jobs are coordinated by the daemon but executed by one short-lived child
 worker process per job. The job status payload includes worker diagnostics such
@@ -162,7 +165,8 @@ API and exposes:
 The default report format is Discord-specific markdown sent inline in chunks.
 Other formats are returned as Discord file attachments.
 `/statistic` returns a PNG attachment for social sentiment or House disclosure
-activity over time.
+activity over time. Public report/statistic slash commands no longer expose a
+private-mode option; owner-only management and secret commands remain private.
 
 ## Runtime Data
 

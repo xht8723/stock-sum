@@ -31,6 +31,7 @@ Then sync slash commands with Red's slash-command management command and run:
 /tradingreport days:30
 /13freport issuer:NVIDIA
 /statistic mode:social ticker:NVDA days:30
+/statistic mode:social fuzzy_search:nvidia days:30
 ```
 
 `/socialreport` generates X/Reddit social sentiment reports with LLM analysis.
@@ -48,7 +49,10 @@ filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
 `/statistic` generates a PNG chart from existing SQLite data. Use
 `mode:social` for X/Reddit sentiment over time or `mode:trading` for House PTR
 purchase/sale activity over time. It requires at least one filter such as
-`ticker`, `name`, `asset_type`, `days`, or a date range.
+`ticker`, `fuzzy_search`, `name`, `asset_type`, `days`, or a date range.
+Use `fuzzy_search` instead of `ticker` to choose from numbered emoji matches:
+social mode matches stored LLM tags, while trading mode matches House PTR asset
+names. Do not provide both `ticker` and `fuzzy_search`.
 
 The default format for report commands is Discord-specific markdown and is sent
 inline in message chunks. Choose `html`, `markdown`, `text`, or `json` to
@@ -58,9 +62,11 @@ Statistic output is always a PNG file attachment.
 Slash commands validate common input mistakes before calling stock-sum:
 malformed dates, invalid source names, unsupported report formats, invalid
 asset/ticker identifiers, and out-of-range numeric limits return an immediate
-private error message.
+validation error message.
 
 The cog polls stock-sum job status once per minute while a report is running.
+Report and statistic commands post publicly. Secret and owner-only management
+commands still respond privately.
 
 ## Management Commands
 
