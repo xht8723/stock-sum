@@ -1096,6 +1096,9 @@ class StockSumReport(commands.Cog):
             except StockSumCogError as exc:
                 await _send_validation_error(interaction, str(exc))
                 return
+            except Exception as exc:
+                await _send_report_output(interaction, _failure_message(exc), private=False)
+                return
             if not selected_filters:
                 return
 
@@ -1755,7 +1758,14 @@ async def _send_fuzzy_selection_message(interaction, content: str) -> Any:
     is_done = getattr(response, "is_done", None)
     done = is_done() if callable(is_done) else False
     if response is not None and not done and hasattr(response, "defer"):
-        await response.defer(ephemeral=False, thinking=True)
+        try:
+            await response.defer(ephemeral=False, thinking=True)
+        except Exception:
+            pass
+
+    channel = getattr(interaction, "channel", None)
+    if channel is not None and hasattr(channel, "send"):
+        return await channel.send(content, suppress_embeds=True)
 
     followup = getattr(interaction, "followup", None)
     if followup is not None and hasattr(followup, "send"):
@@ -1765,10 +1775,6 @@ async def _send_fuzzy_selection_message(interaction, content: str) -> Any:
             maybe_message = await followup.send(content, ephemeral=False, suppress_embeds=True)
         if maybe_message is not None:
             return maybe_message
-
-    channel = getattr(interaction, "channel", None)
-    if channel is not None and hasattr(channel, "send"):
-        return await channel.send(content, suppress_embeds=True)
 
     return await _send_public_interaction_message(interaction, content)
 

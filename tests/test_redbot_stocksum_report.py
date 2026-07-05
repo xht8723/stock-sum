@@ -744,11 +744,11 @@ async def test_statistic_fuzzy_search_selects_social_tag_with_reaction(monkeypat
         }
     ]
     assert interaction.response.deferred == [{"ephemeral": False, "thinking": True}]
-    assert "Select a fuzzy_search match" in interaction.followup.messages[0]["content"]
-    assert interaction.followup.sent_messages[0].reactions == ["1️⃣", "2️⃣"]
-    assert interaction.channel.messages[0]["content"] == "Selected: nvidia. Generating statistic chart..."
-    assert interaction.channel.messages[1]["content"] == "Statistic chart is being generated, please wait a few minutes."
-    assert interaction.channel.messages[2]["file"] == "statistic.png"
+    assert "Select a fuzzy_search match" in interaction.channel.messages[0]["content"]
+    assert interaction.channel.sent_messages[0].reactions == ["1️⃣", "2️⃣"]
+    assert interaction.channel.messages[1]["content"] == "Selected: nvidia. Generating statistic chart..."
+    assert interaction.channel.messages[2]["content"] == "Statistic chart is being generated, please wait a few minutes."
+    assert interaction.channel.messages[3]["file"] == "statistic.png"
 
 
 async def test_statistic_fuzzy_search_accepts_plain_digit_reaction(monkeypatch) -> None:
@@ -779,7 +779,7 @@ async def test_statistic_fuzzy_search_accepts_plain_digit_reaction(monkeypatch) 
     await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
 
     assert client.statistic_calls[0]["fuzzy_tag"] == "openai"
-    assert interaction.channel.messages[0]["content"] == "Selected: openai. Generating statistic chart..."
+    assert interaction.channel.messages[1]["content"] == "Selected: openai. Generating statistic chart..."
 
 
 async def test_statistic_fuzzy_search_timeout_edits_selection_message(monkeypatch) -> None:
@@ -801,8 +801,8 @@ async def test_statistic_fuzzy_search_timeout_edits_selection_message(monkeypatc
     await report.statistic(interaction, mode="trading", fuzzy_search="Apple", days=180)
 
     assert client.statistic_calls == []
-    assert interaction.followup.messages[0]["content"] == "Select a fuzzy_search match for `Apple`:\n1️⃣ Apple Inc. - Common Stock (AAPL) [ST] - 3 rows, AAPL, ST\nClick one of the numbered reactions below to choose."
-    assert interaction.followup.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+    assert interaction.channel.messages[0]["content"] == "Select a fuzzy_search match for `Apple`:\n1️⃣ Apple Inc. - Common Stock (AAPL) [ST] - 3 rows, AAPL, ST\nClick one of the numbered reactions below to choose."
+    assert interaction.channel.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
 
 
 async def test_statistic_fuzzy_search_ignores_other_user_reaction(monkeypatch) -> None:
@@ -824,7 +824,7 @@ async def test_statistic_fuzzy_search_ignores_other_user_reaction(monkeypatch) -
     await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
 
     assert client.statistic_calls == []
-    assert interaction.followup.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+    assert interaction.channel.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
 
 
 async def test_statistic_fuzzy_search_ignores_unsupported_reaction(monkeypatch) -> None:
@@ -846,7 +846,7 @@ async def test_statistic_fuzzy_search_ignores_unsupported_reaction(monkeypatch) 
     await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
 
     assert client.statistic_calls == []
-    assert interaction.followup.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
+    assert interaction.channel.sent_messages[0].edits == ["Selection timed out. Run /statistic again to retry."]
 
 
 async def test_statistic_fuzzy_search_reaction_add_failure_does_not_crash(monkeypatch) -> None:
@@ -874,7 +874,32 @@ async def test_statistic_fuzzy_search_reaction_add_failure_does_not_crash(monkey
     await report.statistic(interaction, mode="social", fuzzy_search="AI", days=30)
 
     assert client.statistic_calls[0]["fuzzy_tag"] == "ai"
-    assert interaction.channel.messages[0]["content"] == "Selected: ai. Generating statistic chart..."
+    assert interaction.channel.messages[1]["content"] == "Selected: ai. Generating statistic chart..."
+
+
+async def test_statistic_fuzzy_search_defer_failure_still_posts_channel_prompt(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    interaction.response.fail_defer = True
+    report = StockSumReport(bot=FakeBot(reaction_emoji="1"))
+    client = FakeStockSumClient(content=b"png", filename="statistic.png")
+    client.fuzzy_matches = [
+        {
+            "mode": "trading",
+            "label": "OpenAI Global LLC",
+            "row_count": 1,
+            "ticker": "",
+            "asset_type_code": "OI",
+            "statistic_filters": {"asset_name": "OpenAI Global LLC [OI]"},
+        }
+    ]
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.statistic(interaction, mode="trading", fuzzy_search="openai", days=30)
+
+    assert "Select a fuzzy_search match" in interaction.channel.messages[0]["content"]
+    assert interaction.channel.sent_messages[0].reactions == ["1️⃣"]
+    assert client.statistic_calls[0]["asset_name"] == "OpenAI Global LLC [OI]"
 
 
 async def test_management_command_blocks_non_owner(monkeypatch) -> None:
@@ -1209,11 +1234,14 @@ class FakeResponseSender:
         self.messages: list[dict[str, Any]] = []
         self.sent_messages: list[FakeMessage] = []
         self.deferred: list[dict[str, Any]] = []
+        self.fail_defer = False
 
     def is_done(self) -> bool:
         return bool(self.messages or self.deferred)
 
     async def defer(self, *, ephemeral: bool, thinking: bool = False) -> None:
+        if self.fail_defer:
+            raise RuntimeError("defer failed")
         self.deferred.append({"ephemeral": ephemeral, "thinking": thinking})
 
     async def send_message(
@@ -1263,6 +1291,7 @@ class FakeFollowupSender:
 class FakeChannelSender:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
+        self.sent_messages: list[FakeMessage] = []
 
     async def send(self, content: str, file: Any | None = None, suppress_embeds: bool = False) -> Any:
         message = {"content": content}
@@ -1271,7 +1300,9 @@ class FakeChannelSender:
         if suppress_embeds:
             message["suppress_embeds"] = suppress_embeds
         self.messages.append(message)
-        return FakeMessage(content)
+        sent_message = FakeMessage(content)
+        self.sent_messages.append(sent_message)
+        return sent_message
 
 
 class FakeDiscord:
