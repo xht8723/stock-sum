@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
+import math
 import re
 
 from stock_sum.storage.models import StoredSocialStatisticPoint, StoredTradingStatisticPoint
@@ -496,9 +497,35 @@ def _apply_usd_axis_scale(ax: Any, values: list[float | int]) -> bool:
     largest = max(nonzero)
     if smallest <= 0 or largest / smallest < 100:
         return False
-    ax.set_yscale("symlog", linthresh=max(1000.0, smallest))
+    linthresh = max(1000.0, smallest)
+    ax.set_yscale("symlog", linthresh=linthresh)
+    _set_symlog_usd_ticks(ax, values, linthresh=linthresh)
     ax.margins(y=0.25)
     return True
+
+
+def _set_symlog_usd_ticks(ax: Any, values: list[float | int], *, linthresh: float) -> None:
+    positives = [float(value) for value in values if value > 0]
+    negatives = [abs(float(value)) for value in values if value < 0]
+    ticks = [-tick for tick in reversed(_log_money_ticks(max(negatives, default=0.0), linthresh=linthresh))]
+    ticks.append(0.0)
+    ticks.extend(_log_money_ticks(max(positives, default=0.0), linthresh=linthresh))
+    ax.set_yticks(ticks)
+    ax.set_yticklabels([_format_usd_compact(tick) for tick in ticks])
+
+
+def _log_money_ticks(max_value: float, *, linthresh: float) -> list[float]:
+    if max_value <= 0:
+        return []
+    first = 10 ** math.ceil(math.log10(max(linthresh, 1.0)))
+    ticks = []
+    value = float(first)
+    while value <= max_value * 1.05:
+        ticks.append(value)
+        value *= 10
+    if not ticks:
+        ticks.append(max_value)
+    return ticks
 
 
 def _annotate_bars(ax: Any, bars: Any, values: list[float | int], *, formatter: Any, color: str) -> None:
