@@ -68,6 +68,12 @@ def test_report_commands_do_not_expose_format_parameter() -> None:
         assert "format" not in inspect.signature(getattr(StockSumReport, method_name)).parameters
 
 
+def test_recent_posts_does_not_expose_backend_reddit_method() -> None:
+    assert "method" not in inspect.signature(StockSumReport.recent_posts).parameters
+    assert "x_method" not in inspect.signature(StockSumReport.recent_posts).parameters
+    assert "reddit_method" not in inspect.signature(StockSumReport.recent_posts).parameters
+
+
 def test_discord_command_names_match_public_contract() -> None:
     source = inspect.getsource(StockSumReport)
 

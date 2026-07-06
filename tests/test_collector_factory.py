@@ -3,6 +3,8 @@
 from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
 from stock_sum.collectors.api.sec_13f import SEC_13F_SOURCE_TYPE
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
+from stock_sum.collectors.rss.x import X_RSS_SOURCE_TYPE, NitterRssXUserTimelineCollector
+from stock_sum.collectors.rss.reddit import REDDIT_RSS_SOURCE_TYPE, RedditRssSubredditCollector
 import pytest
 
 from stock_sum.collectors.factory import build_collector, get_collector_config, source_type_for_collector_id
@@ -18,11 +20,25 @@ def test_source_list_x_user_resolves_to_collector_config() -> None:
     assert get_collector_config(config, "x.aleabitoreddit").lookback_hours == 24
 
 
+def test_source_list_x_user_can_resolve_to_rss_collector() -> None:
+    config = load_config("stock_sum/config/example.toml")
+
+    assert source_type_for_collector_id(config, "x.aleabitoreddit", x_method="rss") == X_RSS_SOURCE_TYPE
+    assert isinstance(build_collector(config, "x.aleabitoreddit", x_method="rss"), NitterRssXUserTimelineCollector)
+
+
 def test_source_list_subreddit_resolves_to_collector_config() -> None:
     config = load_config("stock_sum/config/example.toml")
 
     assert source_type_for_collector_id(config, "reddit.wallstreetbets") == REDDIT_SOURCE_TYPE
     assert get_collector_config(config, "reddit.wallstreetbets").lookback_hours == 24
+
+
+def test_source_list_subreddit_can_resolve_to_rss_collector() -> None:
+    config = load_config("stock_sum/config/example.toml")
+
+    assert source_type_for_collector_id(config, "reddit.wallstreetbets", reddit_method="rss") == REDDIT_RSS_SOURCE_TYPE
+    assert isinstance(build_collector(config, "reddit.wallstreetbets", reddit_method="rss"), RedditRssSubredditCollector)
 
 
 def test_house_ptr_source_resolves_to_collector_config() -> None:
@@ -48,3 +64,10 @@ def test_removed_scrape_creators_kind_fails_clearly() -> None:
 
     with pytest.raises(ConfigurationError, match="No collector implementation registered"):
         build_collector(config, "reddit.legacy")
+
+
+def test_unsupported_x_method_fails_clearly() -> None:
+    config = load_config("stock_sum/config/example.toml")
+
+    with pytest.raises(ConfigurationError, match="Unsupported X collection method"):
+        build_collector(config, "x.aleabitoreddit", x_method="bad")

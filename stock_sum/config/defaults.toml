@@ -46,6 +46,25 @@ server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
 max_concurrent_requests = 1
 
+[providers.reddit_rss]
+base_url = "https://www.reddit.com"
+user_agent = "stock-sum/0.1"
+timeout_seconds = 30
+listing_limit = 100
+comment_feed_limit = 500
+retry_delay_seconds = 60
+max_retries = 2
+total_timeout_seconds = 72000
+
+[providers.nitter_rss]
+base_url = "https://nitter.net"
+user_agent = "stock-sum/0.1"
+timeout_seconds = 30
+listing_limit = 100
+retry_delay_seconds = 60
+max_retries = 2
+total_timeout_seconds = 72000
+
 [providers.adanos]
 api_key_env = "ADANOS_API_KEY"
 base_url = "https://api.adanos.org"

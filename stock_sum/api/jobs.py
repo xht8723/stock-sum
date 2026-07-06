@@ -43,6 +43,8 @@ class SocialReportJobOptions:
 
     mode: ReportMode = "html"
     detail: Literal["minimum", "medium", "full"] = "minimum"
+    x_method: Literal["xpoz", "rss"] = "xpoz"
+    reddit_method: Literal["xpoz", "rss"] = "xpoz"
     download_images: bool = False
     instructions: str | None = None
     title: str = "Market Social Digest"
@@ -453,6 +455,8 @@ class HttpJobManager:
             collection_result = await self._pipeline_factory().collect_sources(
                 collector_ids=social_collector_ids(self.config),
                 scope="social",
+                x_method=options.x_method,
+                reddit_method=options.reddit_method,
             )
             warnings = list(collection_result.warnings)
             warning_data = _warnings_to_dicts(warnings)
@@ -1702,6 +1706,8 @@ class HttpJobManager:
                 "instructions": options.instructions,
                 "max_images_per_post": options.max_images_per_post,
                 "max_images_total": options.max_images_total,
+                "x_method": options.x_method,
+                "reddit_method": options.reddit_method,
             },
         }
         return self._structured_cache_key(payload)

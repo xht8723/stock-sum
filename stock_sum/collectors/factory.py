@@ -8,6 +8,8 @@ from stock_sum.collectors.api.xpoz import (
     XpozRedditSubredditCollector,
     XpozXUserTimelineCollector,
 )
+from stock_sum.collectors.rss.x import X_RSS_SOURCE_TYPE, NitterRssXUserTimelineCollector
+from stock_sum.collectors.rss.reddit import REDDIT_RSS_SOURCE_TYPE, RedditRssSubredditCollector
 from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE, HousePtrDisclosureCollector
 from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID, SEC_13F_SOURCE_TYPE, Sec13FDatasetCollector, sec_13f_source_to_collector_config
 from stock_sum.collectors.base import Collector
@@ -32,32 +34,53 @@ def get_collector_config(config: AppConfig, collector_id: str) -> CollectorConfi
         raise ConfigurationError(f"Unknown collector id: {collector_id}") from exc
 
 
-def source_type_for_collector_id(config: AppConfig, collector_id: str) -> str:
+def source_type_for_collector_id(config: AppConfig, collector_id: str, *, x_method: str = "xpoz", reddit_method: str = "xpoz") -> str:
     """Resolve the raw item source type for a configured collector."""
 
-    return source_type_for_collector_config(get_collector_config(config, collector_id))
+    return source_type_for_collector_config(get_collector_config(config, collector_id), x_method=x_method, reddit_method=reddit_method)
 
 
-def source_type_for_collector_config(collector_config: CollectorConfig) -> str:
+def source_type_for_collector_config(collector_config: CollectorConfig, *, x_method: str = "xpoz", reddit_method: str = "xpoz") -> str:
     """Resolve the raw item source type for a collector config."""
 
+    if collector_config.kind == X_SOURCE_TYPE and x_method == "rss":
+        return X_RSS_SOURCE_TYPE
+    if collector_config.kind == REDDIT_SOURCE_TYPE and reddit_method == "rss":
+        return REDDIT_RSS_SOURCE_TYPE
     return collector_config.kind
 
 
-def build_collector(config: AppConfig, collector_id: str) -> Collector:
+def build_collector(config: AppConfig, collector_id: str, *, x_method: str = "xpoz", reddit_method: str = "xpoz") -> Collector:
     """Build a concrete collector from config."""
+
+    if x_method not in {"xpoz", "rss"}:
+        raise ConfigurationError(f"Unsupported X collection method: {x_method}")
+    if reddit_method not in {"xpoz", "rss"}:
+        raise ConfigurationError(f"Unsupported Reddit collection method: {reddit_method}")
 
     collector_config = get_collector_config(config, collector_id)
     if not collector_config.enabled:
         raise ConfigurationError(f"Collector is disabled: {collector_id}")
 
     if collector_config.kind == X_SOURCE_TYPE:
+        if x_method == "rss":
+            return NitterRssXUserTimelineCollector(
+                collector_id=collector_id,
+                collector_config=collector_config,
+                provider_config=config.providers.nitter_rss,
+            )
         return XpozXUserTimelineCollector(
             collector_id=collector_id,
             collector_config=collector_config,
             provider_config=config.providers.xpoz,
         )
     if collector_config.kind == REDDIT_SOURCE_TYPE:
+        if reddit_method == "rss":
+            return RedditRssSubredditCollector(
+                collector_id=collector_id,
+                collector_config=collector_config,
+                provider_config=config.providers.reddit_rss,
+            )
         return XpozRedditSubredditCollector(
             collector_id=collector_id,
             collector_config=collector_config,

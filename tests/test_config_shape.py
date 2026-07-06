@@ -29,6 +29,9 @@ def test_example_config_is_valid() -> None:
     assert config.providers.xpoz.api_key_env == "XPOZ_API_KEY"
     assert config.providers.xpoz.server_url == "https://mcp.xpoz.ai/mcp"
     assert config.providers.xpoz.max_concurrent_requests == 1
+    assert config.providers.nitter_rss.base_url == "https://nitter.net"
+    assert config.providers.nitter_rss.listing_limit == 100
+    assert config.providers.nitter_rss.max_retries == 2
     assert config.providers.adanos.api_key_env == "ADANOS_API_KEY"
     assert config.providers.adanos.base_url == "https://api.adanos.org"
     assert config.providers.adanos.max_concurrent_requests == 4

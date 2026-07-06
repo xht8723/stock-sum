@@ -41,6 +41,31 @@ def test_x_post_maps_to_source_table_and_media() -> None:
     assert raw_media["sizes"] == {"large": {"w": 1200, "h": 800}}
 
 
+def test_x_rss_post_maps_to_x_source_table() -> None:
+    item = RawItem(
+        source_id="123",
+        source_type="x_rss_user_timeline",
+        url="https://x.com/example/status/123",
+        text="rss hello",
+        metadata={
+            "entity_type": "x_post",
+            "handle": "example",
+            "author_handle": "example",
+            "posted_at_text": "2026-07-06T10:00:00+00:00",
+            "media": [{"media_type": "image", "url": "https://pbs.twimg.com/media/rss.jpg"}],
+            "raw": {"id": "123"},
+        },
+    )
+
+    mapped = map_raw_item(item)
+
+    assert mapped.table == "raw_x_posts"
+    assert mapped.key == ("example", "123")
+    assert mapped.row["text"] == "rss hello"
+    assert mapped.row["posted_at_utc"] == "2026-07-06T10:00:00+00:00"
+    assert mapped.media_rows[0]["media_url"] == "https://pbs.twimg.com/media/rss.jpg"
+
+
 def test_reddit_post_maps_to_source_table_and_media() -> None:
     item = RawItem(
         source_id="abc",
@@ -96,6 +121,52 @@ def test_reddit_comment_maps_to_source_table() -> None:
     assert mapped.table == "raw_reddit_comments"
     assert mapped.key == ("abc", "def")
     assert mapped.row["body"] == "comment"
+
+
+def test_reddit_rss_post_maps_to_reddit_source_table() -> None:
+    item = RawItem(
+        source_id="abc",
+        source_type="reddit_rss_subreddit",
+        url="https://www.reddit.com/r/wallstreetbets/comments/abc/post/",
+        text="body",
+        metadata={
+            "entity_type": "reddit_post",
+            "subreddit": "wallstreetbets",
+            "title": "RSS post",
+            "created_at_text": "2026-07-06T10:00:00+00:00",
+            "raw": {"id": "t3_abc"},
+        },
+    )
+
+    mapped = map_raw_item(item)
+
+    assert mapped.table == "raw_reddit_posts"
+    assert mapped.key == ("wallstreetbets", "abc")
+    assert mapped.row["title"] == "RSS post"
+    assert mapped.row["created_at_utc"] == "2026-07-06T10:00:00+00:00"
+
+
+def test_reddit_rss_comment_maps_to_reddit_comment_table() -> None:
+    item = RawItem(
+        source_id="abc:c1",
+        source_type="reddit_rss_subreddit",
+        url="https://www.reddit.com/r/wallstreetbets/comments/abc/post/comment/c1/",
+        text="rss comment",
+        metadata={
+            "entity_type": "reddit_comment",
+            "post_id": "abc",
+            "comment_id": "c1",
+            "body": "rss comment",
+            "created_at_text": "2026-07-06T10:05:00+00:00",
+            "raw": {"id": "t1_c1"},
+        },
+    )
+
+    mapped = map_raw_item(item)
+
+    assert mapped.table == "raw_reddit_comments"
+    assert mapped.key == ("abc", "c1")
+    assert mapped.row["body"] == "rss comment"
 
 
 def test_house_ptr_filing_maps_to_source_tables() -> None:

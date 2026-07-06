@@ -23,6 +23,8 @@ from stock_sum.config.writer import (
 
 ReportModePath = Literal["html", "markdown", "discord", "text", "json"]
 SocialReportDetailPath = Literal["minimum", "medium", "full"]
+XMethodPath = Literal["xpoz", "rss"]
+RedditMethodPath = Literal["xpoz", "rss"]
 StatisticModePath = Literal["social", "trading"]
 StatisticBucketPath = Literal["auto", "day", "week", "month"]
 StatisticSourcePath = Literal["x", "reddit", "all"]
@@ -35,6 +37,8 @@ class SocialReportJobRequest(BaseModel):
 
     mode: ReportModePath = "html"
     detail: SocialReportDetailPath = "minimum"
+    x_method: XMethodPath = "xpoz"
+    reddit_method: RedditMethodPath = "xpoz"
     download_images: bool = False
     instructions: str | None = None
     title: str = "Market Social Digest"

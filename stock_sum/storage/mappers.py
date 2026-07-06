@@ -16,6 +16,8 @@ from stock_sum.collectors.api.house import (
 )
 from stock_sum.collectors.api.sec_13f import SEC_13F_SOURCE_TYPE, normalize_sec_date, normalize_sec_name, sec_filing_url
 from stock_sum.collectors.api.xpoz import REDDIT_SOURCE_TYPE, X_SOURCE_TYPE
+from stock_sum.collectors.rss.x import X_RSS_SOURCE_TYPE
+from stock_sum.collectors.rss.reddit import REDDIT_RSS_SOURCE_TYPE
 from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import RawItem
 
@@ -45,9 +47,9 @@ def raw_json(value: Any) -> str:
 def map_raw_item(item: RawItem) -> MappedRawItem:
     """Map a raw item to a supported source-specific table."""
 
-    if item.source_type == X_SOURCE_TYPE:
+    if item.source_type in {X_SOURCE_TYPE, X_RSS_SOURCE_TYPE}:
         return _map_x_post(item)
-    if item.source_type == REDDIT_SOURCE_TYPE:
+    if item.source_type in {REDDIT_SOURCE_TYPE, REDDIT_RSS_SOURCE_TYPE}:
         entity_type = item.metadata.get("entity_type")
         if entity_type == "reddit_post":
             return _map_reddit_post(item)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import inspect
 from uuid import uuid4
 
 from stock_sum.collectors.base import Collector
@@ -22,21 +23,33 @@ class ReportPipeline:
         context: RuntimeContext,
         *,
         repository: StorageRepository | None = None,
-        collector_factory: Callable[[str], Collector] | None = None,
+        collector_factory: Callable[[str], Collector] | Callable[[str, str], Collector] | Callable[[str, str, str], Collector] | None = None,
     ) -> None:
         self.context = context
         self.repository = repository or SQLiteStorageRepository(context.config.storage.sqlite_path)
-        self.collector_factory = collector_factory or (lambda collector_id: build_collector(context.config, collector_id))
+        if collector_factory is None:
+            self.collector_factory = lambda collector_id, x_method="xpoz", reddit_method="xpoz": build_collector(
+                context.config,
+                collector_id,
+                x_method=x_method,
+                reddit_method=reddit_method,
+            )
+            self._collector_factory_method_count = 3
+        else:
+            self.collector_factory = collector_factory
+            self._collector_factory_method_count = len(inspect.signature(collector_factory).parameters)
 
     async def collect_collector(
         self,
         collector_id: str,
         *,
+        x_method: str = "xpoz",
+        reddit_method: str = "xpoz",
         raise_on_error: bool = True,
     ) -> CollectionRunResult:
         """Run one configured collector and persist its raw items."""
 
-        source_type = source_type_for_collector_id(self.context.config, collector_id)
+        source_type = source_type_for_collector_id(self.context.config, collector_id, x_method=x_method, reddit_method=reddit_method)
         run_id = str(uuid4())
         await self.repository.start_collection_run(
             run_id=run_id,
@@ -45,7 +58,12 @@ class ReportPipeline:
         )
         collector: Collector | None = None
         try:
-            collector = self.collector_factory(collector_id)
+            if self._collector_factory_method_count >= 3:
+                collector = self.collector_factory(collector_id, x_method, reddit_method)  # type: ignore[misc]
+            elif self._collector_factory_method_count == 2:
+                collector = self.collector_factory(collector_id, reddit_method)  # type: ignore[misc]
+            else:
+                collector = self.collector_factory(collector_id)  # type: ignore[operator]
             set_repository = getattr(collector, "set_repository", None)
             if callable(set_repository):
                 set_repository(self.repository)
@@ -132,6 +150,8 @@ class ReportPipeline:
         *,
         collector_ids: list[str] | None = None,
         scope: str = "social",
+        x_method: str = "xpoz",
+        reddit_method: str = "xpoz",
     ) -> PipelineCollectionResult:
         """Collect and persist items for the unified source set."""
 
@@ -143,7 +163,7 @@ class ReportPipeline:
 
         async def run_collector(collector_id: str) -> CollectionRunResult:
             async with semaphore:
-                return await self.collect_collector(collector_id, raise_on_error=False)
+                return await self.collect_collector(collector_id, x_method=x_method, reddit_method=reddit_method, raise_on_error=False)
 
         runs = await asyncio.gather(*(run_collector(collector_id) for collector_id in active_collector_ids))
         for run in runs:

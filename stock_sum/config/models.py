@@ -77,6 +77,31 @@ class XpozProviderConfig(BaseModel):
     max_concurrent_requests: int = Field(default=1, ge=1)
 
 
+class RedditRssProviderConfig(BaseModel):
+    """Reddit RSS provider settings."""
+
+    base_url: str = "https://www.reddit.com"
+    user_agent: str = "stock-sum/0.1"
+    timeout_seconds: int = Field(default=30, ge=1)
+    listing_limit: int = Field(default=100, ge=1)
+    comment_feed_limit: int = Field(default=500, ge=1)
+    retry_delay_seconds: int = Field(default=60, ge=0)
+    max_retries: int = Field(default=2, ge=0)
+    total_timeout_seconds: int = Field(default=72_000, ge=1)
+
+
+class NitterRssProviderConfig(BaseModel):
+    """Nitter RSS provider settings."""
+
+    base_url: str = "https://nitter.net"
+    user_agent: str = "stock-sum/0.1"
+    timeout_seconds: int = Field(default=30, ge=1)
+    listing_limit: int = Field(default=100, ge=1)
+    retry_delay_seconds: int = Field(default=60, ge=0)
+    max_retries: int = Field(default=2, ge=0)
+    total_timeout_seconds: int = Field(default=72_000, ge=1)
+
+
 class AdanosProviderConfig(BaseModel):
     """Adanos market sentiment API settings."""
 
@@ -90,6 +115,8 @@ class ProvidersConfig(BaseModel):
     """External API provider settings."""
 
     xpoz: XpozProviderConfig = Field(default_factory=XpozProviderConfig)
+    reddit_rss: RedditRssProviderConfig = Field(default_factory=RedditRssProviderConfig)
+    nitter_rss: NitterRssProviderConfig = Field(default_factory=NitterRssProviderConfig)
     adanos: AdanosProviderConfig = Field(default_factory=AdanosProviderConfig)
 
 

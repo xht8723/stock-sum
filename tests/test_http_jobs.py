@@ -402,6 +402,56 @@ async def test_report_job_cache_miss_when_content_options_change(tmp_path) -> No
     assert llm.calls == 2
 
 
+async def test_social_report_reddit_method_flows_to_pipeline_and_cache_key(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    xpoz_options = SocialReportJobOptions(mode="html", reddit_method="xpoz")
+    rss_options = SocialReportJobOptions(mode="html", reddit_method="rss")
+
+    first_job = manager.create_social_report_job(xpoz_options)
+    await manager.run_social_report_job(first_job.job_id, xpoz_options)
+    second_job = manager.create_social_report_job(rss_options)
+    await manager.run_social_report_job(second_job.job_id, rss_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.cache_hit is False
+    assert pipeline.reddit_methods == ["xpoz", "rss"]
+    assert pipeline.calls == 2
+    assert llm.calls == 2
+
+
+async def test_social_report_x_method_flows_to_pipeline_and_cache_key(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    llm = FakeLLM()
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=True),
+        llm_client_factory=lambda: llm,
+    )
+    xpoz_options = SocialReportJobOptions(mode="html", x_method="xpoz")
+    rss_options = SocialReportJobOptions(mode="html", x_method="rss")
+
+    first_job = manager.create_social_report_job(xpoz_options)
+    await manager.run_social_report_job(first_job.job_id, xpoz_options)
+    second_job = manager.create_social_report_job(rss_options)
+    await manager.run_social_report_job(second_job.job_id, rss_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.cache_hit is False
+    assert pipeline.x_methods == ["xpoz", "rss"]
+    assert pipeline.calls == 2
+    assert llm.calls == 2
+
+
 async def test_report_job_cache_expires_after_ttl(tmp_path) -> None:
     pipeline = FakePipeline(_successful_collection_result())
     llm = FakeLLM()
@@ -1021,9 +1071,13 @@ class FakePipeline:
         self.delay_seconds = delay_seconds
         self.fail = fail
         self.calls = 0
+        self.x_methods: list[str] = []
+        self.reddit_methods: list[str] = []
 
-    async def collect_sources(self, *, collector_ids=None, scope: str = "social") -> PipelineCollectionResult:
+    async def collect_sources(self, *, collector_ids=None, scope: str = "social", x_method: str = "xpoz", reddit_method: str = "xpoz") -> PipelineCollectionResult:
         self.calls += 1
+        self.x_methods.append(x_method)
+        self.reddit_methods.append(reddit_method)
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
         if self.fail:
