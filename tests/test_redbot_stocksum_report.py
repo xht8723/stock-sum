@@ -80,12 +80,40 @@ def test_discord_command_names_match_public_contract() -> None:
     assert '@app_commands.command(name="recent_posts"' in source
     assert '@app_commands.command(name="ptr_search"' in source
     assert '@app_commands.command(name="13f_search"' in source
+    assert '@app_commands.command(name="trendings"' in source
     assert '@app_commands.command(name="plot"' in source
+    assert '@app_commands.command(name="help"' in source
 
 
 def test_stocksum_group_is_removed_and_settings_group_exists() -> None:
     assert not hasattr(StockSumReport, "stocksum")
     assert hasattr(StockSumReport, "settings")
+
+
+async def test_help_command_lists_available_commands() -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+
+    await report.help(interaction)
+
+    assert interaction.response.messages
+    message = interaction.response.messages[0]
+    assert message["ephemeral"] is False
+    assert message["suppress_embeds"] is True
+    for command in (
+        "/recent_posts",
+        "/ptr_search",
+        "/13f_search",
+        "/trendings",
+        "/plot",
+        "/settings list",
+        "/settings add-x",
+        "/settings remove-x",
+        "/settings add-reddit",
+        "/settings remove-reddit",
+        "/help",
+    ):
+        assert command in message["content"]
 
 
 async def test_client_sends_report_request_and_downloads_artifact() -> None:

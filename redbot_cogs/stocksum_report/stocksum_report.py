@@ -663,6 +663,12 @@ class StockSumReport(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
+    @app_commands.command(name="help", description="List available stock-sum slash commands.")
+    async def help(self, interaction) -> None:
+        """Slash command handler for listing stock-sum commands."""
+
+        await _send_command_output(interaction, _format_help_message(), private=False)
+
     @app_commands.command(name="recent_posts", description="Generate a stock-sum social media market report.")
     @app_commands.describe(
         detail="how many social sentiment items to include",
@@ -1574,6 +1580,25 @@ def _format_json_message(title: str, payload: dict[str, Any]) -> str:
     if len(message) <= DISCORD_INLINE_LIMIT:
         return message
     return f"**{title}**\n```json\n{text[: DISCORD_INLINE_LIMIT - len(title) - 24].rstrip()}...\n```"
+
+
+def _format_help_message() -> str:
+    lines = [
+        "**Stock-Sum Commands**",
+        "",
+        "`/recent_posts` - Social media market report from configured X and Reddit sources.",
+        "`/ptr_search` - Search official House PTR trading disclosures. Provide at least one filter such as name, ticker, asset_type, days, or dates.",
+        "`/13f_search` - Search SEC 13F holdings. Provide at least one filter such as manager, issuer, CIK, security ID, dates, min_value, or min_shares.",
+        "`/trendings` - Trending stocks and sectors from Adanos.",
+        "`/plot` - Generate a sentiment or disclosure statistic chart. Provide mode plus ticker, fuzzy_search, name, asset_type, days, or dates.",
+        "`/settings list` - List configured X users and subreddits.",
+        "`/settings add-x` - Owner only. Add an X user source, e.g. `aleabitoreddit` or `@aleabitoreddit`.",
+        "`/settings remove-x` - Owner only. Remove an X user source.",
+        "`/settings add-reddit` - Owner only. Add a subreddit source, e.g. `wallstreetbets` or `r/wallstreetbets`.",
+        "`/settings remove-reddit` - Owner only. Remove a subreddit source.",
+        "`/help` - Show this command list.",
+    ]
+    return "\n".join(lines)
 
 
 def _format_sources_message(payload: dict[str, Any]) -> str:
