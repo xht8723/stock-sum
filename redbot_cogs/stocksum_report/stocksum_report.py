@@ -664,7 +664,7 @@ class StockSumReport(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="help", description="List available stock-sum slash commands.")
-    async def help(self, interaction) -> None:
+    async def stocksum_help(self, interaction) -> None:
         """Slash command handler for listing stock-sum commands."""
 
         await _send_command_output(interaction, _format_help_message(), private=False)

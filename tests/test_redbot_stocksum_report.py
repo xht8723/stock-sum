@@ -83,6 +83,7 @@ def test_discord_command_names_match_public_contract() -> None:
     assert '@app_commands.command(name="trendings"' in source
     assert '@app_commands.command(name="plot"' in source
     assert '@app_commands.command(name="help"' in source
+    assert "def help(" not in source
 
 
 def test_stocksum_group_is_removed_and_settings_group_exists() -> None:
@@ -94,7 +95,7 @@ async def test_help_command_lists_available_commands() -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
 
-    await report.help(interaction)
+    await report.stocksum_help(interaction)
 
     assert interaction.response.messages
     message = interaction.response.messages[0]
