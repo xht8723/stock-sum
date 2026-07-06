@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any
 
 import pytest
@@ -20,6 +21,51 @@ from redbot_cogs.stocksum_report.stocksum_report import (
 
 def test_default_report_timeout_is_30_minutes() -> None:
     assert DEFAULT_TIMEOUT_SECONDS == 30 * 60
+
+
+def test_required_slash_command_parameters_are_explicit() -> None:
+    required_parameters = {
+        "profiles_add": {"name"},
+        "profiles_edit": {"name", "collectors"},
+        "profiles_delete": {"name"},
+        "sources_add_x": {"handle"},
+        "sources_delete_x": {"handle"},
+        "sources_add_reddit": {"subreddit"},
+        "sources_delete_reddit": {"subreddit"},
+        "llm_select": {"provider"},
+        "secrets_set": {"name", "value"},
+        "secrets_remove": {"name"},
+    }
+    for method_name, parameter_names in required_parameters.items():
+        signature = inspect.signature(getattr(StockSumReport, method_name))
+        for parameter_name in parameter_names:
+            assert signature.parameters[parameter_name].default is inspect.Parameter.empty
+
+
+def test_conditional_filter_slash_parameters_stay_optional() -> None:
+    conditional_optional_parameters = {
+        "tradingreport": {"name", "start_date", "end_date", "days", "asset_type", "ticker"},
+        "thirteenfreport": {
+            "manager",
+            "issuer",
+            "cik",
+            "accession_number",
+            "cusip",
+            "figi",
+            "put_call",
+            "period_start",
+            "period_end",
+            "filing_start",
+            "filing_end",
+            "min_value",
+            "min_shares",
+        },
+        "statistic": {"ticker", "fuzzy_search", "name", "asset_type", "days", "start_date", "end_date"},
+    }
+    for method_name, parameter_names in conditional_optional_parameters.items():
+        signature = inspect.signature(getattr(StockSumReport, method_name))
+        for parameter_name in parameter_names:
+            assert signature.parameters[parameter_name].default is not inspect.Parameter.empty
 
 
 async def test_client_sends_report_request_and_downloads_artifact() -> None:

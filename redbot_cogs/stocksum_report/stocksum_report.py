@@ -717,7 +717,7 @@ class StockSumReport(commands.Cog):
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
         await _send_report_output(interaction, "Report generated.", private=False, file=file)
 
-    @app_commands.command(name="tradingreport", description="Generate an official House trading disclosure report.")
+    @app_commands.command(name="tradingreport", description="Generate House trading disclosures. Provide at least one filter.")
     @app_commands.describe(
         name="case-insensitive fuzzy filer name filter",
         start_date="transaction start date, YYYY-MM-DD",
@@ -824,7 +824,7 @@ class StockSumReport(commands.Cog):
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
         await _send_report_output(interaction, "Report generated.", private=False, file=file)
 
-    @app_commands.command(name="13freport", description="Generate an SEC 13F holdings report.")
+    @app_commands.command(name="13freport", description="Generate SEC 13F holdings. Provide manager, issuer, ID, dates, value, or shares.")
     @app_commands.describe(
         manager="case-insensitive filing manager name filter",
         issuer="case-insensitive issuer name filter",
@@ -978,7 +978,7 @@ class StockSumReport(commands.Cog):
         file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
         await _send_report_output(interaction, "Report generated.", private=False, file=file)
 
-    @app_commands.command(name="statistic", description="Generate a stock-sum statistics chart.")
+    @app_commands.command(name="statistic", description="Generate a statistics chart. Provide ticker, fuzzy_search, name, asset_type, days, or dates.")
     @app_commands.describe(
         mode="statistic mode",
         ticker="stock ticker filter, e.g. NVDA",
@@ -1405,7 +1405,7 @@ class StockSumReport(commands.Cog):
         await self._send_api_json(interaction, "/v1/llm/config", title="LLM Config")
 
     @llm.command(name="select", description="Select the LLM provider/model.")
-    async def llm_select(self, interaction, provider: str = "deepseek", model: str = "") -> None:
+    async def llm_select(self, interaction, provider: str, model: str = "") -> None:
         if not await self._require_owner(interaction):
             return
         if not _PROFILE_RE.fullmatch(provider):
