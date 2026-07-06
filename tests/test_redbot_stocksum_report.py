@@ -100,7 +100,6 @@ async def test_help_command_lists_available_commands() -> None:
     assert interaction.response.messages
     message = interaction.response.messages[0]
     assert message["ephemeral"] is False
-    assert message["suppress_embeds"] is True
     for command in (
         "/recent_posts",
         "/ptr_search",

@@ -667,7 +667,7 @@ class StockSumReport(commands.Cog):
     async def stocksum_help(self, interaction) -> None:
         """Slash command handler for listing stock-sum commands."""
 
-        await _send_command_output(interaction, _format_help_message(), private=False)
+        await interaction.response.send_message(_format_help_message(), ephemeral=False)
 
     @app_commands.command(name="recent_posts", description="Generate a stock-sum social media market report.")
     @app_commands.describe(
