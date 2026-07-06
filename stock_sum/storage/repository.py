@@ -7,6 +7,8 @@ from typing import Protocol, runtime_checkable
 
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.models import (
+    StoredAdanosTrendingSector,
+    StoredAdanosTrendingStock,
     StoredCollectionRun,
     StoredDownloadedMedia,
     StoredHousePtrTradeRow,
@@ -200,6 +202,32 @@ class StorageRepository(Protocol):
         limit: int | None = 20,
     ) -> list[StoredSec13FHolding]:
         """Read SEC 13F holdings for deterministic report rendering."""
+
+    async def save_adanos_trendings(
+        self,
+        *,
+        job_id: str,
+        from_date: str,
+        to_date: str,
+        responses: list,
+    ) -> None:
+        """Persist raw and normalized Adanos trendings responses."""
+
+    async def read_adanos_trending_stocks(
+        self,
+        *,
+        job_id: str,
+        limit: int | None = None,
+    ) -> list[StoredAdanosTrendingStock]:
+        """Read stored Adanos trending stock rows for one job."""
+
+    async def read_adanos_trending_sectors(
+        self,
+        *,
+        job_id: str,
+        limit: int | None = None,
+    ) -> list[StoredAdanosTrendingSector]:
+        """Read stored Adanos trending sector rows for one job."""
 
     async def get_downloaded_media(self, remote_url: str) -> StoredDownloadedMedia | None:
         """Return downloaded media metadata by remote URL."""

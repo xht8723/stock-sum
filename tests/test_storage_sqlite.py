@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 import pytest
 
+from stock_sum.collectors.api.adanos import AdanosEndpointResult
 from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import ProviderApiResponse, RawItem
 from stock_sum.media.downloader import remote_url_hash
@@ -27,7 +28,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
             """
             SELECT name FROM sqlite_master
             WHERE type = 'table'
-              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "collection_runs",
@@ -47,6 +48,9 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
                 "llm_reddit_comment_analyses",
                 "raw_house_ptr_filings",
                 "raw_house_ptr_trade_rows",
+                "raw_adanos_trending_responses",
+                "raw_adanos_trending_stocks",
+                "raw_adanos_trending_sectors",
             ),
         )
         try:
@@ -72,6 +76,9 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         "llm_reddit_comment_analyses",
         "raw_house_ptr_filings",
         "raw_house_ptr_trade_rows",
+        "raw_adanos_trending_responses",
+        "raw_adanos_trending_stocks",
+        "raw_adanos_trending_sectors",
     }
 
     async with aiosqlite.connect(db_path) as db:
@@ -87,6 +94,76 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
     assert "importance" in llm_reddit_columns
     assert "tickers_json" in llm_x_columns
     assert "tickers_json" in llm_reddit_columns
+
+
+async def test_adanos_trendings_are_persisted_and_read(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    await repository.initialize()
+
+    await repository.save_adanos_trendings(
+        job_id="trend-job",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        responses=[
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={"from": "2026-07-01", "to": "2026-07-06", "limit": 100},
+                status="succeeded",
+                raw_response_text='[{"ticker":"NVDA"}]',
+                rows=[
+                    {
+                        "ticker": "NVDA",
+                        "company_name": "NVIDIA Corp",
+                        "rank": 1,
+                        "trend": "up",
+                        "mentions": 42,
+                        "bullish_pct": 65.5,
+                        "bearish_pct": 12.0,
+                        "trend_history": [{"date": "2026-07-06", "mentions": 42}],
+                    }
+                ],
+            ),
+            AdanosEndpointResult(
+                platform="x",
+                category="sectors",
+                endpoint="/x/stocks/v1/trending/sectors",
+                request_args={"from": "2026-07-01", "to": "2026-07-06", "limit": 100},
+                status="succeeded",
+                raw_response_text='[{"sector":"Technology"}]',
+                rows=[
+                    {
+                        "sector": "Technology",
+                        "rank": 2,
+                        "top_tickers": ["NVDA", "AMD"],
+                        "trend": "up",
+                        "mentions": 18,
+                        "bullish_pct": 55,
+                        "bearish_pct": 20,
+                    }
+                ],
+            ),
+        ],
+    )
+
+    stocks = await repository.read_adanos_trending_stocks(job_id="trend-job")
+    sectors = await repository.read_adanos_trending_sectors(job_id="trend-job")
+
+    assert [(row.platform, row.ticker, row.company_name, row.mentions) for row in stocks] == [
+        ("reddit", "NVDA", "NVIDIA Corp", 42)
+    ]
+    assert [(row.platform, row.sector, row.top_tickers, row.rank) for row in sectors] == [
+        ("x", "Technology", ["NVDA", "AMD"], 2)
+    ]
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute("SELECT raw_response_text FROM raw_adanos_trending_responses WHERE job_id = ? ORDER BY category", ("trend-job",))
+        try:
+            raw_rows = [row[0] for row in await cursor.fetchall()]
+        finally:
+            await cursor.close()
+    assert raw_rows == ['[{"sector":"Technology"}]', '[{"ticker":"NVDA"}]']
 
 
 async def test_save_x_items_upserts_posts_media_and_index(tmp_path) -> None:

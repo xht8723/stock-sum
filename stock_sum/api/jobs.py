@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
@@ -19,7 +19,7 @@ from stock_sum.collectors.factory import social_collector_ids
 from stock_sum.llm.analysis import PROMPT_VERSION
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
-JobKind = Literal["social_report", "trading_report", "13f_report", "statistic", "collect"]
+JobKind = Literal["social_report", "trading_report", "13f_report", "trendings_report", "statistic", "collect"]
 ReportMode = Literal["html", "markdown", "discord", "text", "json"]
 StatisticMode = Literal["social", "trading"]
 StatisticBucket = Literal["auto", "day", "week", "month"]
@@ -27,6 +27,7 @@ WorkerOperation = Literal[
     "http_social_report",
     "http_trading_report",
     "http_13f_report",
+    "http_trendings_report",
     "http_statistic",
     "http_collect",
     "http_render_cached_social_report",
@@ -92,6 +93,21 @@ class Sec13FReportJobOptions:
     def __post_init__(self) -> None:
         if self.limit is None:
             object.__setattr__(self, "limit", 20)
+
+
+@dataclass(frozen=True)
+class TrendingsReportJobOptions:
+    """Options for an Adanos trendings report job."""
+
+    mode: ReportMode = "html"
+    from_date: str | None = None
+    to_date: str | None = None
+    limit: int = 5
+    title: str = "Trending Market Sentiment"
+
+    def __post_init__(self) -> None:
+        if self.limit is None:
+            object.__setattr__(self, "limit", 5)
 
 
 @dataclass(frozen=True)
@@ -264,6 +280,19 @@ class HttpJobManager:
         record = self._new_job(
             kind="13f_report",
             scope="13f",
+            mode=options.mode,
+        )
+        self._save(record)
+        self._refresh_memory_status(record.job_id)
+        return record
+
+    def create_trendings_report_job(self, options: TrendingsReportJobOptions) -> HttpJobRecord:
+        """Create a queued Adanos trendings report job."""
+
+        _validate_trendings_filters(options)
+        record = self._new_job(
+            kind="trendings_report",
+            scope="trendings",
             mode=options.mode,
         )
         self._save(record)
@@ -693,6 +722,89 @@ class HttpJobManager:
             await self._run_retention(job_id)
             self._refresh_memory_status(job_id)
 
+    async def run_trendings_report_job(self, job_id: str, options: TrendingsReportJobOptions) -> None:
+        """Run an Adanos trendings report in a child worker unless configured otherwise."""
+
+        if self._use_subprocess_workers:
+            await self._run_worker_operation(job_id, "http_trendings_report", {"options": asdict(options)})
+            self._refresh_memory_status(job_id)
+            return
+        await self._run_trendings_report_job_in_process(job_id, options)
+
+    async def _run_trendings_report_job_in_process(self, job_id: str, options: TrendingsReportJobOptions) -> None:
+        """Fetch, persist, and render Adanos trendings."""
+
+        from stock_sum.collectors.api.adanos import AdanosClient
+        from stock_sum.core.models import PipelineSectionWarning
+
+        try:
+            _validate_trendings_filters(options)
+            from_date, to_date = _trendings_date_window(options)
+            self._mark_running(job_id, phase="querying_adanos")
+            repository = self._repository_factory()
+            result = await AdanosClient(self.config.providers.adanos).fetch_trendings(
+                from_date=from_date,
+                to_date=to_date,
+            )
+            warnings = [
+                PipelineSectionWarning(
+                    section="trendings",
+                    source_id="adanos",
+                    phase="querying",
+                    message=message,
+                )
+                for message in result.warnings
+            ]
+            if result.responses:
+                await repository.save_adanos_trendings(
+                    job_id=job_id,
+                    from_date=from_date.isoformat(),
+                    to_date=to_date.isoformat(),
+                    responses=result.responses,
+                )
+
+            self._update(job_id, phase="rendering")
+            stocks = await repository.read_adanos_trending_stocks(job_id=job_id)
+            sectors = await repository.read_adanos_trending_sectors(job_id=job_id)
+            warning_data = _warnings_to_dicts(warnings)
+            response_data = {
+                "report_type": "trendings",
+                "summary": {
+                    "stocks": _adanos_stock_rows_to_dicts(stocks),
+                    "sectors": _adanos_sector_rows_to_dicts(sectors),
+                },
+                "trendings": {
+                    "stocks": _adanos_stock_rows_to_dicts(stocks),
+                    "sectors": _adanos_sector_rows_to_dicts(sectors),
+                },
+                "filters": {
+                    "from": from_date.isoformat(),
+                    "to": to_date.isoformat(),
+                    "display_limit": options.limit,
+                    "fetch_limit": 100,
+                },
+                "skipped": result.skipped,
+                "skip_reason": "ADANOS_API_KEY is not configured." if result.skipped else None,
+                "pipeline_warnings": warning_data,
+                "failed_sections": warning_data,
+            }
+            summary_path = self._job_dir(job_id) / "summary.json"
+            self._write_json(summary_path, response_data)
+            self._update(job_id, summary_path=str(summary_path), warnings=warning_data)
+            artifact_path, media_type = self._write_trendings_artifact(job_id, response_data, options)
+            self._mark_succeeded(
+                job_id,
+                artifact_path=str(artifact_path),
+                artifact_media_type=media_type,
+                summary_path=str(summary_path),
+                warnings=warning_data,
+            )
+        except Exception as exc:
+            self._mark_failed(job_id, str(exc))
+        finally:
+            await self._run_retention(job_id)
+            self._refresh_memory_status(job_id)
+
     async def run_statistic_job(self, job_id: str, options: StatisticJobOptions) -> None:
         """Run a statistic PNG job in a child worker unless configured otherwise."""
 
@@ -1101,6 +1213,32 @@ class HttpJobManager:
         artifact_path.write_text(rendered, encoding="utf-8")
         return artifact_path, media_type
 
+    def _write_trendings_artifact(
+        self,
+        job_id: str,
+        response_data: dict[str, Any],
+        options: TrendingsReportJobOptions,
+    ) -> tuple[Path, str]:
+        if options.mode == "json":
+            artifact_path = self._job_dir(job_id) / "summary.json"
+            return artifact_path, "application/json"
+
+        extension = {"html": "html", "markdown": "md", "discord": "md", "text": "txt"}[options.mode]
+        media_type = {
+            "html": "text/html; charset=utf-8",
+            "markdown": "text/markdown; charset=utf-8",
+            "discord": "text/markdown; charset=utf-8",
+            "text": "text/plain; charset=utf-8",
+        }[options.mode]
+        rendered = self._renderer_factory(options.title).render_trendings(
+            response_data,
+            mode=options.mode,
+            limit=options.limit,
+        )
+        artifact_path = self._job_dir(job_id) / f"trendings-report.{extension}"
+        artifact_path.write_text(rendered, encoding="utf-8")
+        return artifact_path, media_type
+
     def _write_cached_social_report_artifacts(
         self,
         job_id: str,
@@ -1403,6 +1541,14 @@ def _validate_13f_filters(options: Sec13FReportJobOptions) -> None:
         raise ValueError("13F report limit must be at least 1.")
 
 
+def _validate_trendings_filters(options: TrendingsReportJobOptions) -> None:
+    if options.mode not in {"html", "markdown", "discord", "text", "json"}:
+        raise ValueError("Trendings report mode must be html, markdown, discord, text, or json.")
+    if options.limit < 1:
+        raise ValueError("Trendings report limit must be at least 1.")
+    _trendings_date_window(options)
+
+
 def _validate_statistic_filters(options: StatisticJobOptions) -> None:
     if options.mode not in {"social", "trading"}:
         raise ValueError("Statistic mode must be social or trading.")
@@ -1447,6 +1593,30 @@ def _statistic_date_window(options: StatisticJobOptions) -> tuple[datetime | Non
         now = datetime.now(timezone.utc)
         return now - timedelta(days=options.days), now
     return _parse_date_filter(options.start_date, end_of_day=False), _parse_date_filter(options.end_date, end_of_day=True)
+
+
+def _trendings_date_window(options: TrendingsReportJobOptions) -> tuple[date, date]:
+    today = datetime.now(timezone.utc).date()
+    from_date = _parse_yyyy_mm_dd(options.from_date, "from") if options.from_date else None
+    to_date = _parse_yyyy_mm_dd(options.to_date, "to") if options.to_date else None
+    if from_date is None and to_date is None:
+        to_date = today
+        from_date = to_date - timedelta(days=6)
+    elif from_date is None and to_date is not None:
+        from_date = to_date - timedelta(days=6)
+    elif from_date is not None and to_date is None:
+        to_date = from_date + timedelta(days=6)
+    assert from_date is not None and to_date is not None
+    if from_date > to_date:
+        raise ValueError("Trendings report from date must be on or before to date.")
+    return from_date, to_date
+
+
+def _parse_yyyy_mm_dd(value: str, label: str) -> date:
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"Trendings report {label} date must use YYYY-MM-DD.") from exc
 
 
 def _parse_date_filter(value: str | None, *, end_of_day: bool) -> datetime | None:
@@ -1652,6 +1822,51 @@ def _sec_13f_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
             "voting_auth_shared": row.voting_auth_shared,
             "voting_auth_none": row.voting_auth_none,
             "filing_url": row.filing_url,
+        }
+        for row in rows
+    ]
+
+
+def _adanos_stock_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "job_id": row.job_id,
+            "platform": row.platform,
+            "rank": row.rank,
+            "window_from": row.window_from,
+            "window_to": row.window_to,
+            "ticker": row.ticker,
+            "company_name": row.company_name,
+            "trend": row.trend,
+            "mentions": row.mentions,
+            "bullish_pct": row.bullish_pct,
+            "bearish_pct": row.bearish_pct,
+            "sentiment_score": row.sentiment_score,
+            "buzz_score": row.buzz_score,
+            "trend_history": row.trend_history,
+            "fetched_at": row.fetched_at,
+        }
+        for row in rows
+    ]
+
+
+def _adanos_sector_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "job_id": row.job_id,
+            "platform": row.platform,
+            "rank": row.rank,
+            "window_from": row.window_from,
+            "window_to": row.window_to,
+            "sector": row.sector,
+            "top_tickers": row.top_tickers,
+            "trend": row.trend,
+            "mentions": row.mentions,
+            "bullish_pct": row.bullish_pct,
+            "bearish_pct": row.bearish_pct,
+            "sentiment_score": row.sentiment_score,
+            "buzz_score": row.buzz_score,
+            "fetched_at": row.fetched_at,
         }
         for row in rows
     ]

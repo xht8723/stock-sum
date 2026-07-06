@@ -55,6 +55,13 @@ except ModuleNotFoundError:  # pragma: no cover - lets local tests import the HT
 
             return decorator
 
+        @staticmethod
+        def rename(**_kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
         class Choice:
             def __init__(self, *, name: str, value: str) -> None:
                 self.name = name
@@ -228,7 +235,7 @@ class StockSumHttpClient:
         if output_format not in SUPPORTED_FORMATS:
             raise StockSumRequestError(f"Unsupported report format: {output_format}")
         if not any((name, start_date, end_date, days, asset_type, ticker)):
-            raise StockSumRequestError("tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
+            raise StockSumRequestError("ptr_search requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
 
         session, owns_session = await self._session()
         try:
@@ -286,7 +293,7 @@ class StockSumHttpClient:
         if output_format not in SUPPORTED_FORMATS:
             raise StockSumRequestError(f"Unsupported report format: {output_format}")
         if not any((manager, cik, accession_number, issuer, cusip, figi, put_call, period_start, period_end, filing_start, filing_end, min_value is not None, min_shares is not None)):
-            raise StockSumRequestError("13freport requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.")
+            raise StockSumRequestError("13f_search requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.")
 
         session, owns_session = await self._session()
         try:
@@ -326,6 +333,45 @@ class StockSumHttpClient:
             if owns_session:
                 await session.close()
 
+    async def run_trendings_report(
+        self,
+        *,
+        output_format: str,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int | None = None,
+    ) -> StockSumArtifact:
+        """Create, poll, and download one Adanos trendings report job."""
+
+        if output_format not in SUPPORTED_FORMATS:
+            raise StockSumRequestError(f"Unsupported report format: {output_format}")
+
+        session, owns_session = await self._session()
+        try:
+            payload = {
+                "from": from_date,
+                "to": to_date,
+                "limit": limit,
+            }
+            job = await self._create_trendings_report_job(
+                session,
+                output_format=output_format,
+                payload={key: value for key, value in payload.items() if value is not None},
+            )
+            job_id = _required_string(job, "job_id")
+            status_payload = await self._poll_until_done(session, job_id)
+            content, content_type, filename = await self._download_artifact(session, job_id, output_format)
+            return StockSumArtifact(
+                job_id=job_id,
+                filename=filename,
+                content_type=content_type,
+                content=content,
+                status=status_payload,
+            )
+        finally:
+            if owns_session:
+                await session.close()
+
     async def run_statistic(
         self,
         *,
@@ -346,11 +392,11 @@ class StockSumHttpClient:
         """Create, poll, and download one stock-sum statistic PNG job."""
 
         if mode not in SUPPORTED_STATISTIC_MODES:
-            raise StockSumRequestError(f"Unsupported statistic mode: {mode}")
+            raise StockSumRequestError(f"Unsupported plot mode: {mode}")
         if bucket not in SUPPORTED_STATISTIC_BUCKETS:
             raise StockSumRequestError(f"Unsupported statistic bucket: {bucket}")
         if not any((ticker, fuzzy_tag, name, asset_name, asset_type, days, start_date, end_date)):
-            raise StockSumRequestError("statistic requires at least one filter: ticker, fuzzy_tag, name, asset_name, asset_type, days, or date range.")
+            raise StockSumRequestError("plot requires at least one filter: ticker, fuzzy_tag, name, asset_name, asset_type, days, or date range.")
 
         session, owns_session = await self._session()
         try:
@@ -397,7 +443,7 @@ class StockSumHttpClient:
         """Return statistic fuzzy-match candidates."""
 
         if mode not in SUPPORTED_STATISTIC_MODES:
-            raise StockSumRequestError(f"Unsupported statistic mode: {mode}")
+            raise StockSumRequestError(f"Unsupported plot mode: {mode}")
         params = f"mode={quote(mode, safe='')}&q={quote(query, safe='')}&limit={max(1, min(5, limit))}"
         payload = await self.get_json(f"/v1/statistics/fuzzy-matches?{params}")
         matches = payload.get("matches")
@@ -506,6 +552,22 @@ class StockSumHttpClient:
         except Exception as exc:
             raise StockSumRequestError(f"Could not reach stock-sum at {self.base_url}: {exc}") from exc
 
+    async def _create_trendings_report_job(
+        self,
+        session: _ClientSession,
+        *,
+        output_format: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        url = f"{self.base_url}/v1/trendings/jobs/{quote(output_format, safe='')}"
+        try:
+            async with session.post(url, json=payload, headers=self._headers()) as response:
+                return await self._json_response(response, expected_status=202)
+        except StockSumCogError:
+            raise
+        except Exception as exc:
+            raise StockSumRequestError(f"Could not reach stock-sum at {self.base_url}: {exc}") from exc
+
     async def _create_statistic_job(
         self,
         session: _ClientSession,
@@ -601,7 +663,7 @@ class StockSumReport(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="socialreport", description="Generate a stock-sum social media market report.")
+    @app_commands.command(name="recent_posts", description="Generate a stock-sum social media market report.")
     @app_commands.describe(
         detail="how many social sentiment items to include",
     )
@@ -612,7 +674,7 @@ class StockSumReport(commands.Cog):
             app_commands.Choice(name="Full", value="full"),
         ]
     )
-    async def socialreport(
+    async def recent_posts(
         self,
         interaction,
         detail: str = "minimum",
@@ -648,7 +710,7 @@ class StockSumReport(commands.Cog):
         for chunk in _split_discord_markdown(report_text):
             await _send_report_output(interaction, chunk, private=False)
 
-    @app_commands.command(name="tradingreport", description="Generate House trading disclosures. Provide at least one filter.")
+    @app_commands.command(name="ptr_search", description="Generate House trading disclosures. Provide at least one filter.")
     @app_commands.describe(
         name="case-insensitive fuzzy filer name filter",
         start_date="transaction start date, YYYY-MM-DD",
@@ -659,7 +721,7 @@ class StockSumReport(commands.Cog):
         limit="maximum rows to return; uses stock-sum default if omitted",
         force_refresh="force a House PTR refresh before querying",
     )
-    async def tradingreport(
+    async def ptr_search(
         self,
         interaction,
         name: str = "",
@@ -700,7 +762,7 @@ class StockSumReport(commands.Cog):
         if not any((name_filter, start_filter, end_filter, days, asset_type_filter, ticker_filter)):
             await _send_validation_error(
                 interaction,
-                "tradingreport requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
+                "ptr_search requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
             )
             return
 
@@ -736,7 +798,7 @@ class StockSumReport(commands.Cog):
         for chunk in _split_discord_markdown(report_text):
             await _send_report_output(interaction, chunk, private=False)
 
-    @app_commands.command(name="13freport", description="Generate SEC 13F holdings. Provide manager, issuer, ID, dates, value, or shares.")
+    @app_commands.command(name="13f_search", description="Generate SEC 13F holdings. Provide manager, issuer, ID, dates, value, or shares.")
     @app_commands.describe(
         manager="case-insensitive filing manager name filter",
         issuer="case-insensitive issuer name filter",
@@ -760,7 +822,7 @@ class StockSumReport(commands.Cog):
             app_commands.Choice(name="CALL", value="CALL"),
         ],
     )
-    async def thirteenfreport(
+    async def thirteenf_search(
         self,
         interaction,
         manager: str = "",
@@ -830,7 +892,7 @@ class StockSumReport(commands.Cog):
         if not any((manager_filter, issuer_filter, cik_filter, accession_filter, cusip_filter, figi_filter, put_call_filter, period_start_filter, period_end_filter, filing_start_filter, filing_end_filter, min_value is not None, min_shares is not None)):
             await _send_validation_error(
                 interaction,
-                "13freport requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.",
+                "13f_search requires at least one filter: manager, issuer, cik, accession_number, cusip, figi, put_call, dates, min_value, or min_shares.",
             )
             return
 
@@ -873,9 +935,65 @@ class StockSumReport(commands.Cog):
         for chunk in _split_discord_markdown(report_text):
             await _send_report_output(interaction, chunk, private=False)
 
-    @app_commands.command(name="statistic", description="Generate a statistics chart. Provide ticker, fuzzy_search, name, asset_type, days, or dates.")
+    @app_commands.command(name="trendings", description="Generate Adanos trending stocks and sectors.")
+    @app_commands.rename(from_date="from")
     @app_commands.describe(
-        mode="statistic mode",
+        from_date="start date, YYYY-MM-DD; defaults to 7-day window",
+        to_date="end date, YYYY-MM-DD; defaults to current UTC date",
+        limit="rows to display per platform and section; stock-sum default if omitted",
+    )
+    async def trendings(
+        self,
+        interaction,
+        from_date: str = "",
+        to_date: str = "",
+        limit: int | None = None,
+    ) -> None:
+        """Slash command handler for Adanos trendings reports."""
+
+        from_filter, to_filter, error = _validate_date_range(
+            from_date,
+            to_date,
+            start_label="from",
+            end_label="to",
+        )
+        if error:
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(limit, label="limit"):
+            await _send_validation_error(interaction, error)
+            return
+
+        await interaction.response.send_message(
+            "Trendings report is being generated, please wait a few minutes.",
+            ephemeral=False,
+        )
+        try:
+            artifact = await StockSumHttpClient.from_env().run_trendings_report(
+                output_format="discord",
+                from_date=from_filter,
+                to_date=to_filter,
+                limit=limit,
+            )
+        except StockSumCogError as exc:
+            await _send_report_output(interaction, _failure_message(exc), private=False)
+            return
+
+        if discord is None:
+            await _send_report_output(
+                interaction,
+                "stock-sum report is ready, but discord.py is not available.",
+                private=False,
+            )
+            return
+
+        report_text = artifact.content.decode("utf-8", errors="replace").strip()
+        for chunk in _split_discord_markdown(report_text):
+            await _send_report_output(interaction, chunk, private=False)
+
+    @app_commands.command(name="plot", description="Generate a statistics chart. Provide ticker, fuzzy_search, name, asset_type, days, or dates.")
+    @app_commands.describe(
+        mode="plot mode",
         ticker="stock ticker filter, e.g. NVDA",
         fuzzy_search="fuzzy search text; social searches tags, trading searches assets",
         name="House filer name filter for trading mode",
@@ -919,7 +1037,7 @@ class StockSumReport(commands.Cog):
             app_commands.Choice(name="Month", value="month"),
         ],
     )
-    async def statistic(
+    async def plot(
         self,
         interaction,
         mode: str,
@@ -1073,12 +1191,12 @@ class StockSumReport(commands.Cog):
                 check=check,
             )
         except asyncio.TimeoutError:
-            await _edit_message_content(message, "Selection timed out. Run /statistic again to retry.")
+            await _edit_message_content(message, "Selection timed out. Run /plot again to retry.")
             return {}
 
         selected_index = _fuzzy_reaction_index(getattr(payload, "emoji", payload))
         if selected_index is None or selected_index >= len(matches):
-            await _edit_message_content(message, "Selection timed out. Run /statistic again to retry.")
+            await _edit_message_content(message, "Selection timed out. Run /plot again to retry.")
             return {}
         selected = matches[selected_index]
         label = str(selected.get("label") or selected.get("match_value") or "selection")
@@ -1301,7 +1419,7 @@ def _validate_statistic_options(
     bucket: str,
 ) -> str | None:
     if mode not in SUPPORTED_STATISTIC_MODES:
-        return "statistic mode must be social or trading."
+        return "plot mode must be social or trading."
     if error := _validate_ticker(ticker):
         return error
     if error := _validate_asset_type(asset_type):
@@ -1317,9 +1435,9 @@ def _validate_statistic_options(
     if error := _validate_positive_int(days, label="days", maximum=MAX_DAYS_FILTER):
         return error
     if days is not None and (start_date or end_date):
-        return "statistic accepts either days or explicit start/end dates, not both."
+        return "plot accepts either days or explicit start/end dates, not both."
     if not any((ticker, fuzzy_tag, name, asset_name, asset_type, days, start_date, end_date)):
-        return "statistic requires at least one filter: ticker, fuzzy_search, name, asset_type, days, or date range."
+        return "plot requires at least one filter: ticker, fuzzy_search, name, asset_type, days, or date range."
     return None
 
 

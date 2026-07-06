@@ -22,6 +22,8 @@ from stock_sum.collectors.api.sec_13f import normalize_sec_name, sec_filing_url
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 from stock_sum.storage.models import (
+    StoredAdanosTrendingSector,
+    StoredAdanosTrendingStock,
     StoredCollectionRun,
     StoredDownloadedMedia,
     StoredHousePtrTradeRow,
@@ -164,6 +166,69 @@ CREATE TABLE IF NOT EXISTS raw_provider_api_responses (
 
 CREATE INDEX IF NOT EXISTS idx_provider_api_responses_run
 ON raw_provider_api_responses (collection_run_id);
+
+CREATE TABLE IF NOT EXISTS raw_adanos_trending_responses (
+    response_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    category TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    request_args_json TEXT NOT NULL,
+    raw_response_text TEXT NOT NULL,
+    error_text TEXT,
+    status TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_adanos_trending_responses_job
+ON raw_adanos_trending_responses (job_id, platform, category);
+
+CREATE TABLE IF NOT EXISTS raw_adanos_trending_stocks (
+    job_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    window_from TEXT NOT NULL,
+    window_to TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    company_name TEXT,
+    trend TEXT,
+    mentions INTEGER,
+    bullish_pct INTEGER,
+    bearish_pct INTEGER,
+    sentiment_score REAL,
+    buzz_score REAL,
+    trend_history_json TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, platform, rank, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_adanos_trending_stocks_ticker
+ON raw_adanos_trending_stocks (ticker, fetched_at);
+
+CREATE TABLE IF NOT EXISTS raw_adanos_trending_sectors (
+    job_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    window_from TEXT NOT NULL,
+    window_to TEXT NOT NULL,
+    sector TEXT NOT NULL,
+    top_tickers_json TEXT NOT NULL,
+    trend TEXT,
+    mentions INTEGER,
+    bullish_pct INTEGER,
+    bearish_pct INTEGER,
+    sentiment_score REAL,
+    buzz_score REAL,
+    trend_history_json TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, platform, rank, sector)
+);
+
+CREATE INDEX IF NOT EXISTS idx_adanos_trending_sectors_sector
+ON raw_adanos_trending_sectors (sector, fetched_at);
 
 CREATE TABLE IF NOT EXISTS raw_house_ptr_filings (
     doc_id TEXT PRIMARY KEY,
@@ -644,6 +709,210 @@ class SQLiteStorageRepository:
                     ),
                 )
             await db.commit()
+
+    async def save_adanos_trendings(
+        self,
+        *,
+        job_id: str,
+        from_date: str,
+        to_date: str,
+        responses: list,
+    ) -> None:
+        """Persist raw and normalized Adanos trendings responses."""
+
+        await self.initialize()
+        if not responses:
+            return
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            for response in responses:
+                platform = str(getattr(response, "platform"))
+                category = str(getattr(response, "category"))
+                fetched_at = getattr(response, "fetched_at").isoformat()
+                rows = list(getattr(response, "rows", []) or [])
+                await db.execute(
+                    """
+                    INSERT INTO raw_adanos_trending_responses (
+                        response_id, job_id, platform, category, endpoint,
+                        request_args_json, raw_response_text, error_text,
+                        status, row_count, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        uuid4().hex,
+                        job_id,
+                        platform,
+                        category,
+                        str(getattr(response, "endpoint")),
+                        json.dumps(getattr(response, "request_args"), ensure_ascii=False, sort_keys=True, default=str),
+                        str(getattr(response, "raw_response_text")),
+                        getattr(response, "error", None),
+                        str(getattr(response, "status")),
+                        len(rows),
+                        fetched_at,
+                    ),
+                )
+                if str(getattr(response, "status")) != "succeeded":
+                    continue
+                if category == "stocks":
+                    for fallback_rank, row in enumerate(rows, start=1):
+                        rank = _optional_int(row.get("rank")) or fallback_rank
+                        ticker = str(row.get("ticker") or "").upper().strip()
+                        if not ticker:
+                            continue
+                        await db.execute(
+                            """
+                            INSERT OR REPLACE INTO raw_adanos_trending_stocks (
+                                job_id, platform, rank, window_from, window_to,
+                                ticker, company_name, trend, mentions, bullish_pct,
+                                bearish_pct, sentiment_score, buzz_score,
+                                trend_history_json, raw_json, fetched_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                job_id,
+                                platform,
+                                rank,
+                                from_date,
+                                to_date,
+                                ticker,
+                                _optional_str(row.get("company_name")),
+                                _optional_str(row.get("trend")),
+                                _optional_int(row.get("mentions")),
+                                _optional_int(row.get("bullish_pct")),
+                                _optional_int(row.get("bearish_pct")),
+                                _optional_float(row.get("sentiment_score")),
+                                _optional_float(row.get("buzz_score")),
+                                json.dumps(row.get("trend_history") or [], ensure_ascii=False),
+                                json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
+                                fetched_at,
+                            ),
+                        )
+                elif category == "sectors":
+                    for fallback_rank, row in enumerate(rows, start=1):
+                        rank = _optional_int(row.get("rank")) or fallback_rank
+                        sector = str(row.get("sector") or "").strip()
+                        if not sector:
+                            continue
+                        top_tickers = row.get("top_tickers") if isinstance(row.get("top_tickers"), list) else []
+                        await db.execute(
+                            """
+                            INSERT OR REPLACE INTO raw_adanos_trending_sectors (
+                                job_id, platform, rank, window_from, window_to,
+                                sector, top_tickers_json, trend, mentions,
+                                bullish_pct, bearish_pct, sentiment_score,
+                                buzz_score, trend_history_json, raw_json, fetched_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                job_id,
+                                platform,
+                                rank,
+                                from_date,
+                                to_date,
+                                sector,
+                                json.dumps([str(item) for item in top_tickers], ensure_ascii=False),
+                                _optional_str(row.get("trend")),
+                                _optional_int(row.get("mentions")),
+                                _optional_int(row.get("bullish_pct")),
+                                _optional_int(row.get("bearish_pct")),
+                                _optional_float(row.get("sentiment_score")),
+                                _optional_float(row.get("buzz_score")),
+                                json.dumps(row.get("trend_history") or [], ensure_ascii=False),
+                                json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
+                                fetched_at,
+                            ),
+                        )
+            await db.commit()
+
+    async def read_adanos_trending_stocks(
+        self,
+        *,
+        job_id: str,
+        limit: int | None = None,
+    ) -> list[StoredAdanosTrendingStock]:
+        """Read stored Adanos trending stock rows for one job."""
+
+        await self.initialize()
+        sql = """
+            SELECT job_id, platform, rank, window_from, window_to, ticker,
+                   company_name, trend, mentions, bullish_pct, bearish_pct,
+                   sentiment_score, buzz_score, trend_history_json, raw_json, fetched_at
+            FROM raw_adanos_trending_stocks
+            WHERE job_id = ?
+            ORDER BY platform ASC, rank ASC
+        """
+        params: list[Any] = [job_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            rows = await db.execute_fetchall(sql, params)
+        return [
+            StoredAdanosTrendingStock(
+                job_id=row[0],
+                platform=row[1],
+                rank=row[2],
+                window_from=row[3],
+                window_to=row[4],
+                ticker=row[5],
+                company_name=row[6],
+                trend=row[7],
+                mentions=row[8],
+                bullish_pct=row[9],
+                bearish_pct=row[10],
+                sentiment_score=row[11],
+                buzz_score=row[12],
+                trend_history=_json_list(row[13]),
+                raw_metadata=_json_obj(row[14]),
+                fetched_at=row[15],
+            )
+            for row in rows
+        ]
+
+    async def read_adanos_trending_sectors(
+        self,
+        *,
+        job_id: str,
+        limit: int | None = None,
+    ) -> list[StoredAdanosTrendingSector]:
+        """Read stored Adanos trending sector rows for one job."""
+
+        await self.initialize()
+        sql = """
+            SELECT job_id, platform, rank, window_from, window_to, sector,
+                   top_tickers_json, trend, mentions, bullish_pct, bearish_pct,
+                   sentiment_score, buzz_score, trend_history_json, raw_json, fetched_at
+            FROM raw_adanos_trending_sectors
+            WHERE job_id = ?
+            ORDER BY platform ASC, rank ASC
+        """
+        params: list[Any] = [job_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            rows = await db.execute_fetchall(sql, params)
+        return [
+            StoredAdanosTrendingSector(
+                job_id=row[0],
+                platform=row[1],
+                rank=row[2],
+                window_from=row[3],
+                window_to=row[4],
+                sector=row[5],
+                top_tickers=[str(item) for item in _json_list(row[6])],
+                trend=row[7],
+                mentions=row[8],
+                bullish_pct=row[9],
+                bearish_pct=row[10],
+                sentiment_score=row[11],
+                buzz_score=row[12],
+                trend_history=_json_list(row[13]),
+                raw_metadata=_json_obj(row[14]),
+                fetched_at=row[15],
+            )
+            for row in rows
+        ]
 
     async def start_llm_analysis_run(
         self,
@@ -1613,6 +1882,31 @@ def _json_list(value: str | None) -> list[Any]:
     except json.JSONDecodeError:
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalized_importance(value: Any) -> str:

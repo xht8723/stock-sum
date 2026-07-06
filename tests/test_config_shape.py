@@ -29,6 +29,9 @@ def test_example_config_is_valid() -> None:
     assert config.providers.xpoz.api_key_env == "XPOZ_API_KEY"
     assert config.providers.xpoz.server_url == "https://mcp.xpoz.ai/mcp"
     assert config.providers.xpoz.max_concurrent_requests == 1
+    assert config.providers.adanos.api_key_env == "ADANOS_API_KEY"
+    assert config.providers.adanos.base_url == "https://api.adanos.org"
+    assert config.providers.adanos.max_concurrent_requests == 4
     assert config.llm.provider == "deepseek"
     assert config.llm.model == "deepseek-v4-flash"
     assert config.llm.api_key_env == "DEEPSEEK_API_KEY"

@@ -7,9 +7,9 @@ from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from stock_sum.api.jobs import HttpJobManager, SocialReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, SocialReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions, TrendingsReportJobOptions
 from stock_sum.api.runtime_config import RuntimeConfigError, RuntimeConfigManager
 from stock_sum.config.loader import redacted_config
 from stock_sum.config.models import AppConfig
@@ -102,6 +102,18 @@ class Sec13FReportJobRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1)
     title: str = "SEC 13F Holdings"
     force_refresh: bool = False
+
+
+class TrendingsReportJobRequest(BaseModel):
+    """HTTP request body for an Adanos trendings report."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: ReportModePath = "html"
+    from_date: str | None = Field(default=None, alias="from")
+    to_date: str | None = Field(default=None, alias="to")
+    limit: int | None = Field(default=None, ge=1)
+    title: str = "Trending Market Sentiment"
 
 
 class StatisticJobRequest(BaseModel):
@@ -226,6 +238,23 @@ def build_router(
         data["mode"] = mode
         return _create_13f_report_job(current_manager(), Sec13FReportJobRequest(**data), background_tasks)
 
+    @v1.post("/trendings/jobs", status_code=status.HTTP_202_ACCEPTED)
+    async def create_trendings_report_job(
+        background_tasks: BackgroundTasks,
+        request: TrendingsReportJobRequest = TrendingsReportJobRequest(),
+    ) -> dict:
+        return _create_trendings_report_job(current_manager(), request, background_tasks)
+
+    @v1.post("/trendings/jobs/{mode}", status_code=status.HTTP_202_ACCEPTED)
+    async def create_trendings_report_job_for_mode(
+        mode: ReportModePath,
+        background_tasks: BackgroundTasks,
+        request: TrendingsReportJobRequest = TrendingsReportJobRequest(),
+    ) -> dict:
+        data = request.model_dump(by_alias=False)
+        data["mode"] = mode
+        return _create_trendings_report_job(current_manager(), TrendingsReportJobRequest(**data), background_tasks)
+
     @v1.post("/statistics/jobs", status_code=status.HTTP_202_ACCEPTED)
     async def create_statistic_job(
         background_tasks: BackgroundTasks,
@@ -302,6 +331,21 @@ def build_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         background_tasks.add_task(manager.run_13f_report_job, job.job_id, options)
+        return _job_response(job.to_dict())
+
+    def _create_trendings_report_job(
+        manager: HttpJobManager | None,
+        request: TrendingsReportJobRequest,
+        background_tasks: BackgroundTasks,
+    ) -> dict:
+        if manager is None:
+            raise HTTPException(status_code=503, detail="HTTP job manager is not configured.")
+        try:
+            options = TrendingsReportJobOptions(**request.model_dump(by_alias=False))
+            job = manager.create_trendings_report_job(options)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        background_tasks.add_task(manager.run_trendings_report_job, job.job_id, options)
         return _job_response(job.to_dict())
 
     def _create_statistic_job(

@@ -205,6 +205,26 @@ def test_statistic_job_rejects_missing_filters(tmp_path) -> None:
     assert "requires at least one filter" in response.json()["detail"]
 
 
+def test_trendings_job_accepts_from_alias_and_limit(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    response = client.post(
+        "/v1/trendings/jobs/discord",
+        json={"from": "2026-07-01", "to": "2026-07-06", "limit": 3},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "job-trendings"
+    assert manager.last_trendings_payload == {
+        "mode": "discord",
+        "from_date": "2026-07-01",
+        "to_date": "2026-07-06",
+        "limit": 3,
+    }
+
+
 @dataclass
 class FakeJob:
     job_id: str
@@ -235,6 +255,7 @@ class FakeJobManager:
         self.last_statistic_mode: str | None = None
         self.last_statistic_ticker: str | None = None
         self.last_fuzzy_match: dict[str, Any] | None = None
+        self.last_trendings_payload: dict[str, Any] | None = None
 
     def create_social_report_job(self, options) -> FakeJob:
         self.last_report_mode = options.mode
@@ -263,6 +284,17 @@ class FakeJobManager:
         self.last_statistic_mode = options.mode
         self.last_statistic_ticker = options.ticker
         job = FakeJob(job_id="job-statistic", kind="statistic", scope=options.mode)
+        self.jobs[job.job_id] = job
+        return job
+
+    def create_trendings_report_job(self, options) -> FakeJob:
+        self.last_trendings_payload = {
+            "mode": options.mode,
+            "from_date": options.from_date,
+            "to_date": options.to_date,
+            "limit": options.limit,
+        }
+        job = FakeJob(job_id="job-trendings", kind="trendings_report", scope="trendings")
         self.jobs[job.job_id] = job
         return job
 
@@ -324,6 +356,18 @@ class FakeJobManager:
         job.phase = "succeeded"
         job.artifact_path = str(artifact)
         job.artifact_media_type = "image/png"
+        job.summary_path = str(summary)
+
+    async def run_trendings_report_job(self, job_id: str, options) -> None:
+        artifact = self.tmp_path / "trendings-report.md"
+        artifact.write_text("fake trendings report", encoding="utf-8")
+        summary = self.tmp_path / "trendings-summary.json"
+        summary.write_text('{"report_type":"trendings"}', encoding="utf-8")
+        job = self.jobs[job_id]
+        job.status = "succeeded"
+        job.phase = "succeeded"
+        job.artifact_path = str(artifact)
+        job.artifact_media_type = "text/markdown; charset=utf-8"
         job.summary_path = str(summary)
 
     async def run_collect_job(self, job_id: str) -> None:

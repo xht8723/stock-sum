@@ -181,6 +181,50 @@ class StoredSec13FHolding:
 
 
 @dataclass(frozen=True)
+class StoredAdanosTrendingStock:
+    """Stored Adanos trending stock row."""
+
+    job_id: str
+    platform: str
+    rank: int
+    window_from: str
+    window_to: str
+    ticker: str
+    company_name: str | None
+    trend: str | None
+    mentions: int | None
+    bullish_pct: int | None
+    bearish_pct: int | None
+    sentiment_score: float | None
+    buzz_score: float | None
+    trend_history: list[Any]
+    raw_metadata: dict[str, Any]
+    fetched_at: str
+
+
+@dataclass(frozen=True)
+class StoredAdanosTrendingSector:
+    """Stored Adanos trending sector row."""
+
+    job_id: str
+    platform: str
+    rank: int
+    window_from: str
+    window_to: str
+    sector: str
+    top_tickers: list[str]
+    trend: str | None
+    mentions: int | None
+    bullish_pct: int | None
+    bearish_pct: int | None
+    sentiment_score: float | None
+    buzz_score: float | None
+    trend_history: list[Any]
+    raw_metadata: dict[str, Any]
+    fetched_at: str
+
+
+@dataclass(frozen=True)
 class StoredSocialStatisticPoint:
     """Analyzed social post point for statistic charting."""
 

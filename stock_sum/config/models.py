@@ -77,10 +77,20 @@ class XpozProviderConfig(BaseModel):
     max_concurrent_requests: int = Field(default=1, ge=1)
 
 
+class AdanosProviderConfig(BaseModel):
+    """Adanos market sentiment API settings."""
+
+    api_key_env: str = "ADANOS_API_KEY"
+    base_url: str = "https://api.adanos.org"
+    timeout_seconds: int = Field(default=30, ge=1)
+    max_concurrent_requests: int = Field(default=4, ge=1)
+
+
 class ProvidersConfig(BaseModel):
     """External API provider settings."""
 
     xpoz: XpozProviderConfig = Field(default_factory=XpozProviderConfig)
+    adanos: AdanosProviderConfig = Field(default_factory=AdanosProviderConfig)
 
 
 class LLMConfig(BaseModel):

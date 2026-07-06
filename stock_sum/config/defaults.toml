@@ -46,6 +46,12 @@ server_url = "https://mcp.xpoz.ai/mcp"
 timeout_seconds = 60
 max_concurrent_requests = 1
 
+[providers.adanos]
+api_key_env = "ADANOS_API_KEY"
+base_url = "https://api.adanos.org"
+timeout_seconds = 30
+max_concurrent_requests = 4
+
 [llm]
 provider = "deepseek"
 model = "deepseek-v4-flash"

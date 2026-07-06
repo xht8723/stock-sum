@@ -381,6 +381,7 @@ def setup_init(
     port: int | None = typer.Option(None, "--port", help="HTTP server port."),
     llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider id."),
     xpoz_api_key: str | None = typer.Option(None, "--xpoz-api-key", help="Xpoz API key to store in env file."),
+    adanos_api_key: str | None = typer.Option(None, "--adanos-api-key", help="Optional Adanos API key to store in env file."),
     llm_api_key: str | None = typer.Option(None, "--llm-api-key", help="LLM API key to store in env file."),
     x_user: str | None = typer.Option(None, "--x-user", help="Optional first X handle to collect."),
     subreddit: str | None = typer.Option(None, "--subreddit", help="Optional first subreddit to collect."),
@@ -413,6 +414,8 @@ def setup_init(
 
     if xpoz_api_key is None and not yes:
         xpoz_api_key = typer.prompt("XPOZ_API_KEY")
+    if adanos_api_key is None and not yes:
+        adanos_api_key = typer.prompt("ADANOS_API_KEY (optional, blank to skip)", default="")
     if llm_api_key is None and not yes:
         llm_api_key = typer.prompt(descriptor.api_key_env)
     if xpoz_api_key is None or llm_api_key is None:
@@ -433,6 +436,8 @@ def setup_init(
 
     env_values = read_env_file(env_file)
     env_values["XPOZ_API_KEY"] = xpoz_api_key
+    if adanos_api_key:
+        env_values["ADANOS_API_KEY"] = adanos_api_key
     env_values[descriptor.api_key_env] = llm_api_key
     write_env_file(env_file, env_values)
     _write_setup_state(state_file, config=config, env_file=env_file, data_dir=config.parent / "data")
@@ -467,8 +472,8 @@ def setup_init(
     console.print("Next steps:")
     console.print(f"1. Validate setup: stock-sum setup check --config {config} --env-file {env_file}")
     console.print(f"2. Start service: stock-sum daemon --config {config}")
-    console.print("3. Request social report: POST /v1/social-reports/jobs or use Redbot /socialreport.")
-    console.print("4. Request trading report: POST /v1/trading-reports/jobs or use Redbot /tradingreport.")
+    console.print("3. Request social report: POST /v1/social-reports/jobs or use Redbot /recent_posts.")
+    console.print("4. Request trading report: POST /v1/trading-reports/jobs or use Redbot /ptr_search.")
 
 
 @setup_app.command("check")

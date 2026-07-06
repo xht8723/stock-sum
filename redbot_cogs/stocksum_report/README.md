@@ -1,7 +1,7 @@
 # stocksum_report
 
-Red Discord Bot cog that exposes `/socialreport`, `/tradingreport`,
-`/13freport`, `/statistic`, and `/settings`, then bridges those slash commands
+Red Discord Bot cog that exposes `/recent_posts`, `/ptr_search`,
+`/13f_search`, `/trendings`, `/plot`, and `/settings`, then bridges those slash commands
 to the local `stock-sum` HTTP server.
 
 ## Environment
@@ -27,31 +27,38 @@ From Red:
 Then sync slash commands with Red's slash-command management command and run:
 
 ```text
-/socialreport detail:minimum
-/tradingreport days:30
-/13freport issuer:NVIDIA
-/statistic mode:social ticker:NVDA days:30
-/statistic mode:social fuzzy_search:nvidia days:30
+/recent_posts detail:minimum
+/ptr_search days:30
+/13f_search issuer:NVIDIA
+/trendings
+/trendings from:2026-07-01 to:2026-07-06 limit:5
+/plot mode:social ticker:NVDA days:30
+/plot mode:social fuzzy_search:nvidia days:30
 /settings list
 /settings add-x handle:aleabitoreddit
 /settings add-reddit subreddit:wallstreetbets
 ```
 
-`/socialreport` generates X/Reddit social sentiment reports with LLM analysis.
+`/recent_posts` generates X/Reddit social sentiment reports with LLM analysis.
 Its `detail` option defaults to `minimum`, which shows only high-importance
 posts. Use `medium` for high plus medium, or `full` for all social posts.
-`/tradingreport` generates official House PTR trading disclosure reports from
+`/ptr_search` generates official House PTR trading disclosure reports from
 SQLite without LLM analysis; it requires at least one filter such as `name`,
 `days`, a transaction-date range, `asset_type`, or `ticker`. Asset type filters
 use House codes such as `ST`, `GS`, `OI`, `CS`, and `OT`; ticker filters apply
 to `ST` stock rows. If `limit` is omitted, stock-sum applies its server-side
 default.
-`/13freport` generates official SEC Form 13F holdings reports from the latest
+`/13f_search` generates official SEC Form 13F holdings reports from the latest
 quarterly SEC dataset in SQLite without LLM analysis. It requires at least one
 filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
 `min_value`, or `min_shares`. If `limit` is omitted, stock-sum applies its
 server-side default.
-`/statistic` generates a PNG chart from existing SQLite data. Use
+`/trendings` generates a concise Adanos trendings report for Reddit Stocks and
+X Stocks. It queries trending stocks and trending sectors; `from` and `to` use
+`YYYY-MM-DD` and default to the latest 7-day UTC window when omitted. `limit`
+controls displayed rows only; stock-sum fetches the provider maximum so SQLite
+keeps more history.
+`/plot` generates a PNG chart from existing SQLite data. Use
 `mode:social` for X/Reddit sentiment over time or `mode:trading` for House PTR
 purchase/sale activity over time. It requires at least one filter such as
 `ticker`, `fuzzy_search`, `name`, `asset_type`, `days`, or a date range.
@@ -61,14 +68,14 @@ names. Do not provide both `ticker` and `fuzzy_search`.
 
 Report commands always use Discord-specific markdown and are sent inline in
 message chunks.
-Statistic output is always a PNG file attachment.
+Plot output is always a PNG file attachment.
 
 Slash commands validate common input mistakes before calling stock-sum:
 malformed dates, invalid source names, invalid asset/ticker identifiers, and
 out-of-range numeric limits return an immediate validation error message.
 
 The cog polls stock-sum job status once per minute while a report is running.
-Report and statistic commands post publicly. Source mutation settings commands
+Report and plot commands post publicly. Source mutation settings commands
 are restricted to Redbot owners and respond privately.
 
 ## Settings Commands

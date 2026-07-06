@@ -9,12 +9,15 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from stock_sum.api.jobs import HttpJobManager, SocialReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, SocialReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions, TrendingsReportJobOptions
+from stock_sum.collectors.api.adanos import AdanosEndpointResult, AdanosTrendingsResult
 from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
 from stock_sum.storage.models import (
     StoredCollectionRun,
+    StoredAdanosTrendingSector,
+    StoredAdanosTrendingStock,
     StoredHousePtrTradeRow,
     StoredSec13FHolding,
     StoredSocialStatisticPoint,
@@ -269,6 +272,55 @@ async def test_statistic_job_creates_png_and_summary(tmp_path, monkeypatch) -> N
     assert summary["statistic_mode"] == "social"
     populated_bucket = next(item for item in summary["buckets"] if item["post_count"] == 1)
     assert populated_bucket["avg_sentiment_score"] == 1.0
+
+
+async def test_trendings_job_fetches_persists_and_renders(tmp_path, monkeypatch) -> None:
+    async def fake_fetch(self, *, from_date, to_date):
+        return AdanosTrendingsResult(
+            skipped=False,
+            responses=[
+                AdanosEndpointResult(
+                    platform="reddit",
+                    category="stocks",
+                    endpoint="/reddit/stocks/v1/trending",
+                    request_args={"from": from_date.isoformat(), "to": to_date.isoformat(), "limit": 100},
+                    status="succeeded",
+                    raw_response_text='[{"ticker":"NVDA"}]',
+                    rows=[
+                        {
+                            "ticker": "NVDA",
+                            "company_name": "NVIDIA Corp",
+                            "rank": 1,
+                            "trend": "up",
+                            "mentions": 10,
+                            "bullish_pct": 60,
+                            "bearish_pct": 20,
+                        }
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    options = TrendingsReportJobOptions(mode="discord", from_date="2026-07-01", to_date="2026-07-06", limit=1)
+    job = manager.create_trendings_report_job(options)
+
+    await manager.run_trendings_report_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    assert status.status == "succeeded"
+    assert status.artifact_media_type == "text/markdown; charset=utf-8"
+    assert repository.adanos_saved_job_ids == [job.job_id]
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["filters"]["display_limit"] == 1
+    assert summary["summary"]["stocks"][0]["ticker"] == "NVDA"
 
 
 async def test_trading_report_sorts_rows_by_transaction_date(tmp_path) -> None:
@@ -832,6 +884,9 @@ class FakeRepository:
         self.reddit_comment_analysis_rows = []
         self.last_house_filters = {}
         self.last_sec_13f_filters = {}
+        self.adanos_saved_job_ids: list[str] = []
+        self.adanos_stocks: list[StoredAdanosTrendingStock] = []
+        self.adanos_sectors: list[StoredAdanosTrendingSector] = []
 
     async def list_collection_runs(self, *, limit: int = 20):
         return [
@@ -979,6 +1034,63 @@ class FakeRepository:
             rows = [row for row in rows if row.transaction_action == action]
         return rows
 
+    async def save_adanos_trendings(self, *, job_id, from_date, to_date, responses):
+        self.adanos_saved_job_ids.append(job_id)
+        for response in responses:
+            if response.status != "succeeded":
+                continue
+            for index, row in enumerate(response.rows, start=1):
+                if response.category == "stocks":
+                    self.adanos_stocks.append(
+                        StoredAdanosTrendingStock(
+                            job_id=job_id,
+                            platform=response.platform,
+                            rank=row.get("rank") or index,
+                            window_from=str(from_date),
+                            window_to=str(to_date),
+                            ticker=row.get("ticker"),
+                            company_name=row.get("company_name"),
+                            trend=row.get("trend"),
+                            mentions=row.get("mentions"),
+                            bullish_pct=row.get("bullish_pct"),
+                            bearish_pct=row.get("bearish_pct"),
+                            sentiment_score=row.get("sentiment_score"),
+                            buzz_score=row.get("buzz_score"),
+                            trend_history=row.get("trend_history"),
+                            raw_metadata=row,
+                            fetched_at=response.fetched_at.isoformat(),
+                        )
+                    )
+                else:
+                    self.adanos_sectors.append(
+                        StoredAdanosTrendingSector(
+                            job_id=job_id,
+                            platform=response.platform,
+                            rank=row.get("rank") or index,
+                            window_from=str(from_date),
+                            window_to=str(to_date),
+                            sector=row.get("sector"),
+                            top_tickers=row.get("top_tickers"),
+                            trend=row.get("trend"),
+                            mentions=row.get("mentions"),
+                            bullish_pct=row.get("bullish_pct"),
+                            bearish_pct=row.get("bearish_pct"),
+                            sentiment_score=row.get("sentiment_score"),
+                            buzz_score=row.get("buzz_score"),
+                            trend_history=row.get("trend_history"),
+                            raw_metadata=row,
+                            fetched_at=response.fetched_at.isoformat(),
+                        )
+                    )
+
+    async def read_adanos_trending_stocks(self, *, job_id: str, limit=None):
+        rows = [row for row in self.adanos_stocks if row.job_id == job_id]
+        return rows if limit is None else rows[:limit]
+
+    async def read_adanos_trending_sectors(self, *, job_id: str, limit=None):
+        rows = [row for row in self.adanos_sectors if row.job_id == job_id]
+        return rows if limit is None else rows[:limit]
+
     async def start_llm_analysis_run(self, **kwargs):
         return None
 
@@ -1062,6 +1174,9 @@ class FakeRenderer:
 
     def render_trading(self, response, *, mode: str) -> str:
         return f"{self.title}:{mode}:trading"
+
+    def render_trendings(self, response, *, mode: str, limit: int = 5) -> str:
+        return f"{self.title}:{mode}:trendings:{limit}"
 
 
 class FakeRetentionService:

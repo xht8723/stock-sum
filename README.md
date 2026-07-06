@@ -23,6 +23,12 @@ Set these secrets in `.env` or through `stock-sum secrets`:
 - `XPOZ_API_KEY`
 - `DEEPSEEK_API_KEY`
 
+Optional:
+
+- `ADANOS_API_KEY` enables `/trendings` and the matching HTTP endpoint. If it
+  is missing, trendings requests return a short empty-state report without
+  treating the missing key as a warning.
+
 After `setup init`, stock-sum remembers the active config and env file paths in
 `.stock-sum-state.json`. Related CLI commands use those remembered paths by
 default; explicit `--config` and `--env-file` flags still override them.
@@ -47,6 +53,7 @@ Important sections:
 - `[retention]`: generated artifact/media cleanup behavior.
 - `[models_dev]`: cache-backed model catalog metadata.
 - `[providers.xpoz]`: Xpoz MCP-over-HTTP provider settings.
+- `[providers.adanos]`: Adanos Reddit/X trendings provider settings.
 - `[llm]`: LLM provider/model/runtime settings.
 - `[sources.*]`: X users, subreddits, House PTR, and SEC 13F source settings.
 - `[collectors.*]`: optional explicit collector blocks.
@@ -109,6 +116,8 @@ Canonical job endpoints:
 - `POST /v1/trading-reports/jobs/{mode}`
 - `POST /v1/13f-reports/jobs`
 - `POST /v1/13f-reports/jobs/{mode}`
+- `POST /v1/trendings/jobs`
+- `POST /v1/trendings/jobs/{mode}`
 - `POST /v1/statistics/jobs`
 - `GET /v1/statistics/fuzzy-matches`
 - `GET /v1/jobs/{job_id}`
@@ -122,6 +131,9 @@ Statistics jobs are separate from report modes: they render a PNG chart plus a
 JSON summary sidecar from existing SQLite social analysis or House PTR rows.
 Statistic fuzzy matching can resolve Discord `fuzzy_search` input from social
 analysis tags or House PTR asset names before a PNG job is created.
+Trendings jobs query Adanos Reddit Stocks and X Stocks stock/sector trend
+endpoints with the provider maximum fetch limit, store raw and normalized rows
+in SQLite, and render the requested output mode using the display limit only.
 
 HTTP jobs are coordinated by the daemon but executed by one short-lived child
 worker process per job. The job status payload includes worker diagnostics such
@@ -148,15 +160,19 @@ a trusted network boundary.
 The Redbot cog in `redbot_cogs/stocksum_report` calls the canonical HTTP job
 API and exposes:
 
-- `/socialreport`
-- `/tradingreport`
-- `/13freport`
-- `/statistic`
+- `/recent_posts`
+- `/ptr_search`
+- `/13f_search`
+- `/trendings`
+- `/plot`
 - `/settings ...` source settings commands
 
 Report commands always use Discord-specific markdown sent inline in chunks.
-`/statistic` returns a PNG attachment for social sentiment or House disclosure
-activity over time. Public report/statistic slash commands no longer expose a
+`/trendings` returns recent Adanos stock and sector trend rows from Reddit and
+X; optional `from`, `to`, and `limit` arguments control the rendered window and
+row count.
+`/plot` returns a PNG attachment for social sentiment or House disclosure
+activity over time. Public report/plot slash commands no longer expose a
 private-mode option. `/settings list` is public; owner-only source mutations
 respond privately.
 

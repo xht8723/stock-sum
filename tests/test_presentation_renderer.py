@@ -510,3 +510,43 @@ def test_renderer_outputs_sec_13f_holdings_in_all_modes() -> None:
     assert "[Filing](https://www.sec.gov/Archives/edgar/data/1234567/000123456726000001/0001234567-26-000001.txt)" in discord
     assert "SEC 13F HOLDINGS" in text
     assert "Value: 1,000" in text
+
+
+def test_renderer_outputs_adanos_trendings_in_discord_and_empty_state() -> None:
+    response = {
+        "summary": {
+            "stocks": [
+                {
+                    "platform": "reddit",
+                    "ticker": "NVDA",
+                    "company_name": "NVIDIA Corp",
+                    "trend": "up",
+                    "mentions": 42,
+                    "bullish_pct": 65,
+                    "bearish_pct": 12,
+                }
+            ],
+            "sectors": [
+                {
+                    "platform": "x",
+                    "sector": "Technology",
+                    "top_tickers": ["NVDA", "AMD"],
+                    "trend": "rising",
+                    "mentions": 18,
+                    "bullish_pct": 55,
+                    "bearish_pct": 20,
+                }
+            ],
+        }
+    }
+
+    discord = PresentationRenderer("Trendings").render_trendings(response, mode="discord", limit=5)
+    skipped = PresentationRenderer("Trendings").render_trendings({"skipped": True, "summary": {}}, mode="discord", limit=5)
+
+    assert "**Trending stocks**" in discord
+    assert "__Reddit Stocks__" in discord
+    assert "NVDA - NVIDIA Corp" in discord
+    assert "bullish_pct: 65%" in discord
+    assert "**Trending sectors**" in discord
+    assert "Technology (NVDA, AMD)" in discord
+    assert "Adanos API key is not configured" in skipped

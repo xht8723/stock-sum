@@ -16,6 +16,7 @@ from stock_sum.api.jobs import (
     Sec13FReportJobOptions,
     StatisticJobOptions,
     TradingReportJobOptions,
+    TrendingsReportJobOptions,
 )
 from stock_sum.config.models import AppConfig
 
@@ -56,6 +57,9 @@ async def _run_http_operation(config: AppConfig, operation: str, job_id: str, pa
         return
     if operation == "http_13f_report":
         await manager._run_13f_report_job_in_process(job_id, Sec13FReportJobOptions(**payload["options"]))
+        return
+    if operation == "http_trendings_report":
+        await manager._run_trendings_report_job_in_process(job_id, TrendingsReportJobOptions(**payload["options"]))
         return
     if operation == "http_statistic":
         await manager._run_statistic_job_in_process(job_id, StatisticJobOptions(**payload["options"]))

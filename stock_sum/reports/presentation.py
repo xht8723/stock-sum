@@ -77,6 +77,21 @@ class PresentationRenderer:
             return self._render_13f_text(response, summary)
         raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
 
+    def render_trendings(self, response: dict[str, Any], *, mode: str, limit: int = 5) -> str:
+        """Render an Adanos trendings report in html, markdown, discord, or text mode."""
+
+        mode = mode.lower()
+        summary = _summary_from_response(response)
+        if mode == "html":
+            return self._render_trendings_html(response, summary, limit)
+        if mode == "markdown":
+            return self._render_trendings_markdown(response, summary, limit)
+        if mode in {"discord", "discord_markdown"}:
+            return self._render_trendings_discord_markdown(response, summary, limit)
+        if mode == "text":
+            return self._render_trendings_text(response, summary, limit)
+        raise PresentationRenderError(f"Unsupported presentation mode: {mode}")
+
     def _render_html(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         sections = [
@@ -96,6 +111,13 @@ class PresentationRenderer:
         sections = [
             _html_pipeline_warnings(response.get("pipeline_warnings")),
             _html_sec_13f(response, summary),
+        ]
+        return self._html_document(sections)
+
+    def _render_trendings_html(self, response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+        sections = [
+            _html_trendings(response, summary, limit),
+            _html_pipeline_warnings(response.get("pipeline_warnings")),
         ]
         return self._html_document(sections)
 
@@ -150,6 +172,15 @@ class PresentationRenderer:
         ]
         return "\n".join(line for line in lines if line is not None).strip() + "\n"
 
+    def _render_trendings_markdown(self, response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+        lines = [
+            f"# {self.title}",
+            "",
+            _markdown_trendings(response, summary, limit),
+            _markdown_pipeline_warnings(response.get("pipeline_warnings")),
+        ]
+        return "\n".join(line for line in lines if line is not None).strip() + "\n"
+
     def _render_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
@@ -178,6 +209,15 @@ class PresentationRenderer:
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
+    def _render_trendings_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+        lines = [
+            f"**{self.title}**",
+            "",
+            _discord_trendings(response, summary, limit),
+            _discord_pipeline_warnings(response.get("pipeline_warnings")),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
+
     def _render_text(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
@@ -203,6 +243,15 @@ class PresentationRenderer:
             "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_sec_13f(response, summary),
+        ]
+        return "\n\n".join(line for line in lines if line).strip() + "\n"
+
+    def _render_trendings_text(self, response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+        lines = [
+            self.title.upper(),
+            "",
+            _text_trendings(response, summary, limit),
+            _text_pipeline_warnings(response.get("pipeline_warnings")),
         ]
         return "\n\n".join(line for line in lines if line).strip() + "\n"
 
@@ -672,6 +721,125 @@ def _text_sec_13f(response: dict[str, Any], summary: dict[str, Any]) -> str:
         if row.get("filing_url"):
             lines.append(f"  Source: {row['filing_url']}")
     return "\n".join(lines)
+
+
+def _html_trendings(response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+    if response.get("skipped"):
+        return _html_section("Trending stocks", '<p class="empty">Adanos API key is not configured.</p>')
+    stocks = _trendings_rows(summary, "stocks", limit)
+    sectors = _trendings_rows(summary, "sectors", limit)
+    return "\n".join(
+        [
+            _html_section("Trending stocks", "\n".join(_html_trendings_platform_rows(stocks, is_sector=False))),
+            _html_section("Trending sectors", "\n".join(_html_trendings_platform_rows(sectors, is_sector=True))),
+        ]
+    )
+
+
+def _html_trendings_platform_rows(grouped: dict[str, list[dict[str, Any]]], *, is_sector: bool) -> list[str]:
+    parts: list[str] = []
+    for platform, rows in grouped.items():
+        parts.append(f"<h3>{escape(_platform_label(platform))}</h3>")
+        if not rows:
+            parts.append('<p class="empty">No rows.</p>')
+            continue
+        parts.append('<div class="items">')
+        for row in rows:
+            parts.append('<article class="item">')
+            parts.append(f"<h4>{escape(_trendings_title(row, is_sector=is_sector))}</h4>")
+            parts.append(f"<p>{escape(_trendings_stats(row))}</p>")
+            parts.append("</article>")
+        parts.append("</div>")
+    return parts
+
+
+def _markdown_trendings(response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+    return _plain_trendings(response, summary, limit, heading="##", bullet="-")
+
+
+def _discord_trendings(response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+    return _plain_trendings(response, summary, limit, heading="**", bullet="•")
+
+
+def _text_trendings(response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
+    return _plain_trendings(response, summary, limit, heading="", bullet="-")
+
+
+def _plain_trendings(response: dict[str, Any], summary: dict[str, Any], limit: int, *, heading: str, bullet: str) -> str:
+    if response.get("skipped"):
+        return "Trending stocks\nAdanos API key is not configured.\n\nTrending sectors\nAdanos API key is not configured."
+    lines: list[str] = []
+    for title, key, is_sector in (
+        ("Trending stocks", "stocks", False),
+        ("Trending sectors", "sectors", True),
+    ):
+        if heading == "**":
+            lines.append(f"**{title}**")
+        elif heading:
+            lines.append(f"{heading} {title}")
+        else:
+            lines.append(title.upper())
+        grouped = _trendings_rows(summary, key, limit)
+        for platform, rows in grouped.items():
+            lines.append(f"__{_platform_label(platform)}__" if heading == "**" else _platform_label(platform))
+            if not rows:
+                lines.append(f"{bullet} No rows.")
+                continue
+            for row in rows:
+                lines.append(f"{bullet} {_trendings_title(row, is_sector=is_sector)}")
+                lines.append(f"  {_trendings_stats(row)}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _trendings_rows(summary: dict[str, Any], key: str, limit: int) -> dict[str, list[dict[str, Any]]]:
+    rows = summary.get(key)
+    if not isinstance(rows, list):
+        rows = []
+    grouped: dict[str, list[dict[str, Any]]] = {"reddit": [], "x": []}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        platform = str(row.get("platform") or "").lower()
+        if platform in grouped and len(grouped[platform]) < limit:
+            grouped[platform].append(row)
+    return grouped
+
+
+def _trendings_title(row: dict[str, Any], *, is_sector: bool) -> str:
+    if is_sector:
+        top_tickers = row.get("top_tickers")
+        tickers = ", ".join(str(item) for item in top_tickers[:5]) if isinstance(top_tickers, list) else ""
+        suffix = f" ({tickers})" if tickers else ""
+        return f"{row.get('sector') or 'Unknown sector'}{suffix}"
+    ticker = row.get("ticker") or "UNKNOWN"
+    company = row.get("company_name")
+    return f"{ticker} - {company}" if company else str(ticker)
+
+
+def _trendings_stats(row: dict[str, Any]) -> str:
+    return (
+        f"trend: {_display_value(row.get('trend'))}; "
+        f"mentions: {_display_value(row.get('mentions'))}; "
+        f"bullish_pct: {_display_percent(row.get('bullish_pct'))}; "
+        f"bearish_pct: {_display_percent(row.get('bearish_pct'))}"
+    )
+
+
+def _platform_label(platform: str) -> str:
+    return {"reddit": "Reddit Stocks", "x": "X Stocks"}.get(platform, platform.title())
+
+
+def _display_percent(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value}%"
+
+
+def _display_value(value: Any) -> str:
+    if value is None or value == "":
+        return "N/A"
+    return str(value)
 
 
 def _social_items_by_importance(summary: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
