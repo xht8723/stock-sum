@@ -134,9 +134,6 @@ class PresentationRenderer:
                 "</head>",
                 "<body>",
                 '<main class="page">',
-                '<header class="hero">',
-                f"<h1>{escape(self.title)}</h1>",
-                "</header>",
                 *sections,
                 "</main>",
                 "</body>",
@@ -147,8 +144,6 @@ class PresentationRenderer:
     def _render_markdown(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
-            f"# {self.title}",
-            "",
             _markdown_pipeline_warnings(response.get("pipeline_warnings")),
             _markdown_social_sentiment(summary, media_by_ref, detail),
         ]
@@ -156,8 +151,6 @@ class PresentationRenderer:
 
     def _render_trading_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines = [
-            f"# {self.title}",
-            "",
             _markdown_pipeline_warnings(response.get("pipeline_warnings")),
             _markdown_house_ptr(response, summary),
         ]
@@ -165,8 +158,6 @@ class PresentationRenderer:
 
     def _render_13f_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines = [
-            f"# {self.title}",
-            "",
             _markdown_pipeline_warnings(response.get("pipeline_warnings")),
             _markdown_sec_13f(response, summary),
         ]
@@ -174,8 +165,6 @@ class PresentationRenderer:
 
     def _render_trendings_markdown(self, response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
         lines = [
-            f"# {self.title}",
-            "",
             _markdown_trendings(response, summary, limit),
             _markdown_pipeline_warnings(response.get("pipeline_warnings")),
         ]
@@ -184,8 +173,6 @@ class PresentationRenderer:
     def _render_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
-            f"**{self.title}**",
-            "",
             _discord_pipeline_warnings(response.get("pipeline_warnings")),
             _discord_social_sentiment(summary, media_by_ref, detail),
         ]
@@ -193,8 +180,6 @@ class PresentationRenderer:
 
     def _render_trading_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines = [
-            f"**{self.title}**",
-            "",
             _discord_pipeline_warnings(response.get("pipeline_warnings")),
             _discord_house_ptr(response, summary),
         ]
@@ -202,8 +187,6 @@ class PresentationRenderer:
 
     def _render_13f_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines = [
-            f"**{self.title}**",
-            "",
             _discord_pipeline_warnings(response.get("pipeline_warnings")),
             _discord_sec_13f(response, summary),
         ]
@@ -211,8 +194,6 @@ class PresentationRenderer:
 
     def _render_trendings_discord_markdown(self, response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
         lines = [
-            f"**{self.title}**",
-            "",
             _discord_trendings(response, summary, limit),
             _discord_pipeline_warnings(response.get("pipeline_warnings")),
         ]
@@ -221,8 +202,6 @@ class PresentationRenderer:
     def _render_text(self, response: dict[str, Any], summary: dict[str, Any], detail: SocialReportDetail) -> str:
         media_by_ref = _media_by_source_ref(response, summary)
         lines = [
-            self.title.upper(),
-            "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_social_sentiment(summary, media_by_ref, detail),
         ]
@@ -230,8 +209,6 @@ class PresentationRenderer:
 
     def _render_trading_text(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines = [
-            self.title.upper(),
-            "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_house_ptr(response, summary),
         ]
@@ -239,8 +216,6 @@ class PresentationRenderer:
 
     def _render_13f_text(self, response: dict[str, Any], summary: dict[str, Any]) -> str:
         lines = [
-            self.title.upper(),
-            "",
             _text_pipeline_warnings(response.get("pipeline_warnings")),
             _text_sec_13f(response, summary),
         ]
@@ -248,8 +223,6 @@ class PresentationRenderer:
 
     def _render_trendings_text(self, response: dict[str, Any], summary: dict[str, Any], limit: int) -> str:
         lines = [
-            self.title.upper(),
-            "",
             _text_trendings(response, summary, limit),
             _text_pipeline_warnings(response.get("pipeline_warnings")),
         ]
@@ -747,6 +720,9 @@ def _html_trendings_platform_rows(grouped: dict[str, list[dict[str, Any]]], *, i
         for row in rows:
             parts.append('<article class="item">')
             parts.append(f"<h4>{escape(_trendings_title(row, is_sector=is_sector))}</h4>")
+            if is_sector:
+                parts.append(f"<p><strong>Top tickers:</strong> {escape(_trendings_top_tickers(row))}</p>")
+            parts.append(f"<p><strong>Trend:</strong> {escape(_display_value(row.get('trend')))}</p>")
             parts.append(f"<p>{escape(_trendings_stats(row))}</p>")
             parts.append("</article>")
         parts.append("</div>")
@@ -786,10 +762,26 @@ def _plain_trendings(response: dict[str, Any], summary: dict[str, Any], limit: i
                 lines.append(f"{bullet} No rows.")
                 continue
             for row in rows:
-                lines.append(f"{bullet} {_trendings_title(row, is_sector=is_sector)}")
-                lines.append(f"  {_trendings_stats(row)}")
+                lines.extend(_trendings_plain_item(row, is_sector=is_sector, bullet=bullet, heading=heading))
+                lines.append("")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+def _trendings_plain_item(row: dict[str, Any], *, is_sector: bool, bullet: str, heading: str) -> list[str]:
+    title = _trendings_title(row, is_sector=is_sector)
+    bold_title = heading in {"##", "**"}
+    title_text = f"**{title}**" if bold_title else title
+    lines = [f"{bullet} {title_text}"]
+    if is_sector:
+        tickers = _trendings_top_tickers(row)
+        top_tickers = f"**{tickers}**" if bold_title and tickers != "N/A" else tickers
+        lines.append(f"  Top tickers: {top_tickers}")
+    trend = _display_value(row.get("trend"))
+    trend_text = f"**{trend}**" if bold_title and trend != "N/A" else trend
+    lines.append(f"  Trend: {trend_text}")
+    lines.append(f"  {_trendings_stats(row)}")
+    return lines
 
 
 def _trendings_rows(summary: dict[str, Any], key: str, limit: int) -> dict[str, list[dict[str, Any]]]:
@@ -808,10 +800,7 @@ def _trendings_rows(summary: dict[str, Any], key: str, limit: int) -> dict[str, 
 
 def _trendings_title(row: dict[str, Any], *, is_sector: bool) -> str:
     if is_sector:
-        top_tickers = row.get("top_tickers")
-        tickers = ", ".join(str(item) for item in top_tickers[:5]) if isinstance(top_tickers, list) else ""
-        suffix = f" ({tickers})" if tickers else ""
-        return f"{row.get('sector') or 'Unknown sector'}{suffix}"
+        return str(row.get("sector") or "Unknown sector")
     ticker = row.get("ticker") or "UNKNOWN"
     company = row.get("company_name")
     return f"{ticker} - {company}" if company else str(ticker)
@@ -819,11 +808,17 @@ def _trendings_title(row: dict[str, Any], *, is_sector: bool) -> str:
 
 def _trendings_stats(row: dict[str, Any]) -> str:
     return (
-        f"trend: {_display_value(row.get('trend'))}; "
-        f"mentions: {_display_value(row.get('mentions'))}; "
-        f"bullish_pct: {_display_percent(row.get('bullish_pct'))}; "
-        f"bearish_pct: {_display_percent(row.get('bearish_pct'))}"
+        f"Mentions: {_display_value(row.get('mentions'))}; "
+        f"Bullish: {_display_percent(row.get('bullish_pct'))}; "
+        f"Bearish: {_display_percent(row.get('bearish_pct'))}"
     )
+
+
+def _trendings_top_tickers(row: dict[str, Any]) -> str:
+    top_tickers = row.get("top_tickers")
+    if not isinstance(top_tickers, list) or not top_tickers:
+        return "N/A"
+    return ", ".join(str(item) for item in top_tickers[:5])
 
 
 def _platform_label(platform: str) -> str:

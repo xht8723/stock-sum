@@ -183,7 +183,8 @@ def test_html_renderer_outputs_all_sections_and_escapes_html() -> None:
 def test_markdown_renderer_preserves_refs_and_urls() -> None:
     rendered = PresentationRenderer().render(_response(), mode="markdown", detail="full")
 
-    assert "# Market Social Digest" in rendered
+    assert "# Market Social Digest" not in rendered
+    assert rendered.startswith("## Social Media Sentiment")
     assert "## Social Media Sentiment" in rendered
     assert "### Low Importance" in rendered
     assert "**X / low**" in rendered
@@ -200,7 +201,8 @@ def test_markdown_renderer_preserves_refs_and_urls() -> None:
 def test_discord_markdown_renderer_is_compact_and_clickable() -> None:
     rendered = PresentationRenderer().render(_grouped_response(), mode="discord", detail="full")
 
-    assert rendered.startswith("**Market Social Digest**")
+    assert not rendered.startswith("**Market Social Digest**")
+    assert rendered.startswith("**Social Media Sentiment**")
     assert "**Social Media Sentiment**" in rendered
     assert "__Medium Importance__" in rendered
     assert "\n---\n- **NBIS growth post**" in rendered
@@ -218,7 +220,8 @@ def test_discord_markdown_renderer_is_compact_and_clickable() -> None:
 def test_text_renderer_preserves_refs_and_urls() -> None:
     rendered = PresentationRenderer().render(_response(), mode="text", detail="full")
 
-    assert "MARKET SOCIAL DIGEST" in rendered
+    assert "MARKET SOCIAL DIGEST" not in rendered
+    assert rendered.startswith("SOCIAL MEDIA SENTIMENT")
     assert "SOCIAL MEDIA SENTIMENT" in rendered
     assert "X / low" in rendered
     assert "Reddit / medium" in rendered
@@ -324,7 +327,8 @@ def test_renderer_rejects_unknown_detail() -> None:
 def test_grouped_markdown_renderer_uses_requested_heading_layout() -> None:
     rendered = PresentationRenderer().render(_grouped_response(), mode="markdown", detail="full")
 
-    assert rendered.startswith("# Market Social Digest")
+    assert not rendered.startswith("# Market Social Digest")
+    assert rendered.startswith("## Social Media Sentiment")
     assert "## Social Media Sentiment" in rendered
     assert "### Medium Importance" in rendered
     assert "#### NBIS growth post" in rendered
@@ -545,8 +549,10 @@ def test_renderer_outputs_adanos_trendings_in_discord_and_empty_state() -> None:
 
     assert "**Trending stocks**" in discord
     assert "__Reddit Stocks__" in discord
-    assert "NVDA - NVIDIA Corp" in discord
-    assert "bullish_pct: 65%" in discord
+    assert "• **NVDA - NVIDIA Corp**" in discord
+    assert "Trend: **up**" in discord
+    assert "Mentions: 42; Bullish: 65%; Bearish: 12%" in discord
     assert "**Trending sectors**" in discord
-    assert "Technology (NVDA, AMD)" in discord
+    assert "• **Technology**" in discord
+    assert "Top tickers: **NVDA, AMD**" in discord
     assert "Adanos API key is not configured" in skipped

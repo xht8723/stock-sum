@@ -856,9 +856,9 @@ def test_report_render_writes_all_modes(tmp_path) -> None:
 
     for mode, expected in [
         ("html", "<!doctype html>"),
-        ("markdown", "# Market Social Digest"),
-        ("discord", "**Market Social Digest**"),
-        ("text", "MARKET SOCIAL DIGEST"),
+        ("markdown", "## Social Media Sentiment"),
+        ("discord", "**Social Media Sentiment**"),
+        ("text", "SOCIAL MEDIA SENTIMENT"),
     ]:
         output = tmp_path / f"report.{mode}"
         result = runner.invoke(
