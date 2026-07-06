@@ -35,6 +35,7 @@ def test_required_slash_command_parameters_are_explicit() -> None:
         "llm_select": {"provider"},
         "secrets_set": {"name", "value"},
         "secrets_remove": {"name"},
+        "statistic": {"mode"},
     }
     for method_name, parameter_names in required_parameters.items():
         signature = inspect.signature(getattr(StockSumReport, method_name))

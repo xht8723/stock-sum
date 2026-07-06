@@ -1028,7 +1028,7 @@ class StockSumReport(commands.Cog):
     async def statistic(
         self,
         interaction,
-        mode: str = "social",
+        mode: str,
         ticker: str = "",
         fuzzy_search: str = "",
         name: str = "",
