@@ -67,21 +67,25 @@ async def _run_http_operation(config: AppConfig, operation: str, job_id: str, pa
     if operation == "http_collect":
         await manager._run_collect_job_in_process(job_id)
         return
-    if operation == "http_render_cached_social_report":
-        await _run_render_cached_social_report(manager, job_id, payload)
+    if operation == "http_render_cached_artifact_job":
+        await _run_render_cached_artifact_job(manager, job_id, payload)
         return
-    if operation == "http_render_coalesced_social_report":
-        await _run_render_coalesced_social_report(manager, job_id, payload)
+    if operation == "http_render_coalesced_artifact_job":
+        await _run_render_coalesced_artifact_job(manager, job_id, payload)
         return
     raise ValueError(f"Unknown HTTP worker operation: {operation}")
 
 
-async def _run_render_cached_social_report(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
+async def _run_render_cached_artifact_job(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
     try:
         cache_hit = manager.get_job(str(payload["cache_hit_job_id"]))
         if cache_hit is None:
             raise RuntimeError(f"Cached report job not found: {payload['cache_hit_job_id']}")
-        manager._write_cached_social_report_artifacts(job_id, cache_hit, SocialReportJobOptions(**payload["options"]))
+        manager._write_cached_artifact_job_artifacts(
+            job_id,
+            cache_hit,
+            _artifact_options_from_payload(str(payload["kind"]), payload["options"]),
+        )
     except Exception as exc:
         manager._mark_failed(job_id, str(exc))
     finally:
@@ -89,7 +93,7 @@ async def _run_render_cached_social_report(manager: HttpJobManager, job_id: str,
         manager._refresh_memory_status(job_id)
 
 
-async def _run_render_coalesced_social_report(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
+async def _run_render_coalesced_artifact_job(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
     try:
         leader = manager.get_job(str(payload["leader_job_id"]))
         if leader is None:
@@ -97,7 +101,7 @@ async def _run_render_coalesced_social_report(manager: HttpJobManager, job_id: s
         manager._write_coalesced_report_artifacts(
             job_id=job_id,
             leader=leader,
-            options=SocialReportJobOptions(**payload["options"]),
+            options=_artifact_options_from_payload(str(payload["kind"]), payload["options"]),
             wait_seconds=int(payload.get("wait_seconds") or 0),
         )
     except Exception as exc:
@@ -105,6 +109,20 @@ async def _run_render_coalesced_social_report(manager: HttpJobManager, job_id: s
     finally:
         await manager._run_retention(job_id)
         manager._refresh_memory_status(job_id)
+
+
+def _artifact_options_from_payload(kind: str, data: dict[str, Any]) -> Any:
+    if kind == "social_report":
+        return SocialReportJobOptions(**data)
+    if kind == "trading_report":
+        return TradingReportJobOptions(**data)
+    if kind == "13f_report":
+        return Sec13FReportJobOptions(**data)
+    if kind == "trendings_report":
+        return TrendingsReportJobOptions(**data)
+    if kind == "statistic":
+        return StatisticJobOptions(**data)
+    raise ValueError(f"Unsupported cached artifact job kind: {kind}")
 
 
 async def _run_cli_operation(config: AppConfig, operation: str, payload: dict[str, Any]) -> None:

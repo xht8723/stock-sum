@@ -10,6 +10,8 @@ from uuid import uuid4
 import asyncio
 import hashlib
 import json
+import os
+import shutil
 import sys
 import time as monotonic_time
 
@@ -30,8 +32,8 @@ WorkerOperation = Literal[
     "http_trendings_report",
     "http_statistic",
     "http_collect",
-    "http_render_cached_social_report",
-    "http_render_coalesced_social_report",
+    "http_render_cached_artifact_job",
+    "http_render_coalesced_artifact_job",
 ]
 
 
@@ -176,7 +178,7 @@ class HttpJobRecord:
 
 @dataclass
 class _InFlightReport:
-    """A report job currently producing a summary for a cache key."""
+    """An artifact job currently producing a summary for a cache key."""
 
     cache_key: str
     leader_job_id: str
@@ -268,6 +270,7 @@ class HttpJobManager:
             kind="trading_report",
             scope="trading",
             mode=options.mode,
+            cache_key=self._artifact_job_cache_key("trading_report", options),
         )
         self._save(record)
         self._refresh_memory_status(record.job_id)
@@ -281,6 +284,7 @@ class HttpJobManager:
             kind="13f_report",
             scope="13f",
             mode=options.mode,
+            cache_key=self._artifact_job_cache_key("13f_report", options),
         )
         self._save(record)
         self._refresh_memory_status(record.job_id)
@@ -294,6 +298,7 @@ class HttpJobManager:
             kind="trendings_report",
             scope="trendings",
             mode=options.mode,
+            cache_key=self._artifact_job_cache_key("trendings_report", options),
         )
         self._save(record)
         self._refresh_memory_status(record.job_id)
@@ -307,6 +312,7 @@ class HttpJobManager:
             kind="statistic",
             scope=options.mode,
             mode=options.mode,
+            cache_key=self._artifact_job_cache_key("statistic", options),
         )
         self._save(record)
         self._refresh_memory_status(record.job_id)
@@ -397,12 +403,12 @@ class HttpJobManager:
             job = self._require_job(job_id)
             cache_key = job.cache_key or self._social_report_cache_key(options)
             self._update(job_id, cache_key=cache_key)
-            cache_hit = self._find_report_cache_hit(job_id, cache_key)
+            cache_hit = self._find_report_cache_hit(job_id, cache_key, kind="social_report")
             if cache_hit is not None:
                 await self._run_worker_operation(
                     job_id,
-                    "http_render_cached_social_report",
-                    {"options": asdict(options), "cache_hit_job_id": cache_hit.job_id},
+                    "http_render_cached_artifact_job",
+                    {"kind": "social_report", "options": asdict(options), "cache_hit_job_id": cache_hit.job_id},
                 )
                 return
 
@@ -433,9 +439,9 @@ class HttpJobManager:
             job = self._require_job(job_id)
             cache_key = job.cache_key or self._social_report_cache_key(options)
             self._update(job_id, cache_key=cache_key)
-            cache_hit = self._find_report_cache_hit(job_id, cache_key)
+            cache_hit = self._find_report_cache_hit(job_id, cache_key, kind="social_report")
             if cache_hit is not None:
-                self._write_cached_social_report_artifacts(job_id, cache_hit, options)
+                self._write_cached_artifact_job_artifacts(job_id, cache_hit, options)
                 return
 
             is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
@@ -518,8 +524,12 @@ class HttpJobManager:
         """Run a House PTR trading report in a child worker unless configured otherwise."""
 
         if self._use_subprocess_workers:
-            await self._run_worker_operation(job_id, "http_trading_report", {"options": asdict(options)})
-            self._refresh_memory_status(job_id)
+            await self._run_artifact_job_worker(
+                job_id,
+                kind="trading_report",
+                options=options,
+                worker_operation="http_trading_report",
+            )
             return
         await self._run_trading_report_job_in_process(job_id, options)
 
@@ -528,8 +538,24 @@ class HttpJobManager:
 
         from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
 
+        is_inflight_leader = False
+        cache_key: str | None = None
         try:
             _validate_trading_filters(options)
+            self._mark_running(job_id, phase="cache_lookup")
+            job = self._require_job(job_id)
+            cache_key = job.cache_key or self._artifact_job_cache_key("trading_report", options)
+            self._update(job_id, cache_key=cache_key)
+            if not self._bypass_completed_cache("trading_report", options):
+                cache_hit = self._find_report_cache_hit(job_id, cache_key, kind="trading_report")
+                if cache_hit is not None:
+                    self._write_cached_artifact_job_artifacts(job_id, cache_hit, options)
+                    return
+            is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
+            if not is_inflight_leader:
+                await self._wait_for_coalesced_report(job_id, inflight_report, options)
+                return
+
             self._mark_running(job_id, phase="refresh_check")
             repository = self._repository_factory()
             warnings: list[PipelineSectionWarning] = []
@@ -597,6 +623,7 @@ class HttpJobManager:
                 summary_path=str(summary_path),
                 warnings=warning_data,
                 collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+                cache_key=cache_key,
             )
             artifact_path, media_type = self._write_trading_artifact(job_id, response_data, options)
             self._mark_succeeded(
@@ -606,10 +633,13 @@ class HttpJobManager:
                 summary_path=str(summary_path),
                 warnings=warning_data,
                 collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+                cache_key=cache_key,
             )
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
+            if is_inflight_leader and cache_key is not None:
+                await self._release_inflight_report(cache_key, job_id)
             await self._run_retention(job_id)
             self._refresh_memory_status(job_id)
 
@@ -617,8 +647,12 @@ class HttpJobManager:
         """Run an SEC 13F report in a child worker unless configured otherwise."""
 
         if self._use_subprocess_workers:
-            await self._run_worker_operation(job_id, "http_13f_report", {"options": asdict(options)})
-            self._refresh_memory_status(job_id)
+            await self._run_artifact_job_worker(
+                job_id,
+                kind="13f_report",
+                options=options,
+                worker_operation="http_13f_report",
+            )
             return
         await self._run_13f_report_job_in_process(job_id, options)
 
@@ -627,8 +661,24 @@ class HttpJobManager:
 
         from stock_sum.core.models import PipelineCollectionResult, PipelineSectionWarning
 
+        is_inflight_leader = False
+        cache_key: str | None = None
         try:
             _validate_13f_filters(options)
+            self._mark_running(job_id, phase="cache_lookup")
+            job = self._require_job(job_id)
+            cache_key = job.cache_key or self._artifact_job_cache_key("13f_report", options)
+            self._update(job_id, cache_key=cache_key)
+            if not self._bypass_completed_cache("13f_report", options):
+                cache_hit = self._find_report_cache_hit(job_id, cache_key, kind="13f_report")
+                if cache_hit is not None:
+                    self._write_cached_artifact_job_artifacts(job_id, cache_hit, options)
+                    return
+            is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
+            if not is_inflight_leader:
+                await self._wait_for_coalesced_report(job_id, inflight_report, options)
+                return
+
             self._mark_running(job_id, phase="refresh_check")
             repository = self._repository_factory()
             warnings: list[PipelineSectionWarning] = []
@@ -706,6 +756,7 @@ class HttpJobManager:
                 summary_path=str(summary_path),
                 warnings=warning_data,
                 collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+                cache_key=cache_key,
             )
             artifact_path, media_type = self._write_13f_artifact(job_id, response_data, options)
             self._mark_succeeded(
@@ -715,10 +766,13 @@ class HttpJobManager:
                 summary_path=str(summary_path),
                 warnings=warning_data,
                 collection_result=_pipeline_result_to_dict(collection_result) if collection_result else None,
+                cache_key=cache_key,
             )
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
+            if is_inflight_leader and cache_key is not None:
+                await self._release_inflight_report(cache_key, job_id)
             await self._run_retention(job_id)
             self._refresh_memory_status(job_id)
 
@@ -726,8 +780,12 @@ class HttpJobManager:
         """Run an Adanos trendings report in a child worker unless configured otherwise."""
 
         if self._use_subprocess_workers:
-            await self._run_worker_operation(job_id, "http_trendings_report", {"options": asdict(options)})
-            self._refresh_memory_status(job_id)
+            await self._run_artifact_job_worker(
+                job_id,
+                kind="trendings_report",
+                options=options,
+                worker_operation="http_trendings_report",
+            )
             return
         await self._run_trendings_report_job_in_process(job_id, options)
 
@@ -737,9 +795,24 @@ class HttpJobManager:
         from stock_sum.collectors.api.adanos import AdanosClient
         from stock_sum.core.models import PipelineSectionWarning
 
+        is_inflight_leader = False
+        cache_key: str | None = None
         try:
             _validate_trendings_filters(options)
             from_date, to_date = _trendings_date_window(options)
+            self._mark_running(job_id, phase="cache_lookup")
+            job = self._require_job(job_id)
+            cache_key = job.cache_key or self._artifact_job_cache_key("trendings_report", options)
+            self._update(job_id, cache_key=cache_key)
+            cache_hit = self._find_report_cache_hit(job_id, cache_key, kind="trendings_report")
+            if cache_hit is not None:
+                self._write_cached_artifact_job_artifacts(job_id, cache_hit, options)
+                return
+            is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
+            if not is_inflight_leader:
+                await self._wait_for_coalesced_report(job_id, inflight_report, options)
+                return
+
             self._mark_running(job_id, phase="querying_adanos")
             repository = self._repository_factory()
             result = await AdanosClient(self.config.providers.adanos).fetch_trendings(
@@ -798,10 +871,13 @@ class HttpJobManager:
                 artifact_media_type=media_type,
                 summary_path=str(summary_path),
                 warnings=warning_data,
+                cache_key=cache_key,
             )
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
+            if is_inflight_leader and cache_key is not None:
+                await self._release_inflight_report(cache_key, job_id)
             await self._run_retention(job_id)
             self._refresh_memory_status(job_id)
 
@@ -809,8 +885,12 @@ class HttpJobManager:
         """Run a statistic PNG job in a child worker unless configured otherwise."""
 
         if self._use_subprocess_workers:
-            await self._run_worker_operation(job_id, "http_statistic", {"options": asdict(options)})
-            self._refresh_memory_status(job_id)
+            await self._run_artifact_job_worker(
+                job_id,
+                kind="statistic",
+                options=options,
+                worker_operation="http_statistic",
+            )
             return
         await self._run_statistic_job_in_process(job_id, options)
 
@@ -823,8 +903,23 @@ class HttpJobManager:
             render_statistic_png,
         )
 
+        is_inflight_leader = False
+        cache_key: str | None = None
         try:
             _validate_statistic_filters(options)
+            self._mark_running(job_id, phase="cache_lookup")
+            job = self._require_job(job_id)
+            cache_key = job.cache_key or self._artifact_job_cache_key("statistic", options)
+            self._update(job_id, cache_key=cache_key)
+            cache_hit = self._find_report_cache_hit(job_id, cache_key, kind="statistic")
+            if cache_hit is not None:
+                self._write_cached_artifact_job_artifacts(job_id, cache_hit, options)
+                return
+            is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
+            if not is_inflight_leader:
+                await self._wait_for_coalesced_report(job_id, inflight_report, options)
+                return
+
             self._mark_running(job_id, phase="querying")
             repository = self._repository_factory()
             start_at, end_at = _statistic_date_window(options)
@@ -877,10 +972,13 @@ class HttpJobManager:
                 artifact_path=str(artifact_path),
                 artifact_media_type="image/png",
                 summary_path=str(summary_path),
+                cache_key=cache_key,
             )
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
+            if is_inflight_leader and cache_key is not None:
+                await self._release_inflight_report(cache_key, job_id)
             await self._run_retention(job_id)
             self._refresh_memory_status(job_id)
 
@@ -1080,6 +1178,44 @@ class HttpJobManager:
                 detail = _worker_error_detail(stdout, stderr)
                 self._mark_failed(job_id, detail or f"Worker exited with code {process.returncode}.")
 
+    async def _run_artifact_job_worker(
+        self,
+        job_id: str,
+        *,
+        kind: JobKind,
+        options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
+        worker_operation: WorkerOperation,
+    ) -> None:
+        is_inflight_leader = False
+        cache_key: str | None = None
+        try:
+            self._mark_running(job_id, phase="cache_lookup")
+            job = self._require_job(job_id)
+            cache_key = job.cache_key or self._artifact_job_cache_key(kind, options)
+            self._update(job_id, cache_key=cache_key)
+            if not self._bypass_completed_cache(kind, options):
+                cache_hit = self._find_report_cache_hit(job_id, cache_key, kind=kind)
+                if cache_hit is not None:
+                    await self._run_worker_operation(
+                        job_id,
+                        "http_render_cached_artifact_job",
+                        {"kind": kind, "options": asdict(options), "cache_hit_job_id": cache_hit.job_id},
+                    )
+                    return
+
+            is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
+            if not is_inflight_leader:
+                await self._wait_for_coalesced_report_worker(job_id, inflight_report, options)
+                return
+
+            await self._run_worker_operation(job_id, worker_operation, {"options": asdict(options)})
+        except Exception as exc:
+            self._mark_failed(job_id, str(exc))
+        finally:
+            if is_inflight_leader and cache_key is not None:
+                await self._release_inflight_report(cache_key, job_id)
+            self._refresh_memory_status(job_id)
+
     def _write_worker_request(self, job_id: str, operation: WorkerOperation, payload: dict[str, Any]) -> Path:
         request_path = self._job_dir(job_id) / "worker-request.json"
         data = {
@@ -1096,7 +1232,7 @@ class HttpJobManager:
         self,
         job_id: str,
         report: _InFlightReport | None,
-        options: SocialReportJobOptions,
+        options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
     ) -> None:
         if report is None:
             raise RuntimeError("No in-flight report was available to coalesce.")
@@ -1115,8 +1251,8 @@ class HttpJobManager:
             raise RuntimeError(f"Coalesced report leader {leader.job_id} did not produce a summary.")
         await self._run_worker_operation(
             job_id,
-            "http_render_coalesced_social_report",
-            {"options": asdict(options), "leader_job_id": leader.job_id, "wait_seconds": wait_seconds},
+            "http_render_coalesced_artifact_job",
+            {"kind": leader.kind, "options": asdict(options), "leader_job_id": leader.job_id, "wait_seconds": wait_seconds},
         )
 
     def _mark_stale_running_jobs_failed(self) -> int:
@@ -1239,11 +1375,49 @@ class HttpJobManager:
         artifact_path.write_text(rendered, encoding="utf-8")
         return artifact_path, media_type
 
-    def _write_cached_social_report_artifacts(
+    def _write_artifact_for_kind(
+        self,
+        job_id: str,
+        kind: JobKind,
+        response_data: dict[str, Any],
+        options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
+        *,
+        source_job: HttpJobRecord | None = None,
+    ) -> tuple[Path, str]:
+        if kind == "social_report":
+            if not isinstance(options, SocialReportJobOptions):
+                raise TypeError("Social report cache render received incompatible options.")
+            return self._write_artifact(job_id, response_data, options)
+        if kind == "trading_report":
+            if not isinstance(options, TradingReportJobOptions):
+                raise TypeError("Trading report cache render received incompatible options.")
+            return self._write_trading_artifact(job_id, response_data, options)
+        if kind == "13f_report":
+            if not isinstance(options, Sec13FReportJobOptions):
+                raise TypeError("13F report cache render received incompatible options.")
+            return self._write_13f_artifact(job_id, response_data, options)
+        if kind == "trendings_report":
+            if not isinstance(options, TrendingsReportJobOptions):
+                raise TypeError("Trendings report cache render received incompatible options.")
+            return self._write_trendings_artifact(job_id, response_data, options)
+        if kind == "statistic":
+            if not isinstance(options, StatisticJobOptions):
+                raise TypeError("Statistic cache render received incompatible options.")
+            if source_job is None or not source_job.artifact_path:
+                raise RuntimeError("Cached statistic job did not produce an artifact.")
+            source_path = Path(source_job.artifact_path)
+            if not source_path.exists():
+                raise RuntimeError(f"Cached statistic artifact is missing: {source_path}")
+            artifact_path = self._job_dir(job_id) / "statistic.png"
+            shutil.copyfile(source_path, artifact_path)
+            return artifact_path, "image/png"
+        raise RuntimeError(f"Job kind is not cacheable as an artifact: {kind}")
+
+    def _write_cached_artifact_job_artifacts(
         self,
         job_id: str,
         cache_hit: HttpJobRecord,
-        options: SocialReportJobOptions,
+        options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
     ) -> None:
         summary_path = Path(cache_hit.summary_path or "")
         response_data = self._read_json(summary_path)
@@ -1251,7 +1425,7 @@ class HttpJobManager:
         current_summary_path = self._job_dir(job_id) / "summary.json"
         self._write_json(current_summary_path, response_data)
         self._update(job_id, phase="rendering", summary_path=str(current_summary_path), warnings=warning_data)
-        artifact_path, media_type = self._write_artifact(job_id, response_data, options)
+        artifact_path, media_type = self._write_artifact_for_kind(job_id, cache_hit.kind, response_data, options, source_job=cache_hit)
         self._mark_succeeded(
             job_id,
             artifact_path=str(artifact_path),
@@ -1330,7 +1504,7 @@ class HttpJobManager:
         *,
         job_id: str,
         leader: HttpJobRecord,
-        options: SocialReportJobOptions,
+        options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
         wait_seconds: int,
     ) -> None:
         response_data = self._read_json(Path(leader.summary_path or ""))
@@ -1345,7 +1519,7 @@ class HttpJobManager:
             coalesced_from_job_id=leader.job_id,
             coalesced_wait_seconds=wait_seconds,
         )
-        artifact_path, media_type = self._write_artifact(job_id, response_data, options)
+        artifact_path, media_type = self._write_artifact_for_kind(job_id, leader.kind, response_data, options, source_job=leader)
         self._mark_succeeded(
             job_id,
             artifact_path=str(artifact_path),
@@ -1357,7 +1531,7 @@ class HttpJobManager:
             coalesced_wait_seconds=wait_seconds,
         )
 
-    def _find_report_cache_hit(self, current_job_id: str, cache_key: str | None) -> HttpJobRecord | None:
+    def _find_report_cache_hit(self, current_job_id: str, cache_key: str | None, *, kind: JobKind = "social_report") -> HttpJobRecord | None:
         ttl_seconds = self.config.server.report_cache_ttl_seconds
         if ttl_seconds <= 0 or not cache_key:
             return None
@@ -1372,9 +1546,11 @@ class HttpJobManager:
                 continue
             if record.job_id == current_job_id:
                 continue
-            if record.kind != "social_report" or record.status != "succeeded" or record.cache_key != cache_key:
+            if record.kind != kind or record.status != "succeeded" or record.cache_key != cache_key:
                 continue
             if not record.summary_path or not Path(record.summary_path).exists():
+                continue
+            if kind == "statistic" and (not record.artifact_path or not Path(record.artifact_path).exists()):
                 continue
             finished_at = _parse_utc_datetime(record.finished_at)
             if finished_at is None:
@@ -1388,6 +1564,121 @@ class HttpJobManager:
         if not candidates:
             return None
         return max(candidates, key=lambda item: item[0])[1]
+
+    def _artifact_job_cache_key(
+        self,
+        kind: JobKind,
+        options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
+    ) -> str:
+        if kind == "social_report":
+            if not isinstance(options, SocialReportJobOptions):
+                raise TypeError("Social report cache key received incompatible options.")
+            return self._social_report_cache_key(options)
+        if kind == "trading_report":
+            if not isinstance(options, TradingReportJobOptions):
+                raise TypeError("Trading report cache key received incompatible options.")
+            return self._structured_cache_key(
+                {
+                    "version": 1,
+                    "kind": kind,
+                    "source": _jsonable(self.config.sources.house_ptr),
+                    "options": {
+                        "name": options.name,
+                        "start_date": options.start_date,
+                        "end_date": options.end_date,
+                        "days": options.days,
+                        "asset_type": options.asset_type,
+                        "ticker": options.ticker,
+                        "limit": options.limit,
+                        "force_refresh": options.force_refresh,
+                    },
+                }
+            )
+        if kind == "13f_report":
+            if not isinstance(options, Sec13FReportJobOptions):
+                raise TypeError("13F report cache key received incompatible options.")
+            return self._structured_cache_key(
+                {
+                    "version": 1,
+                    "kind": kind,
+                    "source": _jsonable(self.config.sources.sec_13f),
+                    "options": {
+                        "manager": options.manager,
+                        "cik": options.cik,
+                        "accession_number": options.accession_number,
+                        "issuer": options.issuer,
+                        "cusip": options.cusip,
+                        "figi": options.figi,
+                        "put_call": options.put_call,
+                        "period_start": options.period_start,
+                        "period_end": options.period_end,
+                        "filing_start": options.filing_start,
+                        "filing_end": options.filing_end,
+                        "min_value": options.min_value,
+                        "min_shares": options.min_shares,
+                        "limit": options.limit,
+                        "force_refresh": options.force_refresh,
+                    },
+                }
+            )
+        if kind == "trendings_report":
+            if not isinstance(options, TrendingsReportJobOptions):
+                raise TypeError("Trendings report cache key received incompatible options.")
+            from_date, to_date = _trendings_date_window(options)
+            provider = self.config.providers.adanos
+            return self._structured_cache_key(
+                {
+                    "version": 1,
+                    "kind": kind,
+                    "provider": {
+                        "base_url": provider.base_url,
+                        "api_key_env": provider.api_key_env,
+                        "api_key_present": bool(os.getenv(provider.api_key_env)),
+                        "max_fetch_limit": 100,
+                    },
+                    "options": {
+                        "from": from_date.isoformat(),
+                        "to": to_date.isoformat(),
+                    },
+                }
+            )
+        if kind == "statistic":
+            if not isinstance(options, StatisticJobOptions):
+                raise TypeError("Statistic cache key received incompatible options.")
+            return self._structured_cache_key(
+                {
+                    "version": 1,
+                    "kind": kind,
+                    "options": {
+                        "mode": options.mode,
+                        "ticker": options.ticker,
+                        "fuzzy_tag": options.fuzzy_tag,
+                        "name": options.name,
+                        "asset_name": options.asset_name,
+                        "asset_type": options.asset_type,
+                        "action": options.action,
+                        "source": options.source,
+                        "sentiment": options.sentiment,
+                        "start_date": options.start_date,
+                        "end_date": options.end_date,
+                        "days": options.days,
+                        "bucket": options.bucket,
+                        "title": options.title,
+                    },
+                }
+            )
+        raise RuntimeError(f"Job kind is not cacheable: {kind}")
+
+    def _bypass_completed_cache(
+        self,
+        kind: JobKind,
+        options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
+    ) -> bool:
+        return kind in {"trading_report", "13f_report"} and bool(getattr(options, "force_refresh", False))
+
+    def _structured_cache_key(self, payload: dict[str, Any]) -> str:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _social_report_cache_key(self, options: SocialReportJobOptions) -> str:
         payload = {
@@ -1413,8 +1704,7 @@ class HttpJobManager:
                 "max_images_total": options.max_images_total,
             },
         }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return self._structured_cache_key(payload)
 
     def _job_dir(self, job_id: str) -> Path:
         return self.artifact_dir / job_id

@@ -824,10 +824,10 @@ async def test_worker_entrypoint_renders_cached_report_and_updates_status(tmp_pa
         request_path,
         {
             "schema_version": 1,
-            "operation": "http_render_cached_social_report",
+            "operation": "http_render_cached_artifact_job",
             "job_id": current.job_id,
             "config": config.model_dump(mode="json"),
-            "payload": {"options": asdict(current_options), "cache_hit_job_id": source.job_id},
+            "payload": {"kind": "social_report", "options": asdict(current_options), "cache_hit_job_id": source.job_id},
         },
     )
 
@@ -841,6 +841,178 @@ async def test_worker_entrypoint_renders_cached_report_and_updates_status(tmp_pa
     assert status.artifact_path is not None
     assert Path(status.artifact_path).exists()
     assert status.cleanup_result is not None
+
+
+async def test_trading_report_uses_recent_cache(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    repository = FakeRepository(with_social_data=False, house_rows=[_house_row()])
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: repository,
+    )
+    options = TradingReportJobOptions(mode="json", name="Jane")
+    first_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(first_job.job_id, options)
+    second_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.cache_hit is True
+    assert second_status.cached_from_job_id == first_job.job_id
+    assert repository.house_read_calls == 1
+
+
+async def test_trading_report_force_refresh_bypasses_completed_cache(tmp_path) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[_house_row()]),
+    )
+    options = TradingReportJobOptions(mode="json", name="Jane", force_refresh=True)
+    first_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(first_job.job_id, options)
+    second_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.cache_hit is False
+    assert second_status.cached_from_job_id is None
+    assert pipeline.calls == 2
+
+
+async def test_13f_report_uses_recent_cache(tmp_path) -> None:
+    row = _sec_13f_row()
+    repository = FakeRepository(with_social_data=False, sec_13f_rows=[row])
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        repository_factory=lambda: repository,
+    )
+    options = Sec13FReportJobOptions(mode="json", issuer="nvidia")
+    first_job = manager.create_13f_report_job(options)
+    await manager.run_13f_report_job(first_job.job_id, options)
+    second_job = manager.create_13f_report_job(options)
+    await manager.run_13f_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.cache_hit is True
+    assert second_status.cached_from_job_id == first_job.job_id
+    assert repository.sec_13f_read_calls == 1
+
+
+async def test_trendings_cache_reuses_summary_with_different_display_limit(tmp_path, monkeypatch) -> None:
+    fetch_calls = 0
+
+    async def fake_fetch(self, *, from_date, to_date):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        return _adanos_result(from_date, to_date)
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    renderer_calls: list[tuple[str, str, str]] = []
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, renderer_calls),
+    )
+    first_options = TrendingsReportJobOptions(mode="discord", from_date="2026-07-01", to_date="2026-07-06", limit=1)
+    first_job = manager.create_trendings_report_job(first_options)
+    await manager.run_trendings_report_job(first_job.job_id, first_options)
+    second_options = TrendingsReportJobOptions(mode="discord", from_date="2026-07-01", to_date="2026-07-06", limit=5)
+    second_job = manager.create_trendings_report_job(second_options)
+    await manager.run_trendings_report_job(second_job.job_id, second_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.cache_hit is True
+    assert second_status.cached_from_job_id == first_job.job_id
+    assert Path(second_status.artifact_path or "").read_text(encoding="utf-8") == "Trending Market Sentiment:discord:trendings:5"
+    assert fetch_calls == 1
+    assert repository.adanos_saved_job_ids == [first_job.job_id]
+
+
+async def test_statistic_cache_reuses_png_artifact(tmp_path, monkeypatch) -> None:
+    render_calls = 0
+
+    def fake_render(summary, output_path):
+        nonlocal render_calls
+        render_calls += 1
+        output_path.write_bytes(f"fake-png-{render_calls}".encode("utf-8"))
+
+    monkeypatch.setattr("stock_sum.statistics.render_statistic_png", fake_render)
+    repository = FakeRepository(
+        with_social_data=False,
+        social_statistic_points=[
+            StoredSocialStatisticPoint(
+                source="x",
+                ticker="NVDA",
+                source_id="1",
+                source_ref="x1",
+                label="aleabitoreddit",
+                sentiment="bullish",
+                importance="high",
+                posted_at="2026-06-30T00:00:00+00:00",
+                analyzed_at="2026-06-30T01:00:00+00:00",
+            )
+        ],
+    )
+    manager = HttpJobManager(_test_config(tmp_path), repository_factory=lambda: repository)
+    options = StatisticJobOptions(mode="social", ticker="NVDA", days=30)
+    first_job = manager.create_statistic_job(options)
+    await manager.run_statistic_job(first_job.job_id, options)
+    second_job = manager.create_statistic_job(options)
+    await manager.run_statistic_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.cache_hit is True
+    assert second_status.cached_from_job_id == first_job.job_id
+    assert Path(second_status.artifact_path or "").read_bytes() == b"fake-png-1"
+    assert render_calls == 1
+
+
+async def test_identical_concurrent_trendings_jobs_coalesce_to_one_fetch(tmp_path, monkeypatch) -> None:
+    fetch_calls = 0
+
+    async def fake_fetch(self, *, from_date, to_date):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        await asyncio.sleep(0.05)
+        return _adanos_result(from_date, to_date)
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    first_options = TrendingsReportJobOptions(mode="discord", from_date="2026-07-01", to_date="2026-07-06", limit=1)
+    second_options = TrendingsReportJobOptions(mode="discord", from_date="2026-07-01", to_date="2026-07-06", limit=5)
+    first_job = manager.create_trendings_report_job(first_options)
+    first_task = asyncio.create_task(manager.run_trendings_report_job(first_job.job_id, first_options))
+    await asyncio.sleep(0.01)
+    second_job = manager.create_trendings_report_job(second_options)
+    second_task = asyncio.create_task(manager.run_trendings_report_job(second_job.job_id, second_options))
+
+    await asyncio.gather(first_task, second_task)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.coalesced_from_job_id == first_job.job_id
+    assert second_status.cache_hit is False
+    assert Path(second_status.artifact_path or "").read_text(encoding="utf-8") == "Trending Market Sentiment:discord:trendings:5"
+    assert fetch_calls == 1
 
 
 class FakePipeline:
@@ -884,6 +1056,8 @@ class FakeRepository:
         self.reddit_comment_analysis_rows = []
         self.last_house_filters = {}
         self.last_sec_13f_filters = {}
+        self.house_read_calls = 0
+        self.sec_13f_read_calls = 0
         self.adanos_saved_job_ids: list[str] = []
         self.adanos_stocks: list[StoredAdanosTrendingStock] = []
         self.adanos_sectors: list[StoredAdanosTrendingSector] = []
@@ -954,6 +1128,7 @@ class FakeRepository:
         ticker=None,
         limit=None,
     ):
+        self.house_read_calls += 1
         self.last_house_filters = {"asset_type": asset_type, "ticker": ticker}
         rows = list(self.house_rows)
         if asset_type:
@@ -980,6 +1155,7 @@ class FakeRepository:
         min_shares=None,
         limit=20,
     ):
+        self.sec_13f_read_calls += 1
         self.last_sec_13f_filters = {"manager": manager, "issuer": issuer, "cusip": cusip, "limit": limit}
         rows = list(self.sec_13f_rows)
         if issuer:
@@ -1198,6 +1374,63 @@ class FakeRetentionService:
 
 def _successful_collection_result() -> PipelineCollectionResult:
     return PipelineCollectionResult(scope="social", runs=[], warnings=[])
+
+
+def _adanos_result(from_date, to_date) -> AdanosTrendingsResult:
+    return AdanosTrendingsResult(
+        skipped=False,
+        responses=[
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={"from": from_date.isoformat(), "to": to_date.isoformat(), "limit": 100},
+                status="succeeded",
+                raw_response_text='[{"ticker":"NVDA"}]',
+                rows=[
+                    {
+                        "ticker": "NVDA",
+                        "company_name": "NVIDIA Corp",
+                        "rank": 1,
+                        "trend": "up",
+                        "mentions": 10,
+                        "bullish_pct": 60,
+                        "bearish_pct": 20,
+                    }
+                ],
+            )
+        ],
+    )
+
+
+def _sec_13f_row() -> StoredSec13FHolding:
+    return StoredSec13FHolding(
+        dataset_id="dataset-1",
+        dataset_label="2026 March April May 13F",
+        accession_number="0001234567-26-000001",
+        cik="0001067983",
+        manager_name="Berkshire Hathaway Inc",
+        filing_date="31-MAY-2026",
+        filing_date_utc="2026-05-31",
+        period_of_report="31-MAR-2026",
+        period_of_report_utc="2026-03-31",
+        info_table_sk="1",
+        issuer="NVIDIA CORP",
+        title_of_class="COM",
+        cusip="67066G104",
+        figi="BBG000BBJQV0",
+        value=1000,
+        ssh_prn_amt=50,
+        ssh_prn_type="SH",
+        put_call="CALL",
+        investment_discretion="SOLE",
+        other_manager=None,
+        voting_auth_sole=50,
+        voting_auth_shared=0,
+        voting_auth_none=0,
+        filing_url="https://www.sec.gov/Archives/edgar/data/1067983/000123456726000001/0001234567-26-000001.txt",
+        raw_metadata={},
+    )
 
 
 def _house_row(
