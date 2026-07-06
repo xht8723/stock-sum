@@ -9,7 +9,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from stock_sum.api.jobs import HttpJobManager, ReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions
+from stock_sum.api.jobs import HttpJobManager, SocialReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions
 from stock_sum.config.loader import load_config
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
@@ -29,7 +29,7 @@ async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
         _test_config(tmp_path),
         pipeline_factory=lambda: FakePipeline(
             PipelineCollectionResult(
-                profile="default",
+                scope="social",
                 runs=[],
                 warnings=[
                     PipelineSectionWarning(
@@ -44,9 +44,9 @@ async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: FakeLLM(),
     )
-    job = manager.create_report_job("default", ReportJobOptions(mode="discord"))
+    job = manager.create_social_report_job(SocialReportJobOptions(mode="discord"))
 
-    await manager.run_report_job(job.job_id, ReportJobOptions(mode="discord"))
+    await manager.run_social_report_job(job.job_id, SocialReportJobOptions(mode="discord"))
 
     status = manager.get_job(job.job_id)
     assert status is not None
@@ -65,7 +65,7 @@ async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
         _test_config(tmp_path),
         pipeline_factory=lambda: FakePipeline(
             PipelineCollectionResult(
-                profile="default",
+                scope="social",
                 runs=[
                     CollectionRunResult(
                         run_id="run-1",
@@ -92,9 +92,9 @@ async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
         repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[]),
         llm_client_factory=lambda: llm,
     )
-    job = manager.create_report_job("default", ReportJobOptions(mode="html"))
+    job = manager.create_social_report_job(SocialReportJobOptions(mode="html"))
 
-    await manager.run_report_job(job.job_id, ReportJobOptions(mode="html"))
+    await manager.run_social_report_job(job.job_id, SocialReportJobOptions(mode="html"))
 
     status = manager.get_job(job.job_id)
     assert status is not None
@@ -114,9 +114,9 @@ async def test_social_report_ignores_house_only_data_and_requires_social_data(tm
         repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[_house_row()]),
         llm_client_factory=lambda: llm,
     )
-    job = manager.create_report_job("default", ReportJobOptions(mode="text"))
+    job = manager.create_social_report_job(SocialReportJobOptions(mode="text"))
 
-    await manager.run_report_job(job.job_id, ReportJobOptions(mode="text"))
+    await manager.run_social_report_job(job.job_id, SocialReportJobOptions(mode="text"))
 
     status = manager.get_job(job.job_id)
     assert status is not None
@@ -145,6 +145,14 @@ async def test_trading_report_succeeds_with_house_data_and_skips_llm(tmp_path) -
     artifact = Path(status.artifact_path or "").read_text(encoding="utf-8")
     assert "OFFICIAL TRADING DISCLOSURES" in artifact
     assert "Jane Doe" in artifact
+
+
+def test_trading_report_options_default_limit_is_100() -> None:
+    assert TradingReportJobOptions(days=30).limit == 100
+
+
+def test_13f_report_options_default_limit_is_20() -> None:
+    assert Sec13FReportJobOptions(issuer="nvidia", limit=None).limit == 20
 
 
 async def test_trading_report_filters_by_asset_type_and_ticker(tmp_path) -> None:
@@ -232,7 +240,6 @@ async def test_statistic_job_creates_png_and_summary(tmp_path, monkeypatch) -> N
         social_statistic_points=[
             StoredSocialStatisticPoint(
                 source="x",
-                profile="default",
                 ticker="NVDA",
                 source_id="1",
                 source_ref="x1",
@@ -296,13 +303,13 @@ async def test_report_job_uses_recent_cache_and_rerenders_requested_mode(tmp_pat
         llm_client_factory=lambda: llm,
         renderer_factory=lambda title: FakeRenderer(title, renderer_calls),
     )
-    first_options = ReportJobOptions(mode="html", detail="full")
-    first_job = manager.create_report_job("default", first_options)
-    await manager.run_report_job(first_job.job_id, first_options)
+    first_options = SocialReportJobOptions(mode="html", detail="full")
+    first_job = manager.create_social_report_job(first_options)
+    await manager.run_social_report_job(first_job.job_id, first_options)
 
-    second_options = ReportJobOptions(mode="discord", detail="minimum")
-    second_job = manager.create_report_job("default", second_options)
-    await manager.run_report_job(second_job.job_id, second_options)
+    second_options = SocialReportJobOptions(mode="discord", detail="minimum")
+    second_job = manager.create_social_report_job(second_options)
+    await manager.run_social_report_job(second_job.job_id, second_options)
 
     second_status = manager.get_job(second_job.job_id)
     assert second_status is not None
@@ -327,13 +334,13 @@ async def test_report_job_cache_miss_when_content_options_change(tmp_path) -> No
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
     )
-    first_options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", first_options)
-    await manager.run_report_job(first_job.job_id, first_options)
+    first_options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(first_options)
+    await manager.run_social_report_job(first_job.job_id, first_options)
 
-    second_options = ReportJobOptions(mode="html", instructions="Focus on semiconductor names.")
-    second_job = manager.create_report_job("default", second_options)
-    await manager.run_report_job(second_job.job_id, second_options)
+    second_options = SocialReportJobOptions(mode="html", instructions="Focus on semiconductor names.")
+    second_job = manager.create_social_report_job(second_options)
+    await manager.run_social_report_job(second_job.job_id, second_options)
 
     second_status = manager.get_job(second_job.job_id)
     assert second_status is not None
@@ -352,16 +359,16 @@ async def test_report_job_cache_expires_after_ttl(tmp_path) -> None:
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
     )
-    options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", options)
-    await manager.run_report_job(first_job.job_id, options)
+    options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(first_job.job_id, options)
     first_status = manager.get_job(first_job.job_id)
     assert first_status is not None
     first_status.finished_at = (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat()
     manager._save(first_status)
 
-    second_job = manager.create_report_job("default", options)
-    await manager.run_report_job(second_job.job_id, options)
+    second_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(second_job.job_id, options)
 
     second_status = manager.get_job(second_job.job_id)
     assert second_status is not None
@@ -379,16 +386,16 @@ async def test_report_job_ignores_cache_when_cached_summary_is_missing(tmp_path)
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
     )
-    options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", options)
-    await manager.run_report_job(first_job.job_id, options)
+    options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(first_job.job_id, options)
     first_status = manager.get_job(first_job.job_id)
     assert first_status is not None
     assert first_status.summary_path is not None
     Path(first_status.summary_path).unlink()
 
-    second_job = manager.create_report_job("default", options)
-    await manager.run_report_job(second_job.job_id, options)
+    second_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(second_job.job_id, options)
 
     second_status = manager.get_job(second_job.job_id)
     assert second_status is not None
@@ -407,11 +414,11 @@ async def test_report_job_does_not_use_cache_when_disabled(tmp_path) -> None:
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
     )
-    options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", options)
-    await manager.run_report_job(first_job.job_id, options)
-    second_job = manager.create_report_job("default", options)
-    await manager.run_report_job(second_job.job_id, options)
+    options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(first_job.job_id, options)
+    second_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(second_job.job_id, options)
 
     second_status = manager.get_job(second_job.job_id)
     assert second_status is not None
@@ -430,11 +437,11 @@ async def test_report_job_runs_retention_after_regular_and_cache_hit_jobs(tmp_pa
         llm_client_factory=lambda: FakeLLM(),
         retention_service_factory=lambda: retention,
     )
-    options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", options)
-    await manager.run_report_job(first_job.job_id, options)
-    second_job = manager.create_report_job("default", options)
-    await manager.run_report_job(second_job.job_id, options)
+    options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(first_job.job_id, options)
+    second_job = manager.create_social_report_job(options)
+    await manager.run_social_report_job(second_job.job_id, options)
 
     first_status = manager.get_job(first_job.job_id)
     second_status = manager.get_job(second_job.job_id)
@@ -455,13 +462,13 @@ async def test_identical_concurrent_report_jobs_coalesce_to_one_pipeline_run(tmp
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
     )
-    first_options = ReportJobOptions(mode="html", detail="full")
-    second_options = ReportJobOptions(mode="discord", detail="minimum")
-    first_job = manager.create_report_job("default", first_options)
-    first_task = asyncio.create_task(manager.run_report_job(first_job.job_id, first_options))
+    first_options = SocialReportJobOptions(mode="html", detail="full")
+    second_options = SocialReportJobOptions(mode="discord", detail="minimum")
+    first_job = manager.create_social_report_job(first_options)
+    first_task = asyncio.create_task(manager.run_social_report_job(first_job.job_id, first_options))
     await asyncio.sleep(0.01)
-    second_job = manager.create_report_job("default", second_options)
-    second_task = asyncio.create_task(manager.run_report_job(second_job.job_id, second_options))
+    second_job = manager.create_social_report_job(second_options)
+    second_task = asyncio.create_task(manager.run_social_report_job(second_job.job_id, second_options))
 
     await asyncio.gather(first_task, second_task)
 
@@ -489,14 +496,14 @@ async def test_concurrent_report_jobs_do_not_coalesce_when_content_options_chang
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: llm,
     )
-    first_options = ReportJobOptions(mode="html")
-    second_options = ReportJobOptions(mode="html", instructions="Focus on semiconductor names.")
-    first_job = manager.create_report_job("default", first_options)
-    second_job = manager.create_report_job("default", second_options)
+    first_options = SocialReportJobOptions(mode="html")
+    second_options = SocialReportJobOptions(mode="html", instructions="Focus on semiconductor names.")
+    first_job = manager.create_social_report_job(first_options)
+    second_job = manager.create_social_report_job(second_options)
 
     await asyncio.gather(
-        manager.run_report_job(first_job.job_id, first_options),
-        manager.run_report_job(second_job.job_id, second_options),
+        manager.run_social_report_job(first_job.job_id, first_options),
+        manager.run_social_report_job(second_job.job_id, second_options),
     )
 
     first_status = manager.get_job(first_job.job_id)
@@ -518,12 +525,12 @@ async def test_coalesced_report_job_fails_when_leader_fails(tmp_path) -> None:
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: FakeLLM(),
     )
-    options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", options)
-    first_task = asyncio.create_task(manager.run_report_job(first_job.job_id, options))
+    options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(options)
+    first_task = asyncio.create_task(manager.run_social_report_job(first_job.job_id, options))
     await asyncio.sleep(0.01)
-    second_job = manager.create_report_job("default", options)
-    second_task = asyncio.create_task(manager.run_report_job(second_job.job_id, options))
+    second_job = manager.create_social_report_job(options)
+    second_task = asyncio.create_task(manager.run_social_report_job(second_job.job_id, options))
 
     await asyncio.gather(first_task, second_task)
 
@@ -547,13 +554,13 @@ async def test_inflight_report_coalescing_can_be_disabled(tmp_path) -> None:
         repository_factory=lambda: FakeRepository(with_social_data=True),
         llm_client_factory=lambda: FakeLLM(),
     )
-    options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", options)
-    second_job = manager.create_report_job("default", options)
+    options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(options)
+    second_job = manager.create_social_report_job(options)
 
     await asyncio.gather(
-        manager.run_report_job(first_job.job_id, options),
-        manager.run_report_job(second_job.job_id, options),
+        manager.run_social_report_job(first_job.job_id, options),
+        manager.run_social_report_job(second_job.job_id, options),
     )
 
     second_status = manager.get_job(second_job.job_id)
@@ -573,12 +580,12 @@ async def test_coalesced_report_job_runs_retention_after_writing_artifact(tmp_pa
         llm_client_factory=lambda: FakeLLM(),
         retention_service_factory=lambda: retention,
     )
-    options = ReportJobOptions(mode="html")
-    first_job = manager.create_report_job("default", options)
-    first_task = asyncio.create_task(manager.run_report_job(first_job.job_id, options))
+    options = SocialReportJobOptions(mode="html")
+    first_job = manager.create_social_report_job(options)
+    first_task = asyncio.create_task(manager.run_social_report_job(first_job.job_id, options))
     await asyncio.sleep(0.01)
-    second_job = manager.create_report_job("default", options)
-    second_task = asyncio.create_task(manager.run_report_job(second_job.job_id, options))
+    second_job = manager.create_social_report_job(options)
+    second_task = asyncio.create_task(manager.run_social_report_job(second_job.job_id, options))
 
     await asyncio.gather(first_task, second_task)
 
@@ -593,7 +600,7 @@ async def test_coalesced_report_job_runs_retention_after_writing_artifact(tmp_pa
 async def test_completed_jobs_older_than_retention_are_evicted_from_memory_and_reload_from_disk(tmp_path) -> None:
     config = _test_config(tmp_path)
     manager = HttpJobManager(config)
-    job = manager.create_collect_job("default")
+    job = manager.create_collect_job()
     status = manager.get_job(job.job_id)
     assert status is not None
     status.status = "succeeded"
@@ -617,7 +624,7 @@ async def test_in_memory_job_cap_evicts_oldest_finished_jobs_and_keeps_active_jo
     manager = HttpJobManager(config)
     finished_ids: list[str] = []
     for index in range(4):
-        job = manager.create_collect_job("default")
+        job = manager.create_collect_job()
         status = manager.get_job(job.job_id)
         assert status is not None
         status.status = "succeeded"
@@ -626,7 +633,7 @@ async def test_in_memory_job_cap_evicts_oldest_finished_jobs_and_keeps_active_jo
         status.artifact_path = str(tmp_path / f"artifact-{index}.json")
         manager._save(status)
         finished_ids.append(job.job_id)
-    running = manager.create_collect_job("default")
+    running = manager.create_collect_job()
     manager._mark_running(running.job_id, phase="running")
     manager.config = config.model_copy(update={"server": config.server.model_copy(update={"max_in_memory_jobs": 3})})
 
@@ -642,8 +649,8 @@ async def test_inflight_leader_is_preserved_when_memory_cache_is_pruned(tmp_path
     config = _test_config(tmp_path)
     config = config.model_copy(update={"server": config.server.model_copy(update={"max_in_memory_jobs": 1})})
     manager = HttpJobManager(config)
-    leader = manager.create_report_job("default", ReportJobOptions(mode="html"))
-    old = manager.create_collect_job("default")
+    leader = manager.create_social_report_job(SocialReportJobOptions(mode="html"))
+    old = manager.create_collect_job()
     old_status = manager.get_job(old.job_id)
     assert old_status is not None
     old_status.status = "succeeded"
@@ -661,7 +668,7 @@ async def test_inflight_leader_is_preserved_when_memory_cache_is_pruned(tmp_path
 
 async def test_completed_memory_record_is_evicted_when_status_file_is_deleted(tmp_path) -> None:
     manager = HttpJobManager(_test_config(tmp_path))
-    job = manager.create_collect_job("default")
+    job = manager.create_collect_job()
     status = manager.get_job(job.job_id)
     assert status is not None
     status.status = "succeeded"
@@ -679,7 +686,7 @@ async def test_completed_memory_record_is_evicted_when_status_file_is_deleted(tm
 async def test_default_http_jobs_spawn_subprocess_worker_and_record_metadata(monkeypatch, tmp_path) -> None:
     config = _test_config(tmp_path)
     manager = HttpJobManager(config)
-    job = manager.create_collect_job("default")
+    job = manager.create_collect_job()
     calls = []
 
     class FakeProcess:
@@ -724,7 +731,7 @@ async def test_default_http_jobs_spawn_subprocess_worker_and_record_metadata(mon
 async def test_stale_running_jobs_are_marked_failed_on_manager_startup(tmp_path) -> None:
     config = _test_config(tmp_path)
     manager = HttpJobManager(config, recover_stale_jobs=False)
-    job = manager.create_collect_job("default")
+    job = manager.create_collect_job()
     manager._mark_running(job.job_id, phase="collecting")
 
     restarted = HttpJobManager(config)
@@ -739,13 +746,13 @@ async def test_stale_running_jobs_are_marked_failed_on_manager_startup(tmp_path)
 async def test_worker_entrypoint_renders_cached_report_and_updates_status(tmp_path) -> None:
     config = _test_config(tmp_path)
     manager = HttpJobManager(config, use_subprocess_workers=False, recover_stale_jobs=False)
-    source_options = ReportJobOptions(mode="json")
-    source = manager.create_report_job("default", source_options)
+    source_options = SocialReportJobOptions(mode="json")
+    source = manager.create_social_report_job(source_options)
     summary_path = manager._job_dir(source.job_id) / "summary.json"
     manager._write_json(
         summary_path,
         {
-            "profile": "default",
+            "report_type": "social",
             "summary": {"executive_summary": "Cached result"},
             "pipeline_warnings": [],
             "failed_sections": [],
@@ -758,14 +765,14 @@ async def test_worker_entrypoint_renders_cached_report_and_updates_status(tmp_pa
         summary_path=str(summary_path),
         cache_key=source.cache_key,
     )
-    current_options = ReportJobOptions(mode="text")
-    current = manager.create_report_job("default", current_options)
+    current_options = SocialReportJobOptions(mode="text")
+    current = manager.create_social_report_job(current_options)
     request_path = manager._job_dir(current.job_id) / "worker-request.json"
     manager._write_json(
         request_path,
         {
             "schema_version": 1,
-            "operation": "http_render_cached_report",
+            "operation": "http_render_cached_social_report",
             "job_id": current.job_id,
             "config": config.model_dump(mode="json"),
             "payload": {"options": asdict(current_options), "cache_hit_job_id": source.job_id},
@@ -791,7 +798,7 @@ class FakePipeline:
         self.fail = fail
         self.calls = 0
 
-    async def run_report(self, profile: str, *, collector_ids=None) -> PipelineCollectionResult:
+    async def collect_sources(self, *, collector_ids=None, scope: str = "social") -> PipelineCollectionResult:
         self.calls += 1
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
@@ -799,7 +806,7 @@ class FakePipeline:
             raise RuntimeError("pipeline failed")
         return self.result
 
-    async def collect_collector(self, collector_id: str, *, profile: str | None = None, raise_on_error: bool = True):
+    async def collect_collector(self, collector_id: str, *, raise_on_error: bool = True):
         self.calls += 1
         return CollectionRunResult(
             run_id="house-run",
@@ -826,27 +833,22 @@ class FakeRepository:
         self.last_house_filters = {}
         self.last_sec_13f_filters = {}
 
-    async def list_collection_runs(self, *, profile: str | None = None, limit: int = 20):
-        if profile == "13f":
-            return [
-                StoredCollectionRun(
-                    run_id="sec-run",
-                    profile="13f",
-                    collector_id="sec.13f",
-                    source_type="sec_13f_dataset",
-                    status="succeeded",
-                    started_at=datetime.now(timezone.utc).isoformat(),
-                    finished_at=datetime.now(timezone.utc).isoformat(),
-                    collected_count=1,
-                    inserted_count=1,
-                    updated_count=0,
-                    error_text=None,
-                )
-            ]
+    async def list_collection_runs(self, *, limit: int = 20):
         return [
             StoredCollectionRun(
+                run_id="sec-run",
+                collector_id="sec.13f",
+                source_type="sec_13f_dataset",
+                status="succeeded",
+                started_at=datetime.now(timezone.utc).isoformat(),
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                collected_count=1,
+                inserted_count=1,
+                updated_count=0,
+                error_text=None,
+            ),
+            StoredCollectionRun(
                 run_id="house-run",
-                profile="trading",
                 collector_id="house.ptr",
                 source_type="house_ptr_disclosure",
                 status="succeeded",
@@ -859,7 +861,7 @@ class FakeRepository:
             )
         ]
 
-    async def read_x_posts(self, *, handles=None, since_posted_at=None, collector_id=None, profile=None, since=None, limit=50):
+    async def read_x_posts(self, *, handles=None, since_posted_at=None, collector_id=None, since=None, limit=50):
         if not self.with_social_data:
             return []
         return [
@@ -881,7 +883,7 @@ class FakeRepository:
             )
         ]
 
-    async def read_reddit_posts(self, *, subreddits=None, since_posted_at=None, collector_id=None, profile=None, since=None, limit=50):
+    async def read_reddit_posts(self, *, subreddits=None, since_posted_at=None, collector_id=None, since=None, limit=50):
         return []
 
     async def existing_house_ptr_doc_ids(self, *, year=None):
@@ -936,7 +938,6 @@ class FakeRepository:
     async def read_social_statistic_points(
         self,
         *,
-        profile="default",
         ticker=None,
         fuzzy_tag=None,
         source=None,
@@ -993,7 +994,7 @@ class FakeRepository:
     async def save_llm_reddit_comment_analyses(self, rows):
         self.reddit_comment_analysis_rows.extend(rows)
 
-    async def read_llm_analysis_report(self, *, profile: str, analysis_run_id: str | None = None):
+    async def read_llm_analysis_report(self, *, analysis_run_id: str | None = None):
         posts = [
             {
                 "source_ref": row["source_ref"],
@@ -1081,7 +1082,7 @@ class FakeRetentionService:
 
 
 def _successful_collection_result() -> PipelineCollectionResult:
-    return PipelineCollectionResult(profile="default", runs=[], warnings=[])
+    return PipelineCollectionResult(scope="social", runs=[], warnings=[])
 
 
 def _house_row(

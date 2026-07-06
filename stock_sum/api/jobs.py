@@ -14,29 +14,28 @@ import sys
 import time as monotonic_time
 
 from stock_sum.config.models import AppConfig
-from stock_sum.collectors.api.house import HOUSE_PTR_SOURCE_TYPE
-from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID, SEC_13F_SOURCE_TYPE
-from stock_sum.collectors.factory import source_type_for_collector_id
+from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID
+from stock_sum.collectors.factory import social_collector_ids
 from stock_sum.llm.analysis import PROMPT_VERSION
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
-JobKind = Literal["report", "trading_report", "13f_report", "statistic", "collect"]
+JobKind = Literal["social_report", "trading_report", "13f_report", "statistic", "collect"]
 ReportMode = Literal["html", "markdown", "discord", "text", "json"]
 StatisticMode = Literal["social", "trading"]
 StatisticBucket = Literal["auto", "day", "week", "month"]
 WorkerOperation = Literal[
-    "http_report",
+    "http_social_report",
     "http_trading_report",
     "http_13f_report",
     "http_statistic",
     "http_collect",
-    "http_render_cached_report",
-    "http_render_coalesced_report",
+    "http_render_cached_social_report",
+    "http_render_coalesced_social_report",
 ]
 
 
 @dataclass(frozen=True)
-class ReportJobOptions:
+class SocialReportJobOptions:
     """Options for a full report job."""
 
     mode: ReportMode = "html"
@@ -59,9 +58,13 @@ class TradingReportJobOptions:
     days: int | None = None
     asset_type: str | None = None
     ticker: str | None = None
-    limit: int | None = None
+    limit: int = 100
     title: str = "Official Trading Disclosures"
     force_refresh: bool = False
+
+    def __post_init__(self) -> None:
+        if self.limit is None:
+            object.__setattr__(self, "limit", 100)
 
 
 @dataclass(frozen=True)
@@ -86,13 +89,16 @@ class Sec13FReportJobOptions:
     title: str = "SEC 13F Holdings"
     force_refresh: bool = False
 
+    def __post_init__(self) -> None:
+        if self.limit is None:
+            object.__setattr__(self, "limit", 20)
+
 
 @dataclass(frozen=True)
 class StatisticJobOptions:
     """Options for a read-only statistic PNG job."""
 
     mode: StatisticMode = "social"
-    profile: str = "default"
     ticker: str | None = None
     fuzzy_tag: str | None = None
     name: str | None = None
@@ -114,7 +120,7 @@ class HttpJobRecord:
 
     job_id: str
     kind: JobKind
-    profile: str
+    scope: str
     status: JobStatus
     phase: str
     created_at: str
@@ -225,15 +231,14 @@ class HttpJobManager:
 
         return DataRetentionService(self.config)
 
-    def create_report_job(self, profile: str, options: ReportJobOptions) -> HttpJobRecord:
+    def create_social_report_job(self, options: SocialReportJobOptions) -> HttpJobRecord:
         """Create a queued social-media report job."""
 
-        self._validate_profile(profile)
         record = self._new_job(
-            kind="report",
-            profile=profile,
+            kind="social_report",
+            scope="social",
             mode=options.mode,
-            cache_key=self._report_cache_key(profile, options),
+            cache_key=self._social_report_cache_key(options),
         )
         self._save(record)
         self._refresh_memory_status(record.job_id)
@@ -245,7 +250,7 @@ class HttpJobManager:
         _validate_trading_filters(options)
         record = self._new_job(
             kind="trading_report",
-            profile="trading",
+            scope="trading",
             mode=options.mode,
         )
         self._save(record)
@@ -258,7 +263,7 @@ class HttpJobManager:
         _validate_13f_filters(options)
         record = self._new_job(
             kind="13f_report",
-            profile="13f",
+            scope="13f",
             mode=options.mode,
         )
         self._save(record)
@@ -269,11 +274,9 @@ class HttpJobManager:
         """Create a queued statistic PNG job."""
 
         _validate_statistic_filters(options)
-        if options.mode == "social":
-            self._validate_profile(options.profile)
         record = self._new_job(
             kind="statistic",
-            profile=options.profile if options.mode == "social" else "trading",
+            scope=options.mode,
             mode=options.mode,
         )
         self._save(record)
@@ -285,7 +288,6 @@ class HttpJobManager:
         *,
         mode: StatisticMode,
         query: str,
-        profile: str = "default",
         limit: int = 5,
     ) -> list[dict[str, Any]]:
         """Return fuzzy statistic candidates from SQLite."""
@@ -296,12 +298,9 @@ class HttpJobManager:
         if not normalized_query:
             raise ValueError("Statistic fuzzy search query is required.")
         bounded_limit = max(1, min(5, limit))
-        if mode == "social":
-            self._validate_profile(profile)
         repository = self._repository_factory()
         if mode == "social":
             matches = await repository.search_social_statistic_tags(
-                profile=profile,
                 query=normalized_query,
                 limit=bounded_limit,
             )
@@ -312,11 +311,10 @@ class HttpJobManager:
             )
         return [asdict(match) for match in matches]
 
-    def create_collect_job(self, profile: str) -> HttpJobRecord:
+    def create_collect_job(self) -> HttpJobRecord:
         """Create a queued collection-only job."""
 
-        self._validate_profile(profile)
-        record = self._new_job(kind="collect", profile=profile, mode="json")
+        record = self._new_job(kind="collect", scope="social", mode="json")
         self._save(record)
         self._refresh_memory_status(record.job_id)
         return record
@@ -356,11 +354,11 @@ class HttpJobManager:
             data["evicted_in_memory_jobs"] = evicted_in_memory_jobs
         return data
 
-    async def run_report_job(self, job_id: str, options: ReportJobOptions) -> None:
+    async def run_social_report_job(self, job_id: str, options: SocialReportJobOptions) -> None:
         """Run a social report job in a child worker unless test factories request in-process execution."""
 
         if not self._use_subprocess_workers:
-            await self._run_report_job_in_process(job_id, options)
+            await self._run_social_report_job_in_process(job_id, options)
             return
 
         is_inflight_leader = False
@@ -368,13 +366,13 @@ class HttpJobManager:
         try:
             self._mark_running(job_id, phase="cache_lookup")
             job = self._require_job(job_id)
-            cache_key = job.cache_key or self._report_cache_key(job.profile, options)
+            cache_key = job.cache_key or self._social_report_cache_key(options)
             self._update(job_id, cache_key=cache_key)
             cache_hit = self._find_report_cache_hit(job_id, cache_key)
             if cache_hit is not None:
                 await self._run_worker_operation(
                     job_id,
-                    "http_render_cached_report",
+                    "http_render_cached_social_report",
                     {"options": asdict(options), "cache_hit_job_id": cache_hit.job_id},
                 )
                 return
@@ -384,7 +382,7 @@ class HttpJobManager:
                 await self._wait_for_coalesced_report_worker(job_id, inflight_report, options)
                 return
 
-            await self._run_worker_operation(job_id, "http_report", {"options": asdict(options)})
+            await self._run_worker_operation(job_id, "http_social_report", {"options": asdict(options)})
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
@@ -392,7 +390,7 @@ class HttpJobManager:
                 await self._release_inflight_report(cache_key, job_id)
             self._refresh_memory_status(job_id)
 
-    async def _run_report_job_in_process(self, job_id: str, options: ReportJobOptions) -> None:
+    async def _run_social_report_job_in_process(self, job_id: str, options: SocialReportJobOptions) -> None:
         """Run social collection, payload assembly, LLM summarization, and rendering."""
 
         from stock_sum.llm.analysis import LLMAnalysisService
@@ -404,11 +402,11 @@ class HttpJobManager:
         try:
             self._mark_running(job_id, phase="cache_lookup")
             job = self._require_job(job_id)
-            cache_key = job.cache_key or self._report_cache_key(job.profile, options)
+            cache_key = job.cache_key or self._social_report_cache_key(options)
             self._update(job_id, cache_key=cache_key)
             cache_hit = self._find_report_cache_hit(job_id, cache_key)
             if cache_hit is not None:
-                self._write_cached_report_artifacts(job_id, cache_hit, options)
+                self._write_cached_social_report_artifacts(job_id, cache_hit, options)
                 return
 
             is_inflight_leader, inflight_report = await self._join_or_register_inflight_report(job_id, cache_key)
@@ -417,9 +415,9 @@ class HttpJobManager:
                 return
 
             self._update(job_id, phase="collecting")
-            collection_result = await self._pipeline_factory().run_report(
-                job.profile,
-                collector_ids=_social_collector_ids(self.config, job.profile),
+            collection_result = await self._pipeline_factory().collect_sources(
+                collector_ids=social_collector_ids(self.config),
+                scope="social",
             )
             warnings = list(collection_result.warnings)
             warning_data = _warnings_to_dicts(warnings)
@@ -433,7 +431,7 @@ class HttpJobManager:
             repository = self._repository_factory()
             downloader = MediaDownloader(self.config.media, repository) if options.download_images else None
             builder = SummaryInputBuilder(config=self.config, repository=repository, downloader=downloader)
-            summary_input = await builder.build(profile=job.profile, download_images=options.download_images)
+            summary_input = await builder.build(download_images=options.download_images)
             has_social_data = _summary_input_has_social_data(summary_input)
             if not has_social_data:
                 raise RuntimeError(_no_social_data_message(collection_result))
@@ -456,7 +454,6 @@ class HttpJobManager:
             )
             warnings.extend(analysis.warnings)
             response_data = _analysis_response_data(
-                profile=job.profile,
                 provider=self.config.llm.provider,
                 analysis=analysis,
                 input_media=payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
@@ -514,10 +511,9 @@ class HttpJobManager:
                     self._update(job_id, phase="refreshing_house_ptr")
                     run = await self._pipeline_factory().collect_collector(
                         "house.ptr",
-                        profile="trading",
                         raise_on_error=False,
                     )
-                    collection_result = PipelineCollectionResult(profile="trading", runs=[run], warnings=list(run.warnings))
+                    collection_result = PipelineCollectionResult(scope="trading", runs=[run], warnings=list(run.warnings))
                     warnings.extend(run.warnings)
                     if run.status == "failed":
                         warnings.append(
@@ -614,10 +610,9 @@ class HttpJobManager:
                     self._update(job_id, phase="refreshing_sec_13f")
                     run = await self._pipeline_factory().collect_collector(
                         SEC_13F_COLLECTOR_ID,
-                        profile="13f",
                         raise_on_error=False,
                     )
-                    collection_result = PipelineCollectionResult(profile="13f", runs=[run], warnings=list(run.warnings))
+                    collection_result = PipelineCollectionResult(scope="13f", runs=[run], warnings=list(run.warnings))
                     warnings.extend(run.warnings)
                     if run.status == "failed":
                         warnings.append(
@@ -724,7 +719,6 @@ class HttpJobManager:
             filter_data = _statistic_filter_data(options, start_at, end_at)
             if options.mode == "social":
                 points = await repository.read_social_statistic_points(
-                    profile=options.profile,
                     ticker=options.ticker,
                     fuzzy_tag=options.fuzzy_tag,
                     source=options.source,
@@ -792,8 +786,7 @@ class HttpJobManager:
 
         try:
             self._mark_running(job_id, phase="collecting")
-            job = self._require_job(job_id)
-            collection_result = await self._pipeline_factory().run_report(job.profile)
+            collection_result = await self._pipeline_factory().collect_sources(scope="social")
             result_data = _pipeline_result_to_dict(collection_result)
             artifact_path = self._job_dir(job_id) / "collection.json"
             self._write_json(artifact_path, result_data)
@@ -810,15 +803,11 @@ class HttpJobManager:
             await self._run_retention(job_id)
             self._refresh_memory_status(job_id)
 
-    def _validate_profile(self, profile: str) -> None:
-        if profile not in self.config.reports:
-            raise KeyError(f"Unknown report profile: {profile}")
-
     async def _house_ptr_refresh_needed(self, repository: SQLiteStorageRepository) -> bool:
         ttl_seconds = self.config.sources.house_ptr.refresh_ttl_seconds
         if ttl_seconds <= 0:
             return True
-        runs = await repository.list_collection_runs(profile="trading", limit=20)
+        runs = await repository.list_collection_runs(limit=20)
         now = datetime.now(timezone.utc)
         for run in runs:
             if run.collector_id != "house.ptr" or run.status != "succeeded":
@@ -834,7 +823,7 @@ class HttpJobManager:
         ttl_seconds = self.config.sources.sec_13f.refresh_ttl_seconds
         if ttl_seconds <= 0:
             return True
-        runs = await repository.list_collection_runs(profile="13f", limit=20)
+        runs = await repository.list_collection_runs(limit=20)
         now = datetime.now(timezone.utc)
         for run in runs:
             if run.collector_id != SEC_13F_COLLECTOR_ID or run.status != "succeeded":
@@ -846,13 +835,13 @@ class HttpJobManager:
                 return False
         return True
 
-    def _new_job(self, *, kind: JobKind, profile: str, mode: str, cache_key: str | None = None) -> HttpJobRecord:
+    def _new_job(self, *, kind: JobKind, scope: str, mode: str, cache_key: str | None = None) -> HttpJobRecord:
         now = _utc_now()
         job_id = uuid4().hex
         record = HttpJobRecord(
             job_id=job_id,
             kind=kind,
-            profile=profile,
+            scope=scope,
             status="queued",
             phase="queued",
             created_at=now,
@@ -995,7 +984,7 @@ class HttpJobManager:
         self,
         job_id: str,
         report: _InFlightReport | None,
-        options: ReportJobOptions,
+        options: SocialReportJobOptions,
     ) -> None:
         if report is None:
             raise RuntimeError("No in-flight report was available to coalesce.")
@@ -1014,7 +1003,7 @@ class HttpJobManager:
             raise RuntimeError(f"Coalesced report leader {leader.job_id} did not produce a summary.")
         await self._run_worker_operation(
             job_id,
-            "http_render_coalesced_report",
+            "http_render_coalesced_social_report",
             {"options": asdict(options), "leader_job_id": leader.job_id, "wait_seconds": wait_seconds},
         )
 
@@ -1050,7 +1039,7 @@ class HttpJobManager:
         self,
         job_id: str,
         response_data: dict[str, Any],
-        options: ReportJobOptions,
+        options: SocialReportJobOptions,
     ) -> tuple[Path, str]:
         if options.mode == "json":
             artifact_path = self._job_dir(job_id) / "summary.json"
@@ -1112,11 +1101,11 @@ class HttpJobManager:
         artifact_path.write_text(rendered, encoding="utf-8")
         return artifact_path, media_type
 
-    def _write_cached_report_artifacts(
+    def _write_cached_social_report_artifacts(
         self,
         job_id: str,
         cache_hit: HttpJobRecord,
-        options: ReportJobOptions,
+        options: SocialReportJobOptions,
     ) -> None:
         summary_path = Path(cache_hit.summary_path or "")
         response_data = self._read_json(summary_path)
@@ -1171,7 +1160,7 @@ class HttpJobManager:
         self,
         job_id: str,
         report: _InFlightReport | None,
-        options: ReportJobOptions,
+        options: SocialReportJobOptions,
     ) -> None:
         if report is None:
             raise RuntimeError("No in-flight report was available to coalesce.")
@@ -1203,7 +1192,7 @@ class HttpJobManager:
         *,
         job_id: str,
         leader: HttpJobRecord,
-        options: ReportJobOptions,
+        options: SocialReportJobOptions,
         wait_seconds: int,
     ) -> None:
         response_data = self._read_json(Path(leader.summary_path or ""))
@@ -1245,7 +1234,7 @@ class HttpJobManager:
                 continue
             if record.job_id == current_job_id:
                 continue
-            if record.kind != "report" or record.status != "succeeded" or record.cache_key != cache_key:
+            if record.kind != "social_report" or record.status != "succeeded" or record.cache_key != cache_key:
                 continue
             if not record.summary_path or not Path(record.summary_path).exists():
                 continue
@@ -1262,11 +1251,9 @@ class HttpJobManager:
             return None
         return max(candidates, key=lambda item: item[0])[1]
 
-    def _report_cache_key(self, profile: str, options: ReportJobOptions) -> str:
+    def _social_report_cache_key(self, options: SocialReportJobOptions) -> str:
         payload = {
             "version": 1,
-            "profile": profile,
-            "profile_config": _jsonable(self.config.reports.get(profile)),
             "sources": {
                 "x_users": _jsonable(self.config.sources.x_users),
                 "subreddits": _jsonable(self.config.sources.subreddits),
@@ -1385,20 +1372,6 @@ def _job_sort_datetime(record: HttpJobRecord) -> datetime:
     )
 
 
-def _social_collector_ids(config: AppConfig, profile: str) -> list[str]:
-    collector_ids = list(config.reports[profile].collector_ids)
-    result: list[str] = []
-    for collector_id in collector_ids:
-        try:
-            source_type = source_type_for_collector_id(config, collector_id)
-        except Exception:
-            result.append(collector_id)
-            continue
-        if source_type not in {HOUSE_PTR_SOURCE_TYPE, SEC_13F_SOURCE_TYPE}:
-            result.append(collector_id)
-    return result
-
-
 def _validate_trading_filters(options: TradingReportJobOptions) -> None:
     if not any((options.name, options.start_date, options.end_date, options.days, options.asset_type, options.ticker)):
         raise ValueError("Trading report requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
@@ -1426,8 +1399,8 @@ def _validate_13f_filters(options: Sec13FReportJobOptions) -> None:
     )
     if not has_filter:
         raise ValueError("13F report requires at least one filter: manager, issuer, CIK, accession, CUSIP, FIGI, date, value, or shares.")
-    if options.limit < 1 or options.limit > 100:
-        raise ValueError("13F report limit must be between 1 and 100.")
+    if options.limit < 1:
+        raise ValueError("13F report limit must be at least 1.")
 
 
 def _validate_statistic_filters(options: StatisticJobOptions) -> None:
@@ -1546,7 +1519,6 @@ def _statistic_filter_data(
 ) -> dict[str, Any]:
     return {
         "mode": options.mode,
-        "profile": options.profile if options.mode == "social" else None,
         "ticker": options.ticker,
         "fuzzy_tag": options.fuzzy_tag if options.mode == "social" else None,
         "name": options.name,
@@ -1725,13 +1697,12 @@ def _parse_simple_date(value: str | None) -> datetime | None:
 
 def _analysis_response_data(
     *,
-    profile: str,
     provider: str,
     analysis: Any,
     input_media: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "profile": profile,
+        "report_type": "social",
         "provider": provider,
         "model": analysis.model,
         "summary_text": json.dumps(analysis.summary, ensure_ascii=False),

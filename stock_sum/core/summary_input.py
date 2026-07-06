@@ -95,7 +95,7 @@ class SummaryRedditSubredditSection:
 class SummaryInput:
     """Complete LLM-ready summary input payload."""
 
-    profile: str
+    report_type: str
     generated_at: str
     collection_runs: list[dict[str, Any]]
     x: list[SummaryXUserSection] = field(default_factory=list)
@@ -140,7 +140,7 @@ def _compact_payload(
         "collection_run_count": len(summary_input.collection_runs),
     }
     return {
-        "profile": summary_input.profile,
+        "report_type": summary_input.report_type,
         "generated_at": summary_input.generated_at,
         "sources": {
             "x": x_sections,

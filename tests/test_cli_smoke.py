@@ -30,7 +30,7 @@ class FakeCollectPipeline:
 class FakePayload:
     def to_dict(self, *, mode="full", max_images_per_post=3, max_images_total=20):
         return {
-            "profile": "default",
+            "report_type": "social",
             "mode": mode,
             "max_images_per_post": max_images_per_post,
             "max_images_total": max_images_total,
@@ -43,7 +43,7 @@ class FakePayloadBuilder:
         self.repository = repository
         self.downloader = downloader
 
-    async def build(self, *, profile: str, download_images: bool | None = None):
+    async def build(self, *, download_images: bool | None = None):
         return FakePayload()
 
 
@@ -68,7 +68,7 @@ def test_cli_help() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    assert "run-report" in result.output
+    assert "run-report" not in result.output
     assert "collect" in result.output
     assert "config" in result.output
     assert "setup" in result.output
@@ -87,7 +87,7 @@ def test_collect_help() -> None:
 
     assert result.exit_code == 0
     assert "--collector" in result.output
-    assert "--profile" in result.output
+    assert "--profile" not in result.output
 
 
 def test_payload_help() -> None:
@@ -129,16 +129,6 @@ def test_database_help() -> None:
 
     assert result.exit_code == 0
     assert "reset" in result.output
-
-
-def test_config_profile_help() -> None:
-    runner = CliRunner()
-    result = runner.invoke(app, ["config", "profile", "--help"])
-
-    assert result.exit_code == 0
-    assert "add" in result.output
-    assert "edit" in result.output
-    assert "delete" in result.output
 
 
 def test_config_source_help() -> None:
@@ -291,8 +281,8 @@ def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
     assert 'host = "0.0.0.0"' in config_text
     assert "port = 8080" in config_text
     assert 'provider = "deepseek"' in config_text
-    assert '"x.aleabitoreddit"' in config_text
-    assert '"reddit.wallstreetbets"' in config_text
+    assert 'handle = "aleabitoreddit"' in config_text
+    assert 'subreddit = "wallstreetbets"' in config_text
     assert "include_comments = true" in config_text
     assert "comments_per_post = 10" in config_text
     assert "XPOZ_API_KEY=xpoz-secret" in env_text
@@ -593,49 +583,6 @@ def test_daemon_uses_remembered_config_and_env_file(tmp_path, monkeypatch) -> No
     assert seen["deepseek"] == "fresh-deepseek"
 
 
-def test_config_profile_add_edit_delete(tmp_path) -> None:
-    config_path = tmp_path / "config.toml"
-    runner = CliRunner()
-
-    init_result = runner.invoke(app, ["config", "init", str(config_path)])
-    add_result = runner.invoke(
-        app,
-        [
-            "config",
-            "profile",
-            "add",
-            "closing",
-            "--config",
-            str(config_path),
-            "--collectors",
-            "api.market_watch",
-        ],
-    )
-    edit_result = runner.invoke(
-        app,
-        [
-            "config",
-            "profile",
-            "edit",
-            "closing",
-            "--config",
-            str(config_path),
-            "--collectors",
-            "api.market_watch,api.news",
-        ],
-    )
-    show_result = runner.invoke(app, ["config", "profile", "show", "closing", "--config", str(config_path)])
-    delete_result = runner.invoke(app, ["config", "profile", "delete", "closing", "--config", str(config_path)])
-
-    assert init_result.exit_code == 0
-    assert add_result.exit_code == 0
-    assert edit_result.exit_code == 0
-    assert show_result.exit_code == 0
-    assert '"api.market_watch"' in show_result.output
-    assert '"api.news"' in show_result.output
-    assert delete_result.exit_code == 0
-
-
 def test_config_get_set_use_remembered_config_and_keep_legacy_path_form(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "active-config.toml"
@@ -664,19 +611,16 @@ def test_config_source_commands_use_remembered_config(tmp_path, monkeypatch) -> 
     runner = CliRunner()
 
     init_result = runner.invoke(app, ["config", "init", str(config_path)])
-    add_result = runner.invoke(app, ["config", "x-user", "add", "remembered", "--profile", "default"])
+    add_result = runner.invoke(app, ["config", "x-user", "add", "remembered"])
     list_result = runner.invoke(app, ["config", "x-user", "list"])
-    profile_result = runner.invoke(app, ["config", "profile", "show", "default"])
 
     assert init_result.exit_code == 0
     assert add_result.exit_code == 0
     assert list_result.exit_code == 0
     assert '"handle": "remembered"' in list_result.output
-    assert profile_result.exit_code == 0
-    assert '"x.remembered"' in profile_result.output
 
 
-def test_config_x_user_add_list_delete_updates_profile(tmp_path) -> None:
+def test_config_x_user_add_list_delete_updates_global_sources(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     runner = CliRunner()
 
@@ -694,29 +638,25 @@ def test_config_x_user_add_list_delete_updates_profile(tmp_path) -> None:
             "20",
             "--lookback-hours",
             "12",
-            "--profile",
-            "default",
         ],
     )
     list_result = runner.invoke(app, ["config", "x-user", "list", "--config", str(config_path)])
-    profile_result = runner.invoke(app, ["config", "profile", "show", "default", "--config", str(config_path)])
     delete_result = runner.invoke(
         app,
-        ["config", "x-user", "delete", "newhandle", "--config", str(config_path), "--profile", "default"],
+        ["config", "x-user", "delete", "newhandle", "--config", str(config_path)],
     )
-    profile_after_delete = runner.invoke(app, ["config", "profile", "show", "default", "--config", str(config_path)])
+    list_after_delete = runner.invoke(app, ["config", "x-user", "list", "--config", str(config_path)])
 
     assert init_result.exit_code == 0
     assert add_result.exit_code == 0
     assert list_result.exit_code == 0
     assert '"handle": "newhandle"' in list_result.output
     assert '"lookback_hours": 12' in list_result.output
-    assert '"x.newhandle"' in profile_result.output
     assert delete_result.exit_code == 0
-    assert '"x.newhandle"' not in profile_after_delete.output
+    assert '"handle": "newhandle"' not in list_after_delete.output
 
 
-def test_config_subreddit_add_list_delete_updates_profile(tmp_path) -> None:
+def test_config_subreddit_add_list_delete_updates_global_sources(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     runner = CliRunner()
 
@@ -739,17 +679,14 @@ def test_config_subreddit_add_list_delete_updates_profile(tmp_path) -> None:
             "3",
             "--lookback-hours",
             "6",
-            "--profile",
-            "default",
         ],
     )
     list_result = runner.invoke(app, ["config", "subreddit", "list", "--config", str(config_path)])
-    profile_result = runner.invoke(app, ["config", "profile", "show", "default", "--config", str(config_path)])
     delete_result = runner.invoke(
         app,
-        ["config", "subreddit", "delete", "stocks", "--config", str(config_path), "--profile", "default"],
+        ["config", "subreddit", "delete", "stocks", "--config", str(config_path)],
     )
-    profile_after_delete = runner.invoke(app, ["config", "profile", "show", "default", "--config", str(config_path)])
+    list_after_delete = runner.invoke(app, ["config", "subreddit", "list", "--config", str(config_path)])
 
     assert init_result.exit_code == 0
     assert add_result.exit_code == 0
@@ -757,9 +694,8 @@ def test_config_subreddit_add_list_delete_updates_profile(tmp_path) -> None:
     assert '"subreddit": "stocks"' in list_result.output
     assert '"include_comments": true' in list_result.output
     assert '"lookback_hours": 6' in list_result.output
-    assert '"reddit.stocks"' in profile_result.output
     assert delete_result.exit_code == 0
-    assert '"reddit.stocks"' not in profile_after_delete.output
+    assert '"subreddit": "stocks"' not in list_after_delete.output
 
 
 def test_config_subreddit_add_defaults_to_comments_enabled(tmp_path) -> None:
@@ -793,7 +729,7 @@ def test_collect_collector_uses_pipeline(monkeypatch) -> None:
     result = runner.invoke(app, ["collect", "--collector", "api.market_watch"])
 
     assert result.exit_code == 0
-    assert calls == [{"operation": "cli_collect", "payload": {"collector": "api.market_watch", "profile": None}}]
+    assert calls == [{"operation": "cli_collect", "payload": {"collector": "api.market_watch"}}]
     assert '"collector_id": "api.market_watch"' in result.output
     assert '"inserted_count": 1' in result.output
 
@@ -809,8 +745,6 @@ def test_payload_build_writes_json(monkeypatch, tmp_path) -> None:
         [
             "payload",
             "build",
-            "--profile",
-            "default",
             "--output",
             str(output),
             "--config",
@@ -826,7 +760,7 @@ def test_payload_build_writes_json(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0
     assert output.exists()
-    assert '"profile": "default"' in output.read_text()
+    assert '"report_type": "social"' in output.read_text()
     assert '"mode": "compact"' in output.read_text()
 
 
@@ -841,7 +775,7 @@ def test_llm_summarize_writes_json_from_payload(monkeypatch, tmp_path) -> None:
     def fake_run_cli_worker(config, operation, worker_payload):
         calls.append({"operation": operation, "payload": worker_payload})
         response_data = {
-            "profile": worker_payload["profile"],
+            "report_type": "social",
             "provider": config.llm.provider,
             "model": config.llm.model,
             "summary": {"executive_summary": "ok"},
@@ -859,8 +793,6 @@ def test_llm_summarize_writes_json_from_payload(monkeypatch, tmp_path) -> None:
         [
             "llm",
             "summarize",
-            "--profile",
-            "default",
             "--payload",
             str(payload),
             "--output",
@@ -875,7 +807,6 @@ def test_llm_summarize_writes_json_from_payload(monkeypatch, tmp_path) -> None:
         {
             "operation": "cli_llm_summarize",
             "payload": {
-                "profile": "default",
                 "payload_path": str(payload),
                 "output_path": str(output),
                 "instructions": None,

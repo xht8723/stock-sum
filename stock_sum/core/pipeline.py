@@ -7,9 +7,8 @@ from collections.abc import Callable
 from uuid import uuid4
 
 from stock_sum.collectors.base import Collector
-from stock_sum.collectors.factory import build_collector, source_type_for_collector_id
+from stock_sum.collectors.factory import build_collector, social_collector_ids, source_type_for_collector_id
 from stock_sum.core.context import RuntimeContext
-from stock_sum.core.errors import ConfigurationError
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning
 from stock_sum.storage.repository import StorageRepository
 from stock_sum.storage.sqlite import SQLiteStorageRepository
@@ -33,7 +32,6 @@ class ReportPipeline:
         self,
         collector_id: str,
         *,
-        profile: str | None = None,
         raise_on_error: bool = True,
     ) -> CollectionRunResult:
         """Run one configured collector and persist its raw items."""
@@ -42,7 +40,6 @@ class ReportPipeline:
         run_id = str(uuid4())
         await self.repository.start_collection_run(
             run_id=run_id,
-            profile=profile,
             collector_id=collector_id,
             source_type=source_type,
         )
@@ -130,14 +127,15 @@ class ReportPipeline:
             if not suppress_errors:
                 raise
 
-    async def run_report(self, profile: str, *, collector_ids: list[str] | None = None) -> PipelineCollectionResult:
-        """Run the collection phase for a report profile."""
+    async def collect_sources(
+        self,
+        *,
+        collector_ids: list[str] | None = None,
+        scope: str = "social",
+    ) -> PipelineCollectionResult:
+        """Collect and persist items for the unified source set."""
 
-        try:
-            profile_config = self.context.config.reports[profile]
-        except KeyError as exc:
-            raise ConfigurationError(f"Unknown report profile: {profile}") from exc
-        active_collector_ids = collector_ids if collector_ids is not None else profile_config.collector_ids
+        active_collector_ids = collector_ids if collector_ids is not None else social_collector_ids(self.context.config)
 
         runs: list[CollectionRunResult] = []
         warnings: list[PipelineSectionWarning] = []
@@ -145,7 +143,7 @@ class ReportPipeline:
 
         async def run_collector(collector_id: str) -> CollectionRunResult:
             async with semaphore:
-                return await self.collect_collector(collector_id, profile=profile, raise_on_error=False)
+                return await self.collect_collector(collector_id, raise_on_error=False)
 
         runs = await asyncio.gather(*(run_collector(collector_id) for collector_id in active_collector_ids))
         for run in runs:
@@ -159,4 +157,4 @@ class ReportPipeline:
                         message=run.error or "Collector failed.",
                     )
                 )
-        return PipelineCollectionResult(profile=profile, runs=runs, warnings=warnings)
+        return PipelineCollectionResult(scope=scope, runs=runs, warnings=warnings)

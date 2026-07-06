@@ -80,21 +80,11 @@ SUPPORTED_PUT_CALL = {"PUT", "CALL"}
 FUZZY_REACTION_OPTIONS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
 FUZZY_REACTION_DIGITS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4}
 FUZZY_SELECTION_TIMEOUT_SECONDS = 60.0
-MAX_SOURCE_FETCH_LIMIT = 300
-MAX_LOOKBACK_HOURS = 24 * 31
-MAX_COMMENTS_PER_POST = 500
-MAX_13F_LIMIT = 100
-MAX_TRADING_LIMIT = 1000
 MAX_DAYS_FILTER = 3650
-MAX_CONCURRENCY = 20
-MAX_REFRESH_TTL_SECONDS = 365 * 24 * 60 * 60
 KNOWN_HOUSE_ASSET_TYPES = {"ST", "GS", "OI", "CS", "OT", "HN", "OP", "PS", "VA", "CT", "OL", "RS", "AB"}
 
-_PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_COLLECTOR_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
 _X_HANDLE_RE = re.compile(r"^@?[A-Za-z0-9_]{1,15}$")
 _SUBREDDIT_RE = re.compile(r"^(?:r/)?[A-Za-z0-9_]{2,21}$", re.IGNORECASE)
-_SECRET_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _ASSET_TYPE_RE = re.compile(r"^[A-Z0-9]{1,8}$")
 _TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
 _CUSIP_RE = re.compile(r"^[A-Z0-9]{1,12}$")
@@ -139,12 +129,6 @@ class _RequestContext(Protocol):
 
 class _ClientSession(Protocol):
     def post(self, url: str, **kwargs: Any) -> _RequestContext:
-        ...
-
-    def patch(self, url: str, **kwargs: Any) -> _RequestContext:
-        ...
-
-    def put(self, url: str, **kwargs: Any) -> _RequestContext:
         ...
 
     def delete(self, url: str, **kwargs: Any) -> _RequestContext:
@@ -192,10 +176,9 @@ class StockSumHttpClient:
             base_url=os.getenv("STOCK_SUM_BASE_URL", DEFAULT_BASE_URL),
         )
 
-    async def run_report(
+    async def run_social_report(
         self,
         *,
-        profile: str,
         output_format: str,
         detail: str = "minimum",
     ) -> StockSumArtifact:
@@ -208,9 +191,8 @@ class StockSumHttpClient:
 
         session, owns_session = await self._session()
         try:
-            job = await self._create_report_job(
+            job = await self._create_social_report_job(
                 session,
-                profile=profile,
                 output_format=output_format,
                 payload={"detail": detail},
             )
@@ -296,7 +278,7 @@ class StockSumHttpClient:
         filing_end: str | None = None,
         min_value: int | None = None,
         min_shares: int | None = None,
-        limit: int = 20,
+        limit: int | None = None,
         force_refresh: bool = False,
     ) -> StockSumArtifact:
         """Create, poll, and download one SEC 13F holdings report job."""
@@ -322,7 +304,7 @@ class StockSumHttpClient:
                 "filing_end": filing_end,
                 "min_value": min_value,
                 "min_shares": min_shares,
-                "limit": max(1, min(100, limit)),
+                "limit": limit,
                 "force_refresh": force_refresh,
             }
             job = await self._create_13f_report_job(
@@ -348,7 +330,6 @@ class StockSumHttpClient:
         self,
         *,
         mode: str,
-        profile: str = "default",
         ticker: str | None = None,
         fuzzy_tag: str | None = None,
         name: str | None = None,
@@ -375,7 +356,6 @@ class StockSumHttpClient:
         try:
             payload = {
                 "mode": mode,
-                "profile": profile,
                 "ticker": ticker,
                 "fuzzy_tag": fuzzy_tag,
                 "name": name,
@@ -412,31 +392,18 @@ class StockSumHttpClient:
         *,
         mode: str,
         query: str,
-        profile: str = "default",
         limit: int = 5,
     ) -> list[dict[str, Any]]:
         """Return statistic fuzzy-match candidates."""
 
         if mode not in SUPPORTED_STATISTIC_MODES:
             raise StockSumRequestError(f"Unsupported statistic mode: {mode}")
-        params = f"mode={quote(mode, safe='')}&q={quote(query, safe='')}&profile={quote(profile, safe='')}&limit={max(1, min(5, limit))}"
+        params = f"mode={quote(mode, safe='')}&q={quote(query, safe='')}&limit={max(1, min(5, limit))}"
         payload = await self.get_json(f"/v1/statistics/fuzzy-matches?{params}")
         matches = payload.get("matches")
         if not isinstance(matches, list):
             raise StockSumRequestError("stock-sum returned malformed fuzzy search matches.")
         return [item for item in matches if isinstance(item, dict)]
-
-    async def run_collect_profile(self, *, profile: str) -> dict[str, Any]:
-        """Create and poll a collection-only job for one profile."""
-
-        session, owns_session = await self._session()
-        try:
-            job = await self.post_json(f"/v1/collect/{quote(profile, safe='')}/jobs", session=session, expected_status=202)
-            job_id = _required_string(job, "job_id")
-            return await self._poll_until_done(session, job_id)
-        finally:
-            if owns_session:
-                await session.close()
 
     async def get_json(self, path: str, *, session: _ClientSession | None = None) -> dict[str, Any]:
         return await self._request_json("get", path, session=session, expected_status=200)
@@ -450,12 +417,6 @@ class StockSumHttpClient:
         expected_status: int = 200,
     ) -> dict[str, Any]:
         return await self._request_json("post", path, payload=payload, session=session, expected_status=expected_status)
-
-    async def patch_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._request_json("patch", path, payload=payload, expected_status=200)
-
-    async def put_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._request_json("put", path, payload=payload, expected_status=200)
 
     async def delete_json(self, path: str) -> dict[str, Any]:
         return await self._request_json("delete", path, expected_status=200)
@@ -497,15 +458,14 @@ class StockSumHttpClient:
             raise StockSumConfigurationError("aiohttp is required in the Redbot runtime.") from exc
         return aiohttp.ClientSession(), True
 
-    async def _create_report_job(
+    async def _create_social_report_job(
         self,
         session: _ClientSession,
         *,
-        profile: str,
         output_format: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        url = f"{self.base_url}/v1/social-reports/{quote(profile, safe='')}/jobs/{quote(output_format, safe='')}"
+        url = f"{self.base_url}/v1/social-reports/jobs/{quote(output_format, safe='')}"
         try:
             async with session.post(url, json=payload, headers=self._headers()) as response:
                 return await self._json_response(response, expected_status=202)
@@ -636,32 +596,14 @@ class StockSumHttpClient:
 class StockSumReport(commands.Cog):
     """Request stock-sum reports from Discord."""
 
-    stocksum = app_commands.Group(name="stocksum", description="Manage stock-sum.")
-    profiles = app_commands.Group(name="profiles", description="Manage report profiles.", parent=stocksum)
-    sources = app_commands.Group(name="sources", description="Manage report sources.", parent=stocksum)
-    llm = app_commands.Group(name="llm", description="Manage LLM settings.", parent=stocksum)
-    secrets = app_commands.Group(name="secrets", description="Manage stock-sum API keys.", parent=stocksum)
-    collect_group = app_commands.Group(name="collect", description="Run collection jobs.", parent=stocksum)
-    setup = app_commands.Group(name="setup", description="Check stock-sum setup.", parent=stocksum)
-    retention = app_commands.Group(name="retention", description="Inspect runtime data retention.", parent=stocksum)
+    settings = app_commands.Group(name="settings", description="Manage stock-sum social sources.")
 
     def __init__(self, bot) -> None:
         self.bot = bot
 
     @app_commands.command(name="socialreport", description="Generate a stock-sum social media market report.")
     @app_commands.describe(
-        profile="stock-sum report profile name",
-        format="report artifact format",
         detail="how many social sentiment items to include",
-    )
-    @app_commands.choices(
-        format=[
-            app_commands.Choice(name="Discord Markdown", value="discord"),
-            app_commands.Choice(name="HTML", value="html"),
-            app_commands.Choice(name="Markdown", value="markdown"),
-            app_commands.Choice(name="Text", value="text"),
-            app_commands.Choice(name="JSON", value="json"),
-        ]
     )
     @app_commands.choices(
         detail=[
@@ -673,16 +615,11 @@ class StockSumReport(commands.Cog):
     async def socialreport(
         self,
         interaction,
-        profile: str = "default",
-        format: str = "discord",
         detail: str = "minimum",
     ) -> None:
         """Slash command handler for social report generation."""
 
-        if error := _validate_report_options(output_format=format, detail=detail):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_profile_name(profile):
+        if error := _validate_report_options(output_format="discord", detail=detail):
             await _send_validation_error(interaction, error)
             return
 
@@ -691,9 +628,8 @@ class StockSumReport(commands.Cog):
             ephemeral=False,
         )
         try:
-            artifact = await StockSumHttpClient.from_env().run_report(
-                profile=profile,
-                output_format=format,
+            artifact = await StockSumHttpClient.from_env().run_social_report(
+                output_format="discord",
                 detail=detail,
             )
         except StockSumCogError as exc:
@@ -708,14 +644,9 @@ class StockSumReport(commands.Cog):
             )
             return
 
-        if format == "discord":
-            report_text = artifact.content.decode("utf-8", errors="replace").strip()
-            for chunk in _split_discord_markdown(report_text):
-                await _send_report_output(interaction, chunk, private=False)
-            return
-
-        file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await _send_report_output(interaction, "Report generated.", private=False, file=file)
+        report_text = artifact.content.decode("utf-8", errors="replace").strip()
+        for chunk in _split_discord_markdown(report_text):
+            await _send_report_output(interaction, chunk, private=False)
 
     @app_commands.command(name="tradingreport", description="Generate House trading disclosures. Provide at least one filter.")
     @app_commands.describe(
@@ -725,18 +656,8 @@ class StockSumReport(commands.Cog):
         days="transaction records from the last N days",
         asset_type="House asset type code, e.g. ST, GS, OI, CS, OT",
         ticker="stock ticker for ST rows, e.g. AMZN",
-        limit="optional maximum rows to return",
-        format="report artifact format",
+        limit="maximum rows to return; uses stock-sum default if omitted",
         force_refresh="force a House PTR refresh before querying",
-    )
-    @app_commands.choices(
-        format=[
-            app_commands.Choice(name="Discord Markdown", value="discord"),
-            app_commands.Choice(name="HTML", value="html"),
-            app_commands.Choice(name="Markdown", value="markdown"),
-            app_commands.Choice(name="Text", value="text"),
-            app_commands.Choice(name="JSON", value="json"),
-        ]
     )
     async def tradingreport(
         self,
@@ -748,7 +669,6 @@ class StockSumReport(commands.Cog):
         asset_type: str = "",
         ticker: str = "",
         limit: int | None = None,
-        format: str = "discord",
         force_refresh: bool = False,
     ) -> None:
         """Slash command handler for House PTR trading disclosure reports."""
@@ -765,13 +685,10 @@ class StockSumReport(commands.Cog):
             return
         asset_type_filter = asset_type.strip().upper() or None
         ticker_filter = ticker.strip().upper() or None
-        if error := _validate_report_options(output_format=format):
-            await _send_validation_error(interaction, error)
-            return
         if error := _validate_positive_int(days, label="days", maximum=MAX_DAYS_FILTER):
             await _send_validation_error(interaction, error)
             return
-        if error := _validate_positive_int(limit, label="limit", maximum=MAX_TRADING_LIMIT):
+        if error := _validate_positive_int(limit, label="limit"):
             await _send_validation_error(interaction, error)
             return
         if error := _validate_asset_type(asset_type_filter):
@@ -793,7 +710,7 @@ class StockSumReport(commands.Cog):
         )
         try:
             artifact = await StockSumHttpClient.from_env().run_trading_report(
-                output_format=format,
+                output_format="discord",
                 name=name_filter,
                 start_date=start_filter,
                 end_date=end_filter,
@@ -815,14 +732,9 @@ class StockSumReport(commands.Cog):
             )
             return
 
-        if format == "discord":
-            report_text = artifact.content.decode("utf-8", errors="replace").strip()
-            for chunk in _split_discord_markdown(report_text):
-                await _send_report_output(interaction, chunk, private=False)
-            return
-
-        file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await _send_report_output(interaction, "Report generated.", private=False, file=file)
+        report_text = artifact.content.decode("utf-8", errors="replace").strip()
+        for chunk in _split_discord_markdown(report_text):
+            await _send_report_output(interaction, chunk, private=False)
 
     @app_commands.command(name="13freport", description="Generate SEC 13F holdings. Provide manager, issuer, ID, dates, value, or shares.")
     @app_commands.describe(
@@ -839,18 +751,10 @@ class StockSumReport(commands.Cog):
         filing_end="filing end date, YYYY-MM-DD",
         min_value="minimum reported holding value",
         min_shares="minimum shares/principal amount",
-        limit="maximum rows to return, 1-100",
-        format="report artifact format",
+        limit="maximum rows to return; uses stock-sum default if omitted",
         force_refresh="force latest SEC 13F dataset refresh before querying",
     )
     @app_commands.choices(
-        format=[
-            app_commands.Choice(name="Discord Markdown", value="discord"),
-            app_commands.Choice(name="HTML", value="html"),
-            app_commands.Choice(name="Markdown", value="markdown"),
-            app_commands.Choice(name="Text", value="text"),
-            app_commands.Choice(name="JSON", value="json"),
-        ],
         put_call=[
             app_commands.Choice(name="PUT", value="PUT"),
             app_commands.Choice(name="CALL", value="CALL"),
@@ -872,8 +776,7 @@ class StockSumReport(commands.Cog):
         filing_end: str = "",
         min_value: int | None = None,
         min_shares: int | None = None,
-        limit: int = 20,
-        format: str = "discord",
+        limit: int | None = None,
         force_refresh: bool = False,
     ) -> None:
         """Slash command handler for SEC 13F holdings reports."""
@@ -903,9 +806,6 @@ class StockSumReport(commands.Cog):
         if error:
             await _send_validation_error(interaction, error)
             return
-        if error := _validate_report_options(output_format=format):
-            await _send_validation_error(interaction, error)
-            return
         if put_call_filter and put_call_filter not in SUPPORTED_PUT_CALL:
             await _send_validation_error(interaction, "put_call must be PUT or CALL.")
             return
@@ -924,7 +824,7 @@ class StockSumReport(commands.Cog):
         if error := _validate_positive_int(min_shares, label="min_shares", allow_zero=True):
             await _send_validation_error(interaction, error)
             return
-        if error := _validate_positive_int(limit, label="limit", maximum=MAX_13F_LIMIT):
+        if error := _validate_positive_int(limit, label="limit"):
             await _send_validation_error(interaction, error)
             return
         if not any((manager_filter, issuer_filter, cik_filter, accession_filter, cusip_filter, figi_filter, put_call_filter, period_start_filter, period_end_filter, filing_start_filter, filing_end_filter, min_value is not None, min_shares is not None)):
@@ -940,7 +840,7 @@ class StockSumReport(commands.Cog):
         )
         try:
             artifact = await StockSumHttpClient.from_env().run_13f_report(
-                output_format=format,
+                output_format="discord",
                 manager=manager_filter,
                 issuer=issuer_filter,
                 cik=cik_filter,
@@ -969,14 +869,9 @@ class StockSumReport(commands.Cog):
             )
             return
 
-        if format == "discord":
-            report_text = artifact.content.decode("utf-8", errors="replace").strip()
-            for chunk in _split_discord_markdown(report_text):
-                await _send_report_output(interaction, chunk, private=False)
-            return
-
-        file = discord.File(BytesIO(artifact.content), filename=artifact.filename)
-        await _send_report_output(interaction, "Report generated.", private=False, file=file)
+        report_text = artifact.content.decode("utf-8", errors="replace").strip()
+        for chunk in _split_discord_markdown(report_text):
+            await _send_report_output(interaction, chunk, private=False)
 
     @app_commands.command(name="statistic", description="Generate a statistics chart. Provide ticker, fuzzy_search, name, asset_type, days, or dates.")
     @app_commands.describe(
@@ -986,7 +881,6 @@ class StockSumReport(commands.Cog):
         name="House filer name filter for trading mode",
         asset_type="House asset type code for trading mode, e.g. ST",
         action="House trading action filter",
-        profile="social profile, default",
         source="social source filter",
         sentiment="social sentiment filter",
         days="records within the last N days",
@@ -1034,7 +928,6 @@ class StockSumReport(commands.Cog):
         name: str = "",
         asset_type: str = "",
         action: str = "all",
-        profile: str = "default",
         source: str = "all",
         sentiment: str = "all",
         days: int | None = None,
@@ -1067,7 +960,6 @@ class StockSumReport(commands.Cog):
             return
         if error := _validate_statistic_options(
             mode=mode_filter,
-            profile=profile,
             ticker=ticker_filter,
             fuzzy_tag=fuzzy_search_filter,
             name=name_filter,
@@ -1090,7 +982,6 @@ class StockSumReport(commands.Cog):
                 selected_filters = await self._select_statistic_fuzzy_match(
                     interaction,
                     mode=mode_filter,
-                    profile=profile,
                     query=fuzzy_search_filter,
                 )
             except StockSumCogError as exc:
@@ -1116,7 +1007,6 @@ class StockSumReport(commands.Cog):
         try:
             artifact = await StockSumHttpClient.from_env().run_statistic(
                 mode=mode_filter,
-                profile=profile,
                 ticker=selected_filters.get("ticker") or ticker_filter,
                 fuzzy_tag=selected_filters.get("fuzzy_tag"),
                 name=name_filter,
@@ -1149,12 +1039,10 @@ class StockSumReport(commands.Cog):
         interaction,
         *,
         mode: str,
-        profile: str,
         query: str,
     ) -> dict[str, Any]:
         matches = await StockSumHttpClient.from_env().statistic_fuzzy_matches(
             mode=mode,
-            profile=profile,
             query=query,
             limit=len(FUZZY_REACTION_OPTIONS),
         )
@@ -1198,294 +1086,70 @@ class StockSumReport(commands.Cog):
         filters = selected.get("statistic_filters")
         return filters if isinstance(filters, dict) else {}
 
-    @profiles.command(name="list", description="List stock-sum profiles.")
-    async def profiles_list(self, interaction) -> None:
-        await self._send_api_json(interaction, "/v1/profiles", title="Profiles")
-
-    @profiles.command(name="show", description="Show one stock-sum profile.")
-    async def profiles_show(self, interaction, name: str = "default") -> None:
-        if error := _validate_profile_name(name, label="profile name"):
-            await _send_validation_error(interaction, error)
-            return
-        await self._send_api_json(interaction, f"/v1/profiles/{quote(name, safe='')}", title=f"Profile {name}")
-
-    @profiles.command(name="add", description="Add a stock-sum profile.")
-    async def profiles_add(
-        self,
-        interaction,
-        name: str,
-        collectors: str = "",
-    ) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_profile_name(name, label="profile name"):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_collector_ids(collectors):
-            await _send_validation_error(interaction, error)
-            return
-        payload = {
-            "name": name,
-            "collector_ids": _csv(collectors),
-        }
-        await self._send_api_json(interaction, "/v1/profiles", method="post", payload=payload, title=f"Added profile {name}", private=True)
-
-    @profiles.command(name="edit", description="Edit a stock-sum profile collector list.")
-    async def profiles_edit(self, interaction, name: str, collectors: str) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_profile_name(name, label="profile name"):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_collector_ids(collectors):
-            await _send_validation_error(interaction, error)
-            return
-        await self._send_api_json(
-            interaction,
-            f"/v1/profiles/{quote(name, safe='')}",
-            method="patch",
-            payload={"collector_ids": _csv(collectors)},
-            title=f"Updated profile {name}",
-            private=True,
-        )
-
-    @profiles.command(name="delete", description="Delete a stock-sum profile.")
-    async def profiles_delete(self, interaction, name: str) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_profile_name(name, label="profile name"):
-            await _send_validation_error(interaction, error)
-            return
-        await self._send_api_json(interaction, f"/v1/profiles/{quote(name, safe='')}", method="delete", title=f"Deleted profile {name}", private=True)
-
-    @sources.command(name="list", description="List configured report sources.")
-    async def sources_list(self, interaction) -> None:
-        await self._send_api_json(interaction, "/v1/sources", title="Sources")
-
-    @sources.command(name="add-x", description="Add an X user source.")
-    async def sources_add_x(
-        self,
-        interaction,
-        handle: str,
-        profile: str = "default",
-        limit: int = 100,
-        lookback_hours: int = 24,
-        enabled: bool = True,
-    ) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_x_handle(handle):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_profile_name(profile):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_positive_int(limit, label="limit", maximum=MAX_SOURCE_FETCH_LIMIT):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_positive_int(lookback_hours, label="lookback_hours", maximum=MAX_LOOKBACK_HOURS):
-            await _send_validation_error(interaction, error)
-            return
-        payload = {"handle": handle, "profile": profile, "limit": limit, "lookback_hours": lookback_hours, "enabled": enabled}
-        await self._send_api_json(interaction, "/v1/sources/x-users", method="post", payload=payload, title=f"Added X source {handle}", private=True)
-
-    @sources.command(name="delete-x", description="Delete an X user source.")
-    async def sources_delete_x(self, interaction, handle: str, profile: str = "default") -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_x_handle(handle):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_profile_name(profile):
-            await _send_validation_error(interaction, error)
-            return
-        path = f"/v1/sources/x-users/{quote(handle, safe='')}?profile={quote(profile, safe='')}"
-        await self._send_api_json(interaction, path, method="delete", title=f"Deleted X source {handle}", private=True)
-
-    @sources.command(name="add-reddit", description="Add a subreddit source.")
-    async def sources_add_reddit(
-        self,
-        interaction,
-        subreddit: str,
-        profile: str = "default",
-        limit: int = 100,
-        lookback_hours: int = 24,
-        include_comments: bool = True,
-        comments_per_post: int = 10,
-    ) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_subreddit(subreddit):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_profile_name(profile):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_positive_int(limit, label="limit", maximum=MAX_SOURCE_FETCH_LIMIT):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_positive_int(lookback_hours, label="lookback_hours", maximum=MAX_LOOKBACK_HOURS):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_positive_int(comments_per_post, label="comments_per_post", maximum=MAX_COMMENTS_PER_POST, allow_zero=True):
-            await _send_validation_error(interaction, error)
-            return
-        payload = {
-            "subreddit": subreddit,
-            "profile": profile,
-            "limit": limit,
-            "lookback_hours": lookback_hours,
-            "include_comments": include_comments,
-            "comments_per_post": comments_per_post,
-        }
-        await self._send_api_json(interaction, "/v1/sources/subreddits", method="post", payload=payload, title=f"Added subreddit {subreddit}", private=True)
-
-    @sources.command(name="delete-reddit", description="Delete a subreddit source.")
-    async def sources_delete_reddit(self, interaction, subreddit: str, profile: str = "default") -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_subreddit(subreddit):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_profile_name(profile):
-            await _send_validation_error(interaction, error)
-            return
-        path = f"/v1/sources/subreddits/{quote(subreddit, safe='')}?profile={quote(profile, safe='')}"
-        await self._send_api_json(interaction, path, method="delete", title=f"Deleted subreddit {subreddit}", private=True)
-
-    @sources.command(name="house-show", description="Show the House PTR disclosure source.")
-    async def sources_house_show(self, interaction) -> None:
-        await self._send_api_json(interaction, "/v1/sources/house-ptr", title="House PTR Source")
-
-    @sources.command(name="house-set", description="Configure the House PTR disclosure source.")
-    async def sources_house_set(
-        self,
-        interaction,
-        profile: str = "default",
-        enabled: bool = True,
-        year: int = 0,
-        refresh_ttl_seconds: int = 21600,
-        download_concurrency: int = 4,
-        parse_concurrency: int = 2,
-    ) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_profile_name(profile):
-            await _send_validation_error(interaction, error)
-            return
-        current_year = date.today().year
-        if year != 0 and (year < 2008 or year > current_year + 1):
-            await _send_validation_error(interaction, f"year must be 0 or between 2008 and {current_year + 1}.")
-            return
-        if error := _validate_positive_int(refresh_ttl_seconds, label="refresh_ttl_seconds", maximum=MAX_REFRESH_TTL_SECONDS, allow_zero=True):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_positive_int(download_concurrency, label="download_concurrency", maximum=MAX_CONCURRENCY):
-            await _send_validation_error(interaction, error)
-            return
-        if error := _validate_positive_int(parse_concurrency, label="parse_concurrency", maximum=MAX_CONCURRENCY):
-            await _send_validation_error(interaction, error)
-            return
-        payload = {
-            "profile": profile,
-            "enabled": enabled,
-            "year": year,
-            "refresh_ttl_seconds": refresh_ttl_seconds,
-            "download_concurrency": download_concurrency,
-            "parse_concurrency": parse_concurrency,
-        }
-        await self._send_api_json(interaction, "/v1/sources/house-ptr", method="patch", payload=payload, title="Updated House PTR source", private=True)
-
-    @llm.command(name="providers", description="List supported LLM providers.")
-    async def llm_providers(self, interaction) -> None:
-        await self._send_api_json(interaction, "/v1/llm/providers", title="LLM Providers")
-
-    @llm.command(name="show", description="Show current LLM config.")
-    async def llm_show(self, interaction) -> None:
-        await self._send_api_json(interaction, "/v1/llm/config", title="LLM Config")
-
-    @llm.command(name="select", description="Select the LLM provider/model.")
-    async def llm_select(self, interaction, provider: str, model: str = "") -> None:
-        if not await self._require_owner(interaction):
-            return
-        if not _PROFILE_RE.fullmatch(provider):
-            await _send_validation_error(interaction, "provider must use letters, numbers, dot, underscore, or dash.")
-            return
-        if model and len(model.strip()) > 128:
-            await _send_validation_error(interaction, "model must be 128 characters or less.")
-            return
-        payload = {"provider": provider}
-        if model:
-            payload["model"] = model
-        await self._send_api_json(interaction, "/v1/llm/config", method="patch", payload=payload, title="Updated LLM config", private=True)
-
-    @secrets.command(name="list", description="List configured secret names.")
-    async def secrets_list(self, interaction) -> None:
-        if not await self._require_owner(interaction):
-            return
-        await self._send_api_json(interaction, "/v1/secrets", title="Secrets", private=True)
-
-    @secrets.command(name="set", description="Set a stock-sum secret value.")
-    async def secrets_set(self, interaction, name: str, value: str) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_secret_name(name):
-            await _send_validation_error(interaction, error)
-            return
-        if not value:
-            await _send_validation_error(interaction, "secret value cannot be empty.")
-            return
-        await self._send_api_json(
-            interaction,
-            f"/v1/secrets/{quote(name, safe='')}",
-            method="put",
-            payload={"value": value},
-            title=f"Set secret {name}",
-            private=True,
-        )
-
-    @secrets.command(name="remove", description="Remove a stock-sum secret.")
-    async def secrets_remove(self, interaction, name: str) -> None:
-        if not await self._require_owner(interaction):
-            return
-        if error := _validate_secret_name(name):
-            await _send_validation_error(interaction, error)
-            return
-        await self._send_api_json(interaction, f"/v1/secrets/{quote(name, safe='')}", method="delete", title=f"Removed secret {name}", private=True)
-
-    @collect_group.command(name="profile", description="Run collection for one profile.")
-    async def collect_profile(self, interaction, profile: str = "default") -> None:
-        if error := _validate_profile_name(profile):
-            await _send_validation_error(interaction, error)
-            return
-        await interaction.response.send_message("Collection is running, please wait.", ephemeral=True)
+    @settings.command(name="list", description="List configured X and Reddit sources.")
+    async def settings_list(self, interaction) -> None:
         try:
-            payload = await StockSumHttpClient.from_env().run_collect_profile(profile=profile)
+            response = await StockSumHttpClient.from_env().get_json("/v1/sources")
         except StockSumCogError as exc:
-            await interaction.followup.send(_failure_message(exc), ephemeral=True, suppress_embeds=True)
+            await _send_command_output(interaction, _failure_message(exc), private=True)
             return
-        await interaction.followup.send(_format_json_message("Collection complete", payload), ephemeral=True, suppress_embeds=True)
+        await _send_command_output(interaction, _format_sources_message(response), private=False)
 
-    @setup.command(name="check", description="Check stock-sum setup.")
-    async def setup_check(self, interaction) -> None:
-        await self._send_api_json(interaction, "/v1/setup/check", title="Setup Check", private=True)
-
-    @retention.command(name="status", description="Show runtime data usage.")
-    async def retention_status(self, interaction) -> None:
-        await self._send_api_json(interaction, "/v1/retention/status", title="Retention Status")
-
-    @retention.command(name="prune", description="Prune runtime data.")
-    async def retention_prune(self, interaction, dry_run: bool = True) -> None:
+    @settings.command(name="add-x", description="Add an X user source, e.g. aleabitoreddit or @aleabitoreddit.")
+    @app_commands.describe(handle="X handle, e.g. aleabitoreddit or @aleabitoreddit")
+    async def settings_add_x(self, interaction, handle: str) -> None:
         if not await self._require_owner(interaction):
+            return
+        if error := _validate_x_handle(handle):
+            await _send_validation_error(interaction, error)
             return
         await self._send_api_json(
             interaction,
-            "/v1/retention/prune",
+            "/v1/sources/x-users",
             method="post",
-            payload={"dry_run": dry_run},
-            title="Retention Prune",
+            payload={"handle": handle},
+            title=f"Added X source {handle}",
             private=True,
         )
+
+    @settings.command(name="remove-x", description="Remove an X user source, e.g. aleabitoreddit or @aleabitoreddit.")
+    @app_commands.describe(handle="X handle, e.g. aleabitoreddit or @aleabitoreddit")
+    async def settings_remove_x(self, interaction, handle: str) -> None:
+        if not await self._require_owner(interaction):
+            return
+        if error := _validate_x_handle(handle):
+            await _send_validation_error(interaction, error)
+            return
+        path = f"/v1/sources/x-users/{quote(handle, safe='')}"
+        await self._send_api_json(interaction, path, method="delete", title=f"Removed X source {handle}", private=True)
+
+    @settings.command(name="add-reddit", description="Add a subreddit source, e.g. wallstreetbets or r/wallstreetbets.")
+    @app_commands.describe(subreddit="Subreddit name, e.g. wallstreetbets or r/wallstreetbets")
+    async def settings_add_reddit(self, interaction, subreddit: str) -> None:
+        if not await self._require_owner(interaction):
+            return
+        if error := _validate_subreddit(subreddit):
+            await _send_validation_error(interaction, error)
+            return
+        await self._send_api_json(
+            interaction,
+            "/v1/sources/subreddits",
+            method="post",
+            payload={"subreddit": subreddit},
+            title=f"Added subreddit {subreddit}",
+            private=True,
+        )
+
+    @settings.command(name="remove-reddit", description="Remove a subreddit source, e.g. wallstreetbets or r/wallstreetbets.")
+    @app_commands.describe(subreddit="Subreddit name, e.g. wallstreetbets or r/wallstreetbets")
+    async def settings_remove_reddit(self, interaction, subreddit: str) -> None:
+        if not await self._require_owner(interaction):
+            return
+        if error := _validate_subreddit(subreddit):
+            await _send_validation_error(interaction, error)
+            return
+        path = f"/v1/sources/subreddits/{quote(subreddit, safe='')}"
+        await self._send_api_json(interaction, path, method="delete", title=f"Removed subreddit {subreddit}", private=True)
 
     async def _require_owner(self, interaction) -> bool:
         checker = getattr(self.bot, "is_owner", None)
@@ -1514,10 +1178,6 @@ class StockSumReport(commands.Cog):
                 response = await client.get_json(path)
             elif method == "post":
                 response = await client.post_json(path, payload=payload)
-            elif method == "patch":
-                response = await client.patch_json(path, payload=payload or {})
-            elif method == "put":
-                response = await client.put_json(path, payload=payload or {})
             elif method == "delete":
                 response = await client.delete_json(path)
             else:
@@ -1556,20 +1216,6 @@ def _validate_report_options(*, output_format: str, detail: str | None = None) -
     return None
 
 
-def _validate_profile_name(value: str, *, label: str = "profile") -> str | None:
-    if not value or not _PROFILE_RE.fullmatch(value):
-        return f"{label} must be 1-64 characters using letters, numbers, dot, underscore, or dash."
-    return None
-
-
-def _validate_collector_ids(value: str) -> str | None:
-    collector_ids = _csv(value)
-    for collector_id in collector_ids:
-        if not _COLLECTOR_ID_RE.fullmatch(collector_id):
-            return "collector IDs must use only letters, numbers, dot, underscore, or dash."
-    return None
-
-
 def _validate_x_handle(value: str) -> str | None:
     if not _X_HANDLE_RE.fullmatch(value.strip()):
         return "X handle must be 1-15 characters using letters, numbers, or underscore, with optional @."
@@ -1579,12 +1225,6 @@ def _validate_x_handle(value: str) -> str | None:
 def _validate_subreddit(value: str) -> str | None:
     if not _SUBREDDIT_RE.fullmatch(value.strip()):
         return "Subreddit must be 2-21 characters using letters, numbers, or underscore, with optional r/ prefix."
-    return None
-
-
-def _validate_secret_name(value: str) -> str | None:
-    if not _SECRET_NAME_RE.fullmatch(value.strip()):
-        return "Secret name must be an environment variable name like XPOZ_API_KEY."
     return None
 
 
@@ -1647,7 +1287,6 @@ def _validate_ticker(value: str | None) -> str | None:
 def _validate_statistic_options(
     *,
     mode: str,
-    profile: str,
     ticker: str | None,
     fuzzy_tag: str | None,
     name: str | None,
@@ -1663,8 +1302,6 @@ def _validate_statistic_options(
 ) -> str | None:
     if mode not in SUPPORTED_STATISTIC_MODES:
         return "statistic mode must be social or trading."
-    if error := _validate_profile_name(profile):
-        return error
     if error := _validate_ticker(ticker):
         return error
     if error := _validate_asset_type(asset_type):
@@ -1821,14 +1458,60 @@ def _format_json_message(title: str, payload: dict[str, Any]) -> str:
     return f"**{title}**\n```json\n{text[: DISCORD_INLINE_LIMIT - len(title) - 24].rstrip()}...\n```"
 
 
+def _format_sources_message(payload: dict[str, Any]) -> str:
+    x_users = payload.get("x_users")
+    subreddits = payload.get("subreddits")
+    lines = ["**Stock-Sum Sources**", "", "**X users**"]
+    if isinstance(x_users, list) and x_users:
+        for source in x_users:
+            if isinstance(source, dict):
+                handle = str(source.get("handle") or "").lstrip("@")
+                state = "enabled" if source.get("enabled", True) else "disabled"
+                limit = source.get("limit")
+                lookback = source.get("lookback_hours")
+                details = _compact_detail([state, _kv("fetch cap", limit), _kv("lookback", f"{lookback}h" if lookback is not None else None)])
+                lines.append(f"- @{handle}{details}")
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "**Subreddits**"])
+    if isinstance(subreddits, list) and subreddits:
+        for source in subreddits:
+            if isinstance(source, dict):
+                subreddit = str(source.get("subreddit") or "").removeprefix("r/")
+                state = "enabled" if source.get("enabled", True) else "disabled"
+                limit = source.get("limit")
+                lookback = source.get("lookback_hours")
+                comments = source.get("comments_per_post")
+                details = _compact_detail(
+                    [
+                        state,
+                        _kv("fetch cap", limit),
+                        _kv("lookback", f"{lookback}h" if lookback is not None else None),
+                        _kv("comments", comments),
+                    ]
+                )
+                lines.append(f"- r/{subreddit}{details}")
+    else:
+        lines.append("- none")
+    return "\n".join(lines)
+
+
+def _kv(label: str, value: Any | None) -> str | None:
+    if value is None:
+        return None
+    return f"{label}: {value}"
+
+
+def _compact_detail(parts: list[str | None]) -> str:
+    clean = [part for part in parts if part]
+    return f" ({', '.join(clean)})" if clean else ""
+
+
 def json_dumps_compact(payload: dict[str, Any]) -> str:
     import json
 
     return json.dumps(payload, indent=2, ensure_ascii=False)
-
-
-def _csv(value: str) -> list[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _split_discord_markdown(content: str, *, limit: int = DISCORD_INLINE_LIMIT) -> list[str]:

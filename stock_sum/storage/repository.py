@@ -31,7 +31,6 @@ class StorageRepository(Protocol):
         *,
         run_id: str,
         collector_id: str,
-        profile: str | None = None,
         source_type: str | None = None,
     ) -> None:
         """Record a collection run start."""
@@ -65,7 +64,6 @@ class StorageRepository(Protocol):
         self,
         *,
         analysis_run_id: str,
-        profile: str,
         provider: str,
         model: str,
         prompt_version: str,
@@ -94,13 +92,12 @@ class StorageRepository(Protocol):
     async def save_llm_reddit_comment_analyses(self, rows: list[dict]) -> None:
         """Persist Reddit comment analysis rows."""
 
-    async def read_llm_analysis_report(self, *, profile: str, analysis_run_id: str | None = None) -> dict:
+    async def read_llm_analysis_report(self, *, analysis_run_id: str | None = None) -> dict:
         """Read stored analysis rows as a renderer-ready summary object."""
 
     async def read_llm_social_posts_by_ticker(
         self,
         *,
-        profile: str,
         ticker: str,
         analysis_run_id: str | None = None,
     ) -> list[dict]:
@@ -109,7 +106,6 @@ class StorageRepository(Protocol):
     async def read_social_statistic_points(
         self,
         *,
-        profile: str,
         ticker: str | None = None,
         fuzzy_tag: str | None = None,
         source: str | None = None,
@@ -123,13 +119,12 @@ class StorageRepository(Protocol):
     async def search_social_statistic_tags(
         self,
         *,
-        profile: str,
         query: str,
         limit: int = 5,
     ) -> list[StoredStatisticFuzzyMatch]:
         """Return tag candidates for social statistic fuzzy search."""
 
-    async def list_collection_runs(self, *, profile: str | None = None, limit: int | None = None) -> list[StoredCollectionRun]:
+    async def list_collection_runs(self, *, limit: int | None = None) -> list[StoredCollectionRun]:
         """Return stored collection runs."""
 
     async def read_x_posts(

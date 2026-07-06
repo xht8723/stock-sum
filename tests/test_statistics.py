@@ -96,7 +96,6 @@ def test_trading_statistic_uses_requested_window_for_buckets() -> None:
 def _social_point(posted_at: str, sentiment: str, *, source: str) -> StoredSocialStatisticPoint:
     return StoredSocialStatisticPoint(
         source=source,
-        profile="default",
         ticker="NVDA",
         source_id=f"{source}-{posted_at}",
         source_ref=f"{source}1",

@@ -80,9 +80,9 @@ class PipelineSectionWarning:
 
 @dataclass(frozen=True)
 class PipelineCollectionResult:
-    """Collection-only result for a report profile run."""
+    """Collection-only result for a unified pipeline run."""
 
-    profile: str
+    scope: str
     runs: list[CollectionRunResult]
     warnings: list[PipelineSectionWarning] = field(default_factory=list)
 

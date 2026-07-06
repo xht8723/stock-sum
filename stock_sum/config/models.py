@@ -99,12 +99,6 @@ class LLMConfig(BaseModel):
     analysis_max_concurrency: int = Field(default=1, ge=1)
 
 
-class ReportProfileConfig(BaseModel):
-    """A manually requested report profile."""
-
-    collector_ids: list[str] = Field(default_factory=list)
-
-
 class CollectorConfig(BaseModel):
     """Generic collector configuration block."""
 
@@ -193,6 +187,5 @@ class AppConfig(BaseModel):
     models_dev: ModelsDevConfig = Field(default_factory=ModelsDevConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     llm: LLMConfig
-    reports: dict[str, ReportProfileConfig] = Field(default_factory=dict)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     collectors: dict[str, dict[str, CollectorConfig]] = Field(default_factory=dict)

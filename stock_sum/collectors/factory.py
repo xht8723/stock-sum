@@ -78,6 +78,19 @@ def build_collector(config: AppConfig, collector_id: str) -> Collector:
     raise ConfigurationError(f"No collector implementation registered for kind: {collector_config.kind}")
 
 
+def social_collector_ids(config: AppConfig) -> list[str]:
+    """Return enabled X and Reddit collector IDs for the unified social report."""
+
+    collector_ids: list[str] = []
+    for source in config.sources.x_users:
+        if source.enabled:
+            collector_ids.append(f"x.{_source_id(source.handle)}")
+    for source in config.sources.subreddits:
+        if source.enabled:
+            collector_ids.append(f"reddit.{_source_id(source.subreddit)}")
+    return collector_ids
+
+
 def _get_source_list_collector_config(config: AppConfig, group: str, name: str) -> CollectorConfig | None:
     if group == "x":
         for source in config.sources.x_users:

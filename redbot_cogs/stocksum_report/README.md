@@ -1,8 +1,8 @@
 # stocksum_report
 
 Red Discord Bot cog that exposes `/socialreport`, `/tradingreport`,
-`/13freport`, and `/statistic`, then bridges those slash commands to the local
-`stock-sum` HTTP server.
+`/13freport`, `/statistic`, and `/settings`, then bridges those slash commands
+to the local `stock-sum` HTTP server.
 
 ## Environment
 
@@ -27,11 +27,14 @@ From Red:
 Then sync slash commands with Red's slash-command management command and run:
 
 ```text
-/socialreport profile:default detail:minimum
+/socialreport detail:minimum
 /tradingreport days:30
 /13freport issuer:NVIDIA
 /statistic mode:social ticker:NVDA days:30
 /statistic mode:social fuzzy_search:nvidia days:30
+/settings list
+/settings add-x handle:aleabitoreddit
+/settings add-reddit subreddit:wallstreetbets
 ```
 
 `/socialreport` generates X/Reddit social sentiment reports with LLM analysis.
@@ -41,11 +44,13 @@ posts. Use `medium` for high plus medium, or `full` for all social posts.
 SQLite without LLM analysis; it requires at least one filter such as `name`,
 `days`, a transaction-date range, `asset_type`, or `ticker`. Asset type filters
 use House codes such as `ST`, `GS`, `OI`, `CS`, and `OT`; ticker filters apply
-to `ST` stock rows.
+to `ST` stock rows. If `limit` is omitted, stock-sum applies its server-side
+default.
 `/13freport` generates official SEC Form 13F holdings reports from the latest
 quarterly SEC dataset in SQLite without LLM analysis. It requires at least one
 filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
-`min_value`, or `min_shares`.
+`min_value`, or `min_shares`. If `limit` is omitted, stock-sum applies its
+server-side default.
 `/statistic` generates a PNG chart from existing SQLite data. Use
 `mode:social` for X/Reddit sentiment over time or `mode:trading` for House PTR
 purchase/sale activity over time. It requires at least one filter such as
@@ -54,39 +59,33 @@ Use `fuzzy_search` instead of `ticker` to choose from numbered emoji matches:
 social mode matches stored LLM tags, while trading mode matches House PTR asset
 names. Do not provide both `ticker` and `fuzzy_search`.
 
-The default format for report commands is Discord-specific markdown and is sent
-inline in message chunks. Choose `html`, `markdown`, `text`, or `json` to
-receive the report as a file attachment instead.
+Report commands always use Discord-specific markdown and are sent inline in
+message chunks.
 Statistic output is always a PNG file attachment.
 
 Slash commands validate common input mistakes before calling stock-sum:
-malformed dates, invalid source names, unsupported report formats, invalid
-asset/ticker identifiers, and out-of-range numeric limits return an immediate
-validation error message.
+malformed dates, invalid source names, invalid asset/ticker identifiers, and
+out-of-range numeric limits return an immediate validation error message.
 
 The cog polls stock-sum job status once per minute while a report is running.
-Report and statistic commands post publicly. Secret and owner-only management
-commands still respond privately.
+Report and statistic commands post publicly. Source mutation settings commands
+are restricted to Redbot owners and respond privately.
 
-## Management Commands
+## Settings Commands
 
-The cog also exposes a `/stocksum` command group that calls the local management
-API:
+The cog exposes a small `/settings` command group for X/Reddit social sources:
 
 ```text
-/stocksum profiles list
-/stocksum sources list
-/stocksum sources add-x handle:aleabitoreddit limit:100 lookback_hours:24
-/stocksum sources add-reddit subreddit:wallstreetbets limit:100 lookback_hours:24
-/stocksum llm providers
-/stocksum llm select provider:deepseek
-/stocksum secrets list
-/stocksum secrets set name:XPOZ_API_KEY value:...
-/stocksum collect profile profile:default
-/stocksum setup check
-/stocksum retention status
+/settings list
+/settings add-x handle:aleabitoreddit
+/settings add-x handle:@aleabitoreddit
+/settings remove-x handle:aleabitoreddit
+/settings add-reddit subreddit:wallstreetbets
+/settings add-reddit subreddit:r/wallstreetbets
+/settings remove-reddit subreddit:wallstreetbets
 ```
 
-Read-only commands can be used by normal Discord users. Commands that mutate
-config, write secrets, or prune data are restricted to Redbot owners and respond
-privately.
+`/settings list` can be used by normal Discord users and labels X users and
+subreddits separately. Add/remove commands are restricted to Redbot owners and
+respond privately. LLM provider changes and secret updates are handled through
+the stock-sum CLI/env files, not Discord.

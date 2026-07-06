@@ -12,7 +12,7 @@ import sys
 
 from stock_sum.api.jobs import (
     HttpJobManager,
-    ReportJobOptions,
+    SocialReportJobOptions,
     Sec13FReportJobOptions,
     StatisticJobOptions,
     TradingReportJobOptions,
@@ -48,8 +48,8 @@ async def _run_request(path: Path) -> int:
 
 async def _run_http_operation(config: AppConfig, operation: str, job_id: str, payload: dict[str, Any]) -> None:
     manager = HttpJobManager(config, use_subprocess_workers=False, recover_stale_jobs=False)
-    if operation == "http_report":
-        await manager._run_report_job_in_process(job_id, ReportJobOptions(**payload["options"]))
+    if operation == "http_social_report":
+        await manager._run_social_report_job_in_process(job_id, SocialReportJobOptions(**payload["options"]))
         return
     if operation == "http_trading_report":
         await manager._run_trading_report_job_in_process(job_id, TradingReportJobOptions(**payload["options"]))
@@ -63,21 +63,21 @@ async def _run_http_operation(config: AppConfig, operation: str, job_id: str, pa
     if operation == "http_collect":
         await manager._run_collect_job_in_process(job_id)
         return
-    if operation == "http_render_cached_report":
-        await _run_render_cached_report(manager, job_id, payload)
+    if operation == "http_render_cached_social_report":
+        await _run_render_cached_social_report(manager, job_id, payload)
         return
-    if operation == "http_render_coalesced_report":
-        await _run_render_coalesced_report(manager, job_id, payload)
+    if operation == "http_render_coalesced_social_report":
+        await _run_render_coalesced_social_report(manager, job_id, payload)
         return
     raise ValueError(f"Unknown HTTP worker operation: {operation}")
 
 
-async def _run_render_cached_report(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
+async def _run_render_cached_social_report(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
     try:
         cache_hit = manager.get_job(str(payload["cache_hit_job_id"]))
         if cache_hit is None:
             raise RuntimeError(f"Cached report job not found: {payload['cache_hit_job_id']}")
-        manager._write_cached_report_artifacts(job_id, cache_hit, ReportJobOptions(**payload["options"]))
+        manager._write_cached_social_report_artifacts(job_id, cache_hit, SocialReportJobOptions(**payload["options"]))
     except Exception as exc:
         manager._mark_failed(job_id, str(exc))
     finally:
@@ -85,7 +85,7 @@ async def _run_render_cached_report(manager: HttpJobManager, job_id: str, payloa
         manager._refresh_memory_status(job_id)
 
 
-async def _run_render_coalesced_report(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
+async def _run_render_coalesced_social_report(manager: HttpJobManager, job_id: str, payload: dict[str, Any]) -> None:
     try:
         leader = manager.get_job(str(payload["leader_job_id"]))
         if leader is None:
@@ -93,7 +93,7 @@ async def _run_render_coalesced_report(manager: HttpJobManager, job_id: str, pay
         manager._write_coalesced_report_artifacts(
             job_id=job_id,
             leader=leader,
-            options=ReportJobOptions(**payload["options"]),
+            options=SocialReportJobOptions(**payload["options"]),
             wait_seconds=int(payload.get("wait_seconds") or 0),
         )
     except Exception as exc:
@@ -104,9 +104,6 @@ async def _run_render_coalesced_report(manager: HttpJobManager, job_id: str, pay
 
 
 async def _run_cli_operation(config: AppConfig, operation: str, payload: dict[str, Any]) -> None:
-    if operation == "cli_run_report":
-        await _cli_run_report(config, payload)
-        return
     if operation == "cli_collect":
         await _cli_collect(config, payload)
         return
@@ -119,15 +116,6 @@ async def _run_cli_operation(config: AppConfig, operation: str, payload: dict[st
     raise ValueError(f"Unknown CLI worker operation: {operation}")
 
 
-async def _cli_run_report(config: AppConfig, payload: dict[str, Any]) -> None:
-    from stock_sum.core.context import RuntimeContext
-    from stock_sum.core.pipeline import ReportPipeline
-
-    result = await ReportPipeline(RuntimeContext(config=config)).run_report(str(payload["profile"]))
-    await _retention_after_pipeline(config)
-    print(json.dumps(_pipeline_result_to_jsonable(result), indent=2, ensure_ascii=False))
-
-
 async def _cli_collect(config: AppConfig, payload: dict[str, Any]) -> None:
     from stock_sum.core.context import RuntimeContext
     from stock_sum.core.pipeline import ReportPipeline
@@ -138,7 +126,7 @@ async def _cli_collect(config: AppConfig, payload: dict[str, Any]) -> None:
         await _retention_after_pipeline(config)
         print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
         return
-    result = await pipeline.run_report(str(payload["profile"]))
+    result = await pipeline.collect_sources(scope="social")
     await _retention_after_pipeline(config)
     print(json.dumps(_pipeline_result_to_jsonable(result), indent=2, ensure_ascii=False))
 
@@ -153,10 +141,7 @@ async def _cli_llm_summarize(config: AppConfig, payload: dict[str, Any]) -> None
         payload_data = json.loads(Path(payload_path).read_text(encoding="utf-8"))
     else:
         repository = SQLiteStorageRepository(config.storage.sqlite_path)
-        summary_input = await SummaryInputBuilder(config=config, repository=repository).build(
-            profile=str(payload["profile"]),
-            download_images=False,
-        )
+        summary_input = await SummaryInputBuilder(config=config, repository=repository).build(download_images=False)
         payload_data = summary_input.to_dict(
             mode="compact",
             max_images_per_post=int(payload["max_images_per_post"]),
@@ -164,7 +149,7 @@ async def _cli_llm_summarize(config: AppConfig, payload: dict[str, Any]) -> None
         )
     summary = await build_llm_client(config.llm).summarize(payload_data, instructions=payload.get("instructions"))
     response_data = {
-        "profile": payload["profile"],
+        "report_type": "social",
         "provider": config.llm.provider,
         "model": summary.model,
         "summary_text": summary.text,
@@ -185,10 +170,7 @@ async def _cli_llm_analyze(config: AppConfig, payload: dict[str, Any]) -> None:
     from stock_sum.storage.sqlite import SQLiteStorageRepository
 
     repository = SQLiteStorageRepository(config.storage.sqlite_path)
-    summary_input = await SummaryInputBuilder(config=config, repository=repository).build(
-        profile=str(payload["profile"]),
-        download_images=False,
-    )
+    summary_input = await SummaryInputBuilder(config=config, repository=repository).build(download_images=False)
     result = await LLMAnalysisService(
         config=config,
         repository=repository,
@@ -200,7 +182,7 @@ async def _cli_llm_analyze(config: AppConfig, payload: dict[str, Any]) -> None:
         max_images_total=int(payload["max_images_total"]),
     )
     response_data = {
-        "profile": payload["profile"],
+        "report_type": "social",
         "provider": config.llm.provider,
         "model": result.model,
         "summary_text": json.dumps(result.summary, ensure_ascii=False),

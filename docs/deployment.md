@@ -122,11 +122,18 @@ STOCK_SUM_BASE_URL=http://127.0.0.1:8000
 
 The cog uses:
 
-- `POST /v1/social-reports/{profile}/jobs/{mode}`
+- `POST /v1/social-reports/jobs/{mode}`
 - `POST /v1/trading-reports/jobs/{mode}`
 - `POST /v1/13f-reports/jobs/{mode}`
+- `POST /v1/statistics/jobs`
+- `GET /v1/statistics/fuzzy-matches`
 - `GET /v1/jobs/{job_id}`
 - `GET /v1/jobs/{job_id}/artifact`
+- `GET /v1/sources`
+- `POST /v1/sources/x-users`
+- `DELETE /v1/sources/x-users/{handle}`
+- `POST /v1/sources/subreddits`
+- `DELETE /v1/sources/subreddits/{subreddit}`
 
 ## Operations
 
@@ -140,7 +147,7 @@ curl http://127.0.0.1:8000/v1/config/effective
 Run a social report:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/v1/social-reports/default/jobs/discord \
+curl -X POST http://127.0.0.1:8000/v1/social-reports/jobs/discord \
   -H 'Content-Type: application/json' \
   -d '{"detail":"minimum"}'
 ```

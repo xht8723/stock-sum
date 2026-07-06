@@ -111,7 +111,7 @@ async def test_llm_analysis_runs_chunks_with_bounded_concurrency() -> None:
         llm_client=llm,
     )
     summary_input = SummaryInput(
-        profile="default",
+        report_type="social",
         generated_at="2026-06-30T00:00:00+00:00",
         collection_runs=[],
         x=[
@@ -210,5 +210,5 @@ class FakeAnalysisRepository:
     async def save_llm_reddit_comment_analyses(self, rows):
         self.reddit_comment_rows.extend(rows)
 
-    async def read_llm_analysis_report(self, *, profile: str, analysis_run_id: str | None = None) -> dict:
+    async def read_llm_analysis_report(self, *, analysis_run_id: str | None = None) -> dict:
         return {"x_reports": [], "reddit_report": {"overall_summary": [], "posts": []}}

@@ -47,7 +47,6 @@ class StoredCollectionRun:
     """Stored collection run metadata."""
 
     run_id: str
-    profile: str | None
     collector_id: str
     source_type: str | None
     status: str
@@ -186,7 +185,6 @@ class StoredSocialStatisticPoint:
     """Analyzed social post point for statistic charting."""
 
     source: str
-    profile: str
     ticker: str | None
     source_id: str
     source_ref: str

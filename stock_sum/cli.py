@@ -26,18 +26,13 @@ from stock_sum.config.secrets import (
     write_env_file,
 )
 from stock_sum.config.writer import (
-    add_profile,
     add_subreddit,
     add_x_user,
-    delete_profile,
     delete_subreddit,
     delete_x_user,
-    edit_profile,
     get_house_ptr_source,
     get_dotted_value,
-    get_profile,
     list_subreddits,
-    list_profiles,
     list_x_users,
     read_toml_document,
     set_house_ptr_source,
@@ -63,7 +58,6 @@ app = typer.Typer(help="Trading information summarization service.")
 config_app = typer.Typer(help="Manage TOML configuration.")
 setup_app = typer.Typer(help="First-run setup and environment validation.")
 secrets_app = typer.Typer(help="Manage local env-file secrets.")
-profile_app = typer.Typer(help="Manage report profiles in TOML configuration.")
 x_user_app = typer.Typer(help="Manage X user sources in TOML configuration.")
 subreddit_app = typer.Typer(help="Manage subreddit sources in TOML configuration.")
 house_ptr_app = typer.Typer(help="Manage House PTR disclosure source in TOML configuration.")
@@ -80,7 +74,6 @@ app.add_typer(llm_app, name="llm")
 app.add_typer(report_app, name="report")
 app.add_typer(retention_app, name="retention")
 app.add_typer(database_app, name="database")
-config_app.add_typer(profile_app, name="profile")
 config_app.add_typer(x_user_app, name="x-user")
 config_app.add_typer(subreddit_app, name="subreddit")
 config_app.add_typer(house_ptr_app, name="house-ptr")
@@ -165,12 +158,6 @@ def _pipeline_result_to_jsonable(result: PipelineCollectionResult) -> dict[str, 
     data["inserted_count"] = result.inserted_count
     data["updated_count"] = result.updated_count
     return data
-
-
-def _split_csv(value: str | None) -> list[str] | None:
-    if value is None:
-        return None
-    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _load_env_file(path: Path = Path(".env"), *, override: bool = False) -> None:
@@ -340,27 +327,9 @@ def _run_retention_after_pipeline(settings) -> RetentionSummary | None:
     return summary
 
 
-@app.command("run-report")
-def run_report(
-    profile: str = typer.Option(..., "--profile", "-p", help="Report profile name."),
-    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
-    env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
-) -> None:
-    """Manually request a report pipeline run."""
-
-    config = _resolve_config_option(config)
-    env_file = _resolve_env_file_option(env_file)
-    _load_env_file(env_file)
-    settings = load_config(config)
-    code = run_cli_worker(settings, "cli_run_report", {"profile": profile})
-    if code != 0:
-        raise typer.Exit(code=code)
-
-
 @app.command()
 def collect(
     collector: str | None = typer.Option(None, "--collector", help="Configured collector id to run."),
-    profile: str | None = typer.Option(None, "--profile", help="Configured report profile whose collectors should run."),
     config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
 ) -> None:
@@ -369,11 +338,9 @@ def collect(
     config = _resolve_config_option(config)
     env_file = _resolve_env_file_option(env_file)
     _load_env_file(env_file)
-    if bool(collector) == bool(profile):
-        raise typer.BadParameter("Pass exactly one of --collector or --profile.")
 
     settings = load_config(config)
-    code = run_cli_worker(settings, "cli_collect", {"collector": collector, "profile": profile})
+    code = run_cli_worker(settings, "cli_collect", {"collector": collector})
     if code != 0:
         raise typer.Exit(code=code)
 
@@ -415,8 +382,8 @@ def setup_init(
     llm_provider: str | None = typer.Option(None, "--llm-provider", help="LLM provider id."),
     xpoz_api_key: str | None = typer.Option(None, "--xpoz-api-key", help="Xpoz API key to store in env file."),
     llm_api_key: str | None = typer.Option(None, "--llm-api-key", help="LLM API key to store in env file."),
-    x_user: str | None = typer.Option(None, "--x-user", help="Optional first X handle to add to default profile."),
-    subreddit: str | None = typer.Option(None, "--subreddit", help="Optional first subreddit to add to default profile."),
+    x_user: str | None = typer.Option(None, "--x-user", help="Optional first X handle to collect."),
+    subreddit: str | None = typer.Option(None, "--subreddit", help="Optional first subreddit to collect."),
 ) -> None:
     """Run the first-time interactive setup wizard."""
 
@@ -475,7 +442,7 @@ def setup_init(
         subreddit = typer.prompt("First subreddit to collect (blank to skip)", default=subreddit or "")
     try:
         if x_user:
-            add_x_user(config, x_user, enabled=True, limit=100, lookback_hours=24, profile="default", overwrite=True)
+            add_x_user(config, x_user, enabled=True, limit=100, lookback_hours=24, overwrite=True)
         if subreddit:
             add_subreddit(
                 config,
@@ -488,7 +455,6 @@ def setup_init(
                 trim=True,
                 include_comments=True,
                 comments_per_post=10,
-                profile="default",
                 overwrite=True,
             )
     except (KeyError, ValueError) as exc:
@@ -501,7 +467,7 @@ def setup_init(
     console.print("Next steps:")
     console.print(f"1. Validate setup: stock-sum setup check --config {config} --env-file {env_file}")
     console.print(f"2. Start service: stock-sum daemon --config {config}")
-    console.print("3. Request social report: POST /v1/social-reports/default/jobs or use Redbot /socialreport.")
+    console.print("3. Request social report: POST /v1/social-reports/jobs or use Redbot /socialreport.")
     console.print("4. Request trading report: POST /v1/trading-reports/jobs or use Redbot /tradingreport.")
 
 
@@ -613,7 +579,6 @@ def secrets_remove(
 
 @payload_app.command("build")
 def payload_build(
-    profile: str = typer.Option(..., "--profile", "-p", help="Report profile name."),
     output: Path = typer.Option(..., "--output", "-o", help="JSON output path."),
     config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     download_images: bool = typer.Option(
@@ -634,7 +599,7 @@ def payload_build(
     builder = SummaryInputBuilder(config=settings, repository=repository, downloader=downloader)
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        payload = asyncio.run(builder.build(profile=profile, download_images=download_images))
+        payload = asyncio.run(builder.build(download_images=download_images))
         payload_data = payload.to_dict(
             mode=mode,
             max_images_per_post=max_images_per_post,
@@ -724,7 +689,6 @@ def database_reset(
 
 @llm_app.command("summarize")
 def llm_summarize(
-    profile: str = typer.Option("default", "--profile", "-p", help="Report profile name."),
     payload: Path | None = typer.Option(None, "--payload", help="Existing compact/vision payload JSON file."),
     output: Path = typer.Option(..., "--output", "-o", help="Summary response JSON output path."),
     config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
@@ -743,7 +707,6 @@ def llm_summarize(
         settings,
         "cli_llm_summarize",
         {
-            "profile": profile,
             "payload_path": str(payload) if payload is not None else None,
             "output_path": str(output),
             "instructions": instructions,
@@ -757,7 +720,6 @@ def llm_summarize(
 
 @llm_app.command("analyze")
 def llm_analyze(
-    profile: str = typer.Option("default", "--profile", "-p", help="Report profile name."),
     output: Path = typer.Option(..., "--output", "-o", help="Analysis summary JSON output path."),
     config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
     env_file: Path | None = typer.Option(None, "--env-file", help="Env file path. Defaults to remembered setup path, then .env."),
@@ -775,7 +737,6 @@ def llm_analyze(
         settings,
         "cli_llm_analyze",
         {
-            "profile": profile,
             "output_path": str(output),
             "instructions": instructions,
             "max_images_per_post": max_images_per_post,
@@ -891,93 +852,6 @@ def config_sync(
     console.print(f"models.dev catalog cached from {cache_entry.source_url}")
 
 
-@profile_app.command("list")
-def profile_list(config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config.")) -> None:
-    """List report profile names."""
-
-    config = _resolve_config_option(config)
-    console.print_json(json.dumps({"profiles": list_profiles(config)}))
-
-
-@profile_app.command("show")
-def profile_show(
-    name: str = typer.Argument(..., help="Profile name."),
-    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
-) -> None:
-    """Show one report profile."""
-
-    config = _resolve_config_option(config)
-    try:
-        profile = get_profile(config, name)
-    except KeyError as exc:
-        console.print(str(exc))
-        raise typer.Exit(code=1) from exc
-    console.print_json(json.dumps({"name": name, "profile": profile}))
-
-
-@profile_app.command("add")
-def profile_add(
-    name: str = typer.Argument(..., help="Profile name."),
-    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
-    collectors: str = typer.Option("", "--collectors", help="Comma-separated collector ids."),
-    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing profile."),
-) -> None:
-    """Add a report profile."""
-
-    config = _resolve_config_option(config)
-    try:
-        add_profile(
-            config,
-            name,
-            collector_ids=_split_csv(collectors) or [],
-            overwrite=overwrite,
-        )
-    except KeyError as exc:
-        console.print(str(exc))
-        raise typer.Exit(code=1) from exc
-    load_config(config)
-    console.print(f"Added profile {name}.")
-
-
-@profile_app.command("edit")
-def profile_edit(
-    name: str = typer.Argument(..., help="Profile name."),
-    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
-    collectors: str | None = typer.Option(None, "--collectors", help="Comma-separated collector ids."),
-) -> None:
-    """Edit a report profile."""
-
-    config = _resolve_config_option(config)
-    try:
-        edit_profile(
-            config,
-            name,
-            collector_ids=_split_csv(collectors),
-        )
-    except KeyError as exc:
-        console.print(str(exc))
-        raise typer.Exit(code=1) from exc
-    load_config(config)
-    console.print(f"Updated profile {name}.")
-
-
-@profile_app.command("delete")
-def profile_delete(
-    name: str = typer.Argument(..., help="Profile name."),
-    config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
-) -> None:
-    """Delete a report profile."""
-
-    config = _resolve_config_option(config)
-    try:
-        delete_profile(config, name)
-    except KeyError as exc:
-        console.print(str(exc))
-        raise typer.Exit(code=1) from exc
-    load_config(config)
-    console.print(f"Deleted profile {name}.")
-
-
 @x_user_app.command("list")
 def x_user_list(config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config.")) -> None:
     """List X user sources."""
@@ -993,7 +867,6 @@ def x_user_add(
     limit: int = typer.Option(100, "--limit", min=1, help="Provider fetch cap before 24-hour filtering."),
     lookback_hours: int = typer.Option(24, "--lookback-hours", min=1, help="Only keep posts from this many recent hours."),
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether this source can be collected."),
-    profile: str | None = typer.Option(None, "--profile", help="Also add x.<handle> to this report profile."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing source."),
 ) -> None:
     """Add an X user source."""
@@ -1006,7 +879,6 @@ def x_user_add(
             enabled=enabled,
             limit=limit,
             lookback_hours=lookback_hours,
-            profile=profile,
             overwrite=overwrite,
         )
     except (KeyError, ValueError) as exc:
@@ -1020,13 +892,12 @@ def x_user_add(
 def x_user_delete(
     handle: str = typer.Argument(..., help="X handle, with or without @."),
     config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
-    profile: str | None = typer.Option(None, "--profile", help="Also remove x.<handle> from this report profile."),
 ) -> None:
     """Delete an X user source."""
 
     config = _resolve_config_option(config)
     try:
-        collector_id = delete_x_user(config, handle, profile=profile)
+        collector_id = delete_x_user(config, handle)
     except KeyError as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
@@ -1054,7 +925,6 @@ def subreddit_add(
     trim: bool = typer.Option(True, "--trim/--no-trim", help="Request trimmed provider responses."),
     include_comments: bool = typer.Option(True, "--include-comments/--no-comments", help="Collect comments too."),
     comments_per_post: int = typer.Option(10, "--comments-per-post", min=0, help="Maximum comments per post."),
-    profile: str | None = typer.Option(None, "--profile", help="Also add reddit.<subreddit> to this report profile."),
     overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing source."),
 ) -> None:
     """Add a subreddit source."""
@@ -1072,7 +942,6 @@ def subreddit_add(
             trim=trim,
             include_comments=include_comments,
             comments_per_post=comments_per_post,
-            profile=profile,
             overwrite=overwrite,
         )
     except (KeyError, ValueError) as exc:
@@ -1086,17 +955,12 @@ def subreddit_add(
 def subreddit_delete(
     subreddit: str = typer.Argument(..., help="Subreddit name, with or without r/."),
     config: Path | None = typer.Option(None, "--config", "-c", help="Config path. Defaults to remembered setup path, then example config."),
-    profile: str | None = typer.Option(
-        None,
-        "--profile",
-        help="Also remove reddit.<subreddit> from this report profile.",
-    ),
 ) -> None:
     """Delete a subreddit source."""
 
     config = _resolve_config_option(config)
     try:
-        collector_id = delete_subreddit(config, subreddit, profile=profile)
+        collector_id = delete_subreddit(config, subreddit)
     except KeyError as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
@@ -1128,7 +992,6 @@ def house_ptr_set(
         "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc_id}.pdf",
         "--pdf-url-template",
     ),
-    profile: str | None = typer.Option("default", "--profile", help="Profile to attach/detach house.ptr."),
 ) -> None:
     """Set House PTR source settings."""
 
@@ -1143,7 +1006,6 @@ def house_ptr_set(
             parse_concurrency=parse_concurrency,
             zip_url_template=zip_url_template,
             pdf_url_template=pdf_url_template,
-            profile=profile,
         )
     except (KeyError, ValueError) as exc:
         console.print(str(exc))

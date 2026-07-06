@@ -89,80 +89,6 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
     assert "tickers_json" in llm_reddit_columns
 
 
-async def test_initialize_adds_llm_importance_to_existing_database(tmp_path) -> None:
-    db_path = tmp_path / "storage.sqlite3"
-    async with aiosqlite.connect(db_path) as db:
-        await db.executescript(
-            """
-            CREATE TABLE llm_x_post_analyses (
-                analysis_run_id TEXT NOT NULL,
-                profile TEXT NOT NULL,
-                handle TEXT NOT NULL,
-                status_id TEXT NOT NULL,
-                source_ref TEXT NOT NULL,
-                url TEXT,
-                posted_at_text TEXT,
-                sentiment TEXT NOT NULL,
-                tags_json TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                interpretation TEXT NOT NULL,
-                confidence TEXT NOT NULL,
-                raw_response_json TEXT NOT NULL,
-                analyzed_at TEXT NOT NULL,
-                PRIMARY KEY (analysis_run_id, status_id)
-            );
-            CREATE TABLE llm_reddit_post_analyses (
-                analysis_run_id TEXT NOT NULL,
-                profile TEXT NOT NULL,
-                subreddit TEXT NOT NULL,
-                post_id TEXT NOT NULL,
-                source_ref TEXT NOT NULL,
-                title TEXT NOT NULL,
-                url TEXT,
-                created_at_text TEXT,
-                sentiment TEXT NOT NULL,
-                tags_json TEXT NOT NULL,
-                summary TEXT NOT NULL,
-                interpretation TEXT NOT NULL,
-                confidence TEXT NOT NULL,
-                comment_sentiment_counts_json TEXT NOT NULL,
-                raw_response_json TEXT NOT NULL,
-                analyzed_at TEXT NOT NULL,
-                PRIMARY KEY (analysis_run_id, post_id)
-            );
-            INSERT INTO llm_x_post_analyses VALUES (
-                'analysis-1', 'default', 'example', '123', 'x1', NULL, NULL,
-                'bullish', '[]', 'summary', 'interpretation', 'high', '{}', '2026-06-30T00:00:00+00:00'
-            );
-            INSERT INTO llm_reddit_post_analyses VALUES (
-                'analysis-1', 'default', 'wallstreetbets', 'abc', 'r1', 'title', NULL, NULL,
-                'mixed', '[]', 'summary', 'interpretation', 'high',
-                '{}', '{}', '2026-06-30T00:00:00+00:00'
-            );
-            """
-        )
-        await db.commit()
-
-    await SQLiteStorageRepository(db_path).initialize()
-
-    async with aiosqlite.connect(db_path) as db:
-        x_columns = await _columns(db, "llm_x_post_analyses")
-        reddit_columns = await _columns(db, "llm_reddit_post_analyses")
-        assert "importance" in x_columns
-        assert "importance" in reddit_columns
-        assert "tickers_json" in x_columns
-        assert "tickers_json" in reddit_columns
-        cursor = await db.execute("SELECT importance FROM llm_x_post_analyses")
-        x_importance = (await cursor.fetchone())[0]
-        await cursor.close()
-        cursor = await db.execute("SELECT importance FROM llm_reddit_post_analyses")
-        reddit_importance = (await cursor.fetchone())[0]
-        await cursor.close()
-
-    assert x_importance == "medium"
-    assert reddit_importance == "medium"
-
-
 async def test_save_x_items_upserts_posts_media_and_index(tmp_path) -> None:
     db_path = tmp_path / "storage.sqlite3"
     repository = SQLiteStorageRepository(db_path)
@@ -406,7 +332,6 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
     repository = SQLiteStorageRepository(db_path)
     await repository.start_llm_analysis_run(
         analysis_run_id="analysis-1",
-        profile="default",
         provider="deepseek",
         model="deepseek-v4-flash",
         prompt_version="llm-analysis-v1",
@@ -415,7 +340,6 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
         [
             {
                 "analysis_run_id": "analysis-1",
-                "profile": "default",
                 "handle": "aleabitoreddit",
                 "status_id": "123",
                 "source_ref": "x1",
@@ -437,7 +361,6 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
         [
             {
                 "analysis_run_id": "analysis-1",
-                "profile": "default",
                 "subreddit": "wallstreetbets",
                 "post_id": "abc",
                 "source_ref": "r1",
@@ -461,7 +384,6 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
         [
             {
                 "analysis_run_id": "analysis-1",
-                "profile": "default",
                 "subreddit": "wallstreetbets",
                 "post_id": "abc",
                 "comment_id": "c1",
@@ -482,7 +404,7 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
         succeeded_count=2,
     )
 
-    report = await repository.read_llm_analysis_report(profile="default", analysis_run_id="analysis-1")
+    report = await repository.read_llm_analysis_report(analysis_run_id="analysis-1")
 
     assert report["x_reports"][0]["posts"][0]["tags"] == ["ai", "growth", "cloud", "risk", "watch"]
     assert report["x_reports"][0]["posts"][0]["importance"] == "high"
@@ -494,13 +416,11 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
     assert reddit_post["comments_sentiment"] == "bullish: 1, bearish: 0, mixed: 1, neutral: 0, unclear: 0"
 
     matches = await repository.read_llm_social_posts_by_ticker(
-        profile="default",
         ticker="nbis",
         analysis_run_id="analysis-1",
     )
     assert [(match["source"], match["ticker"], match["source_id"]) for match in matches] == [("x", "NBIS", "123")]
     reddit_matches = await repository.read_llm_social_posts_by_ticker(
-        profile="default",
         ticker="brk.b",
         analysis_run_id="analysis-1",
     )
@@ -512,7 +432,6 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
         [
             {
                 "analysis_run_id": "analysis-1",
-                "profile": "default",
                 "handle": "aleabitoreddit",
                 "status_id": "123",
                 "source_ref": "x1",
@@ -531,12 +450,10 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
         ]
     )
     assert await repository.read_llm_social_posts_by_ticker(
-        profile="default",
         ticker="NBIS",
         analysis_run_id="analysis-1",
     ) == []
     replacement_matches = await repository.read_llm_social_posts_by_ticker(
-        profile="default",
         ticker="MSTR",
         analysis_run_id="analysis-1",
     )
@@ -545,7 +462,6 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
     ]
 
     social_points = await repository.read_social_statistic_points(
-        profile="default",
         ticker="MSTR",
         source="x",
         sentiment="bearish",
@@ -554,12 +470,11 @@ async def test_save_and_read_llm_analysis_report(tmp_path) -> None:
     assert [(point.source, point.ticker, point.sentiment, point.posted_at) for point in social_points] == [
         ("x", "MSTR", "bearish", "2026-06-30T00:00:00+00:00")
     ]
-    tag_matches = await repository.search_social_statistic_tags(profile="default", query="GROW", limit=5)
+    tag_matches = await repository.search_social_statistic_tags(query="GROW", limit=5)
     assert [(match.label, match.row_count, match.x_count, match.reddit_count, match.statistic_filters) for match in tag_matches] == [
         ("growth", 1, 1, 0, {"fuzzy_tag": "growth"})
     ]
     tagged_points = await repository.read_social_statistic_points(
-        profile="default",
         fuzzy_tag="GROWTH",
         source="all",
         analysis_run_id="analysis-1",

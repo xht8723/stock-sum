@@ -48,7 +48,6 @@ Important sections:
 - `[models_dev]`: cache-backed model catalog metadata.
 - `[providers.xpoz]`: Xpoz MCP-over-HTTP provider settings.
 - `[llm]`: LLM provider/model/runtime settings.
-- `[reports.*]`: named manual report profiles with `collector_ids`.
 - `[sources.*]`: X users, subreddits, House PTR, and SEC 13F source settings.
 - `[collectors.*]`: optional explicit collector blocks.
 
@@ -56,44 +55,36 @@ The default config is tuned for a 1GB VM: collector, Xpoz, LLM analysis, and
 House PTR PDF parsing concurrency all default to `1`; image downloading is off;
 and generated artifacts are capped by retention.
 
-Profile management:
-
-```powershell
-.\.venv\Scripts\stock-sum.exe config profile add closing --collectors x.aleabitoreddit,reddit.wallstreetbets
-.\.venv\Scripts\stock-sum.exe config profile edit closing --collectors x.aleabitoreddit,reddit.wallstreetbets,house.ptr
-.\.venv\Scripts\stock-sum.exe config profile show closing
-```
-
 Source management:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe config x-user add aleabitoreddit --profile default
-.\.venv\Scripts\stock-sum.exe config subreddit add wallstreetbets --profile default
-.\.venv\Scripts\stock-sum.exe config house-ptr set --profile default
+.\.venv\Scripts\stock-sum.exe config x-user add aleabitoreddit
+.\.venv\Scripts\stock-sum.exe config subreddit add wallstreetbets
+.\.venv\Scripts\stock-sum.exe config house-ptr set
 ```
 
 ## CLI Workflows
 
-Heavy CLI commands such as `collect`, `run-report`, `llm summarize`, and
-`llm analyze` run their work in a short-lived child Python process. The parent
+Heavy CLI commands such as `collect`, `llm summarize`, and `llm analyze` run
+their work in a short-lived child Python process. The parent
 CLI process stays small and mirrors the child output.
 
 Collect configured source data:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe collect --profile default
+.\.venv\Scripts\stock-sum.exe collect
 ```
 
 Build an LLM payload from SQLite:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe payload build --profile default --output payload.json
+.\.venv\Scripts\stock-sum.exe payload build --output payload.json
 ```
 
 Run LLM analysis:
 
 ```powershell
-.\.venv\Scripts\stock-sum.exe llm analyze --profile default --output response.json
+.\.venv\Scripts\stock-sum.exe llm analyze --output response.json
 ```
 
 Render a stored LLM response:
@@ -112,17 +103,19 @@ Start the service:
 
 Canonical job endpoints:
 
-- `POST /v1/social-reports/{profile}/jobs`
-- `POST /v1/social-reports/{profile}/jobs/{mode}`
+- `POST /v1/social-reports/jobs`
+- `POST /v1/social-reports/jobs/{mode}`
 - `POST /v1/trading-reports/jobs`
 - `POST /v1/trading-reports/jobs/{mode}`
 - `POST /v1/13f-reports/jobs`
 - `POST /v1/13f-reports/jobs/{mode}`
 - `POST /v1/statistics/jobs`
 - `GET /v1/statistics/fuzzy-matches`
-- `POST /v1/collect/{profile}/jobs`
 - `GET /v1/jobs/{job_id}`
 - `GET /v1/jobs/{job_id}/artifact`
+- `GET /v1/sources`
+- `GET|POST|DELETE /v1/sources/x-users`
+- `GET|POST|DELETE /v1/sources/subreddits`
 
 Supported modes are `html`, `markdown`, `discord`, `text`, and `json`.
 Statistics jobs are separate from report modes: they render a PNG chart plus a
@@ -139,17 +132,16 @@ Example:
 
 ```powershell
 $job = Invoke-RestMethod -Method Post `
-  -Uri http://127.0.0.1:8000/v1/social-reports/default/jobs/discord `
+  -Uri http://127.0.0.1:8000/v1/social-reports/jobs/discord `
   -ContentType 'application/json' `
   -Body '{"detail":"minimum"}'
 
 Invoke-RestMethod http://127.0.0.1:8000/v1/jobs/$($job.job_id)
 ```
 
-Management endpoints under `/v1/profiles`, `/v1/sources`, `/v1/llm`,
-`/v1/secrets`, `/v1/setup`, and `/v1/retention` are local-only by default.
-Set `[server].management_allow_remote = true` only when the service is protected
-by a trusted network boundary.
+The X/Reddit source settings endpoints are local-only by default. Set
+`[server].management_allow_remote = true` only when the service is protected by
+a trusted network boundary.
 
 ## Redbot Cog
 
@@ -160,13 +152,13 @@ API and exposes:
 - `/tradingreport`
 - `/13freport`
 - `/statistic`
-- `/stocksum ...` management commands
+- `/settings ...` source settings commands
 
-The default report format is Discord-specific markdown sent inline in chunks.
-Other formats are returned as Discord file attachments.
+Report commands always use Discord-specific markdown sent inline in chunks.
 `/statistic` returns a PNG attachment for social sentiment or House disclosure
 activity over time. Public report/statistic slash commands no longer expose a
-private-mode option; owner-only management and secret commands remain private.
+private-mode option. `/settings list` is public; owner-only source mutations
+respond privately.
 
 ## Runtime Data
 

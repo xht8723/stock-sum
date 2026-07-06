@@ -38,7 +38,6 @@ class LLMAnalysisResult:
     """Result of one chunked analysis run."""
 
     analysis_run_id: str
-    profile: str
     provider: str
     model: str
     prompt_version: str
@@ -83,7 +82,6 @@ class LLMAnalysisService:
         analysis_run_id = uuid4().hex
         await self.repository.start_llm_analysis_run(
             analysis_run_id=analysis_run_id,
-            profile=summary_input.profile,
             provider=self.llm_client.provider,
             model=self.llm_client.model,
             prompt_version=PROMPT_VERSION,
@@ -112,7 +110,6 @@ class LLMAnalysisService:
             if error is None and parsed is not None and summary is not None:
                 await self._persist_chunk(
                     analysis_run_id=analysis_run_id,
-                    profile=summary_input.profile,
                     chunk=chunk,
                     parsed=parsed,
                     summary=summary,
@@ -142,13 +139,9 @@ class LLMAnalysisService:
         if succeeded_count == 0:
             raise RuntimeError(f"All LLM analysis chunks failed: {fatal_error or 'unknown error'}")
 
-        summary = await self.repository.read_llm_analysis_report(
-            profile=summary_input.profile,
-            analysis_run_id=analysis_run_id,
-        )
+        summary = await self.repository.read_llm_analysis_report(analysis_run_id=analysis_run_id)
         return LLMAnalysisResult(
             analysis_run_id=analysis_run_id,
-            profile=summary_input.profile,
             provider=self.llm_client.provider,
             model=self.llm_client.model,
             prompt_version=PROMPT_VERSION,
@@ -163,18 +156,17 @@ class LLMAnalysisService:
         self,
         *,
         analysis_run_id: str,
-        profile: str,
         chunk: AnalysisChunk,
         parsed: dict[str, Any],
         summary: Summary,
     ) -> None:
         if chunk.kind == "x":
             await self.repository.save_llm_x_post_analyses(
-                _x_analysis_rows(analysis_run_id, profile, chunk.payload, parsed, summary)
+                _x_analysis_rows(analysis_run_id, chunk.payload, parsed, summary)
             )
             return
         if chunk.kind == "reddit":
-            post_rows, comment_rows = _reddit_analysis_rows(analysis_run_id, profile, chunk.payload, parsed, summary)
+            post_rows, comment_rows = _reddit_analysis_rows(analysis_run_id, chunk.payload, parsed, summary)
             await self.repository.save_llm_reddit_post_analyses(post_rows)
             await self.repository.save_llm_reddit_comment_analyses(comment_rows)
             return
@@ -250,7 +242,6 @@ def _parsed_summary(summary: Summary) -> dict[str, Any]:
 
 def _x_analysis_rows(
     analysis_run_id: str,
-    profile: str,
     chunk: dict[str, Any],
     parsed: dict[str, Any],
     summary: Summary,
@@ -268,7 +259,6 @@ def _x_analysis_rows(
         rows.append(
             {
                 "analysis_run_id": analysis_run_id,
-                "profile": profile,
                 "handle": str(chunk.get("handle") or source.get("author") or "unknown"),
                 "status_id": source_id,
                 "source_ref": source_ref,
@@ -290,7 +280,6 @@ def _x_analysis_rows(
 
 def _reddit_analysis_rows(
     analysis_run_id: str,
-    profile: str,
     chunk: dict[str, Any],
     parsed: dict[str, Any],
     summary: Summary,
@@ -318,7 +307,6 @@ def _reddit_analysis_rows(
         comment_rows.append(
             {
                 "analysis_run_id": analysis_run_id,
-                "profile": profile,
                 "subreddit": subreddit,
                 "post_id": post_id,
                 "comment_id": comment_id,
@@ -336,7 +324,6 @@ def _reddit_analysis_rows(
         post_rows.append(
             {
                 "analysis_run_id": analysis_run_id,
-                "profile": profile,
                 "subreddit": subreddit,
                 "post_id": post_id,
                 "source_ref": source_ref,

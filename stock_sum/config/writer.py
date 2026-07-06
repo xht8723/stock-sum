@@ -48,74 +48,6 @@ def set_dotted_value(path: str | Path, dotted_key: str, value: Any) -> None:
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
-def list_profiles(path: str | Path) -> list[str]:
-    """List configured report profile names."""
-
-    document = read_toml_document(path)
-    return sorted(document.get("reports", {}).keys())
-
-
-def get_profile(path: str | Path, name: str) -> dict[str, Any]:
-    """Return one configured report profile."""
-
-    document = read_toml_document(path)
-    try:
-        profile = document["reports"][name]
-    except KeyError as exc:
-        raise KeyError(f"Profile does not exist: {name}") from exc
-    return dict(profile)
-
-
-def add_profile(
-    path: str | Path,
-    name: str,
-    *,
-    collector_ids: list[str],
-    overwrite: bool = False,
-) -> None:
-    """Add a report profile to a TOML config."""
-
-    document = read_toml_document(path)
-    reports = document.setdefault("reports", tomlkit.table())
-    if name in reports and not overwrite:
-        raise KeyError(f"Profile already exists: {name}")
-
-    profile = tomlkit.table()
-    profile["collector_ids"] = collector_ids
-    reports[name] = profile
-    Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
-
-
-def edit_profile(
-    path: str | Path,
-    name: str,
-    *,
-    collector_ids: list[str] | None = None,
-) -> None:
-    """Edit fields on an existing report profile."""
-
-    document = read_toml_document(path)
-    try:
-        profile = document["reports"][name]
-    except KeyError as exc:
-        raise KeyError(f"Profile does not exist: {name}") from exc
-
-    if collector_ids is not None:
-        profile["collector_ids"] = collector_ids
-    Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
-
-
-def delete_profile(path: str | Path, name: str) -> None:
-    """Delete a report profile from a TOML config."""
-
-    document = read_toml_document(path)
-    try:
-        del document["reports"][name]
-    except KeyError as exc:
-        raise KeyError(f"Profile does not exist: {name}") from exc
-    Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
-
-
 def list_x_users(path: str | Path) -> list[dict[str, Any]]:
     """List configured X user sources."""
 
@@ -144,9 +76,8 @@ def set_house_ptr_source(
     parse_concurrency: int,
     zip_url_template: str,
     pdf_url_template: str,
-    profile: str | None = None,
 ) -> str:
-    """Set House PTR source configuration and optionally attach it to a profile."""
+    """Set House PTR source configuration."""
 
     document = read_toml_document(path)
     sources = _sources_table(document)
@@ -160,14 +91,8 @@ def set_house_ptr_source(
     source["pdf_url_template"] = pdf_url_template
     sources["house_ptr"] = source
 
-    collector_id = "house.ptr"
-    if profile:
-        if enabled:
-            _add_collector_to_profile(document, profile, collector_id)
-        else:
-            _remove_collector_from_profile(document, profile, collector_id)
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
-    return collector_id
+    return "house.ptr"
 
 
 def add_x_user(
@@ -177,10 +102,9 @@ def add_x_user(
     enabled: bool,
     limit: int,
     lookback_hours: int,
-    profile: str | None = None,
     overwrite: bool = False,
 ) -> str:
-    """Add or replace an X user source and optionally attach it to a profile."""
+    """Add or replace an X user source."""
 
     normalized = _normalize_x_handle(handle)
     document = read_toml_document(path)
@@ -201,14 +125,12 @@ def add_x_user(
         x_users[existing] = source
 
     collector_id = f"x.{normalized}"
-    if profile:
-        _add_collector_to_profile(document, profile, collector_id)
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
     return collector_id
 
 
-def delete_x_user(path: str | Path, handle: str, *, profile: str | None = None) -> str:
-    """Delete an X user source and optionally detach it from a profile."""
+def delete_x_user(path: str | Path, handle: str) -> str:
+    """Delete an X user source."""
 
     normalized = _normalize_x_handle(handle)
     document = read_toml_document(path)
@@ -219,8 +141,6 @@ def delete_x_user(path: str | Path, handle: str, *, profile: str | None = None) 
     del x_users[existing]
 
     collector_id = f"x.{normalized}"
-    if profile:
-        _remove_collector_from_profile(document, profile, collector_id)
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
     return collector_id
 
@@ -237,10 +157,9 @@ def add_subreddit(
     trim: bool,
     include_comments: bool,
     comments_per_post: int,
-    profile: str | None = None,
     overwrite: bool = False,
 ) -> str:
-    """Add or replace a subreddit source and optionally attach it to a profile."""
+    """Add or replace a subreddit source."""
 
     normalized = _normalize_subreddit(subreddit)
     document = read_toml_document(path)
@@ -266,14 +185,12 @@ def add_subreddit(
         subreddits[existing] = source
 
     collector_id = f"reddit.{normalized}"
-    if profile:
-        _add_collector_to_profile(document, profile, collector_id)
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
     return collector_id
 
 
-def delete_subreddit(path: str | Path, subreddit: str, *, profile: str | None = None) -> str:
-    """Delete a subreddit source and optionally detach it from a profile."""
+def delete_subreddit(path: str | Path, subreddit: str) -> str:
+    """Delete a subreddit source."""
 
     normalized = _normalize_subreddit(subreddit)
     document = read_toml_document(path)
@@ -284,8 +201,6 @@ def delete_subreddit(path: str | Path, subreddit: str, *, profile: str | None = 
     del subreddits[existing]
 
     collector_id = f"reddit.{normalized}"
-    if profile:
-        _remove_collector_from_profile(document, profile, collector_id)
     Path(path).write_text(tomlkit.dumps(document), encoding="utf-8")
     return collector_id
 
@@ -305,25 +220,6 @@ def _find_source_index(items: list[Any], key: str, value: str) -> int | None:
         if str(item.get(key, "")).lower() == value.lower():
             return index
     return None
-
-
-def _add_collector_to_profile(document: tomlkit.TOMLDocument, profile_name: str, collector_id: str) -> None:
-    try:
-        profile = document["reports"][profile_name]
-    except KeyError as exc:
-        raise KeyError(f"Profile does not exist: {profile_name}") from exc
-    collector_ids = list(profile.get("collector_ids", []))
-    if collector_id not in collector_ids:
-        collector_ids.append(collector_id)
-    profile["collector_ids"] = collector_ids
-
-
-def _remove_collector_from_profile(document: tomlkit.TOMLDocument, profile_name: str, collector_id: str) -> None:
-    try:
-        profile = document["reports"][profile_name]
-    except KeyError as exc:
-        raise KeyError(f"Profile does not exist: {profile_name}") from exc
-    profile["collector_ids"] = [item for item in profile.get("collector_ids", []) if item != collector_id]
 
 
 def _normalize_x_handle(handle: str) -> str:

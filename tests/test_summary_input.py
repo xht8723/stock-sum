@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from stock_sum.config.models import AppConfig, LLMConfig, ReportInputConfig, ReportProfileConfig, StorageConfig
+from stock_sum.config.models import AppConfig, LLMConfig, RedditSubredditSourceConfig, ReportInputConfig, StorageConfig, XUserSourceConfig, SourcesConfig
 from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.storage.models import (
     StoredCollectionRun,
@@ -22,11 +22,10 @@ class FakeSummaryRepository:
         self.x_read_calls = []
         self.reddit_read_calls = []
 
-    async def list_collection_runs(self, *, profile=None, limit=None):
+    async def list_collection_runs(self, *, limit=None):
         return [
             StoredCollectionRun(
                 run_id="run-1",
-                profile=profile,
                 collector_id="x.alpha",
                 source_type="x_user_timeline",
                 status="succeeded",
@@ -175,11 +174,10 @@ def _config(tmp_path) -> AppConfig:
     return AppConfig(
         storage=StorageConfig(sqlite_path=str(tmp_path / "test.sqlite3")),
         llm=LLMConfig(provider="deepseek", model="deepseek-v4-flash", api_key_env="DEEPSEEK_API_KEY"),
-        reports={
-            "default": ReportProfileConfig(
-                collector_ids=["x.alpha", "reddit.bets"],
-            )
-        },
+        sources=SourcesConfig(
+            x_users=[XUserSourceConfig(handle="alpha", limit=100, lookback_hours=24)],
+            subreddits=[RedditSubredditSourceConfig(subreddit="bets", limit=100, lookback_hours=24)],
+        ),
     )
 
 
@@ -187,10 +185,10 @@ async def test_summary_input_groups_sources_and_links_reddit_comments(tmp_path) 
     repository = FakeSummaryRepository()
     builder = SummaryInputBuilder(config=_config(tmp_path), repository=repository)
 
-    payload = await builder.build(profile="default", download_images=False)
+    payload = await builder.build(download_images=False)
     data = payload.to_dict()
 
-    assert data["profile"] == "default"
+    assert data["report_type"] == "social"
     assert data["x"][0]["handle"] == "alpha"
     assert data["x"][0]["posts"][0]["status_id"] == "1"
     assert data["x"][0]["posts"][0]["media"][0]["source_metadata"] == {"source_path": "legacy.entities.media"}
@@ -205,10 +203,10 @@ async def test_summary_input_groups_sources_and_links_reddit_comments(tmp_path) 
 async def test_summary_input_compact_mode_uses_shared_media_map_and_drops_redundancy(tmp_path) -> None:
     builder = SummaryInputBuilder(config=_config(tmp_path), repository=FakeSummaryRepository())
 
-    payload = await builder.build(profile="default", download_images=False)
+    payload = await builder.build(download_images=False)
     data = payload.to_dict(mode="compact")
 
-    assert set(data) == {"profile", "generated_at", "sources", "media", "metadata"}
+    assert set(data) == {"report_type", "generated_at", "sources", "media", "metadata"}
     assert data["sources"]["x"][0]["posts"][0]["media"] == ["m1"]
     assert data["sources"]["reddit"][0]["posts"][0]["media"] == ["m2"]
     assert data["media"]["m1"] == {
@@ -228,7 +226,7 @@ async def test_summary_input_compact_mode_uses_shared_media_map_and_drops_redund
 async def test_summary_input_vision_mode_adds_ordered_attachments(tmp_path) -> None:
     builder = SummaryInputBuilder(config=_config(tmp_path), repository=FakeSummaryRepository())
 
-    payload = await builder.build(profile="default", download_images=False)
+    payload = await builder.build(download_images=False)
     data = payload.to_dict(mode="vision", max_images_per_post=1, max_images_total=1)
 
     assert list(data["media"]) == ["m1"]
@@ -257,7 +255,7 @@ async def test_summary_input_caps_posts_and_comments_per_source(tmp_path) -> Non
     repository = FakeSummaryRepository()
     builder = SummaryInputBuilder(config=config, repository=repository)
 
-    payload = await builder.build(profile="default", download_images=False)
+    payload = await builder.build(download_images=False)
     data = payload.to_dict()
 
     assert repository.x_read_calls[0]["limit"] == 1

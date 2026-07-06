@@ -474,7 +474,6 @@ def _format_filter_summary(filters: dict[str, Any]) -> str:
         "name",
         "asset_type",
         "action",
-        "profile",
         "source",
         "sentiment",
         "days",

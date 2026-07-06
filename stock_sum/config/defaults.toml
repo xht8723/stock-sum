@@ -59,9 +59,6 @@ analysis_x_posts_per_chunk = 10
 analysis_max_chars_per_chunk = 12000
 analysis_max_concurrency = 1
 
-[reports.default]
-collector_ids = ["x.aleabitoreddit", "reddit.wallstreetbets", "house.ptr"]
-
 [[sources.x_users]]
 enabled = true
 handle = "aleabitoreddit"

@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from stock_sum.config.models import AppConfig
-from stock_sum.core.errors import ConfigurationError
 from stock_sum.core.summary_input import (
     SummaryInput,
     SummaryMediaAsset,
@@ -37,17 +36,12 @@ class SummaryInputBuilder:
         self.repository = repository
         self.downloader = downloader
 
-    async def build(self, *, profile: str, download_images: bool | None = None) -> SummaryInput:
+    async def build(self, *, download_images: bool | None = None) -> SummaryInput:
         """Build a source-separated summary input payload."""
 
-        try:
-            profile_config = self.config.reports[profile]
-        except KeyError as exc:
-            raise ConfigurationError(f"Unknown report profile: {profile}") from exc
-
         generated_at = datetime.now(timezone.utc)
-        source_windows = _source_windows(self.config, profile_config.collector_ids, generated_at=generated_at)
-        runs = await self.repository.list_collection_runs(profile=profile, limit=20)
+        source_windows = _source_windows(self.config, generated_at=generated_at)
+        runs = await self.repository.list_collection_runs(limit=20)
         should_download = self.config.media.download_enabled if download_images is None else download_images
         download_errors: list[dict[str, str]] = []
 
@@ -66,7 +60,7 @@ class SummaryInputBuilder:
         )
 
         return SummaryInput(
-            profile=profile,
+            report_type="social",
             generated_at=generated_at.isoformat(),
             collection_runs=[asdict(run) for run in runs],
             x=x_sections,
@@ -273,40 +267,23 @@ class _SourceWindows:
         return cutoff is None or (posted_at is not None and posted_at >= cutoff)
 
 
-def _source_windows(config: AppConfig, collector_ids: list[str], *, generated_at: datetime) -> _SourceWindows:
+def _source_windows(config: AppConfig, *, generated_at: datetime) -> _SourceWindows:
     windows = _SourceWindows(generated_at=generated_at)
-    for collector_id in collector_ids:
-        if collector_id.startswith("x."):
-            source_name = collector_id.split(".", 1)[1]
-            source = _find_x_source(config, source_name)
+    for source in config.sources.x_users:
+        if source.enabled:
             windows.add_x(
-                source.handle if source is not None else source_name,
-                lookback_hours=source.lookback_hours if source is not None else 24,
-                fetch_cap=source.limit if source is not None else 100,
+                source.handle,
+                lookback_hours=source.lookback_hours,
+                fetch_cap=source.limit,
             )
-        elif collector_id.startswith("reddit."):
-            source_name = collector_id.split(".", 1)[1]
-            source = _find_reddit_source(config, source_name)
+    for source in config.sources.subreddits:
+        if source.enabled:
             windows.add_reddit(
-                source.subreddit if source is not None else source_name,
-                lookback_hours=source.lookback_hours if source is not None else 24,
-                fetch_cap=source.limit if source is not None else 100,
+                source.subreddit,
+                lookback_hours=source.lookback_hours,
+                fetch_cap=source.limit,
             )
     return windows
-
-
-def _find_x_source(config: AppConfig, source_name: str):
-    for source in config.sources.x_users:
-        if source.handle.strip().lstrip("@").lower() == source_name.lower():
-            return source
-    return None
-
-
-def _find_reddit_source(config: AppConfig, source_name: str):
-    for source in config.sources.subreddits:
-        if source.subreddit.strip().strip("/").removeprefix("r/").lower() == source_name.lower():
-            return source
-    return None
 
 
 def _parse_datetime(value: str | None) -> datetime | None:

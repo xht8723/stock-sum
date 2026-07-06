@@ -25,16 +25,10 @@ def test_default_report_timeout_is_30_minutes() -> None:
 
 def test_required_slash_command_parameters_are_explicit() -> None:
     required_parameters = {
-        "profiles_add": {"name"},
-        "profiles_edit": {"name", "collectors"},
-        "profiles_delete": {"name"},
-        "sources_add_x": {"handle"},
-        "sources_delete_x": {"handle"},
-        "sources_add_reddit": {"subreddit"},
-        "sources_delete_reddit": {"subreddit"},
-        "llm_select": {"provider"},
-        "secrets_set": {"name", "value"},
-        "secrets_remove": {"name"},
+        "settings_add_x": {"handle"},
+        "settings_remove_x": {"handle"},
+        "settings_add_reddit": {"subreddit"},
+        "settings_remove_reddit": {"subreddit"},
         "statistic": {"mode"},
     }
     for method_name, parameter_names in required_parameters.items():
@@ -69,6 +63,16 @@ def test_conditional_filter_slash_parameters_stay_optional() -> None:
             assert signature.parameters[parameter_name].default is not inspect.Parameter.empty
 
 
+def test_report_commands_do_not_expose_format_parameter() -> None:
+    for method_name in ("socialreport", "tradingreport", "thirteenfreport"):
+        assert "format" not in inspect.signature(getattr(StockSumReport, method_name)).parameters
+
+
+def test_stocksum_group_is_removed_and_settings_group_exists() -> None:
+    assert not hasattr(StockSumReport, "stocksum")
+    assert hasattr(StockSumReport, "settings")
+
+
 async def test_client_sends_report_request_and_downloads_artifact() -> None:
     session = FakeSession(
         post_responses=[
@@ -93,17 +97,14 @@ async def test_client_sends_report_request_and_downloads_artifact() -> None:
         poll_seconds=0,
     )
 
-    artifact = await client.run_report(
-        profile="default",
-        output_format="html",
-    )
+    artifact = await client.run_social_report(output_format="html")
 
     assert artifact.job_id == "job-1"
     assert artifact.filename == "report.html"
     assert artifact.content == b"<html>ok</html>"
     assert session.requests[0] == (
         "POST",
-        "http://stock-sum.local/v1/social-reports/default/jobs/html",
+        "http://stock-sum.local/v1/social-reports/jobs/html",
         {
             "headers": {},
             "json": {"detail": "minimum"},
@@ -126,15 +127,12 @@ async def test_client_uses_discord_format_endpoint() -> None:
     )
     client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
 
-    artifact = await client.run_report(
-        profile="default",
-        output_format="discord",
-    )
+    artifact = await client.run_social_report(output_format="discord")
 
     assert artifact.filename == "stock-sum-report-job-discord.md"
     assert session.requests[0] == (
         "POST",
-        "http://stock-sum.local/v1/social-reports/default/jobs/discord",
+        "http://stock-sum.local/v1/social-reports/jobs/discord",
         {
             "headers": {},
             "json": {"detail": "minimum"},
@@ -206,6 +204,43 @@ async def test_client_rejects_trading_report_without_filter() -> None:
         await client.run_trading_report(output_format="discord")
 
 
+async def test_client_omits_13f_limit_by_default() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "13f-2"})],
+        get_responses=[
+            FakeResponse(200, {"job_id": "13f-2", "status": "succeeded"}),
+            FakeResponse(200, body=b"holdings", headers={"content-type": "text/markdown; charset=utf-8"}),
+        ],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    await client.run_13f_report(output_format="discord", issuer="NVIDIA")
+
+    assert session.requests[0] == (
+        "POST",
+        "http://stock-sum.local/v1/13f-reports/jobs/discord",
+        {
+            "headers": {},
+            "json": {"issuer": "NVIDIA", "force_refresh": False},
+        },
+    )
+
+
+async def test_client_does_not_clip_large_13f_limit() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "13f-3"})],
+        get_responses=[
+            FakeResponse(200, {"job_id": "13f-3", "status": "succeeded"}),
+            FakeResponse(200, body=b"holdings", headers={"content-type": "text/markdown; charset=utf-8"}),
+        ],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    await client.run_13f_report(output_format="discord", issuer="NVIDIA", limit=5000)
+
+    assert session.requests[0][2]["json"]["limit"] == 5000
+
+
 async def test_client_sends_statistic_request_and_downloads_png() -> None:
     session = FakeSession(
         post_responses=[FakeResponse(202, {"job_id": "stat-1"})],
@@ -234,7 +269,7 @@ async def test_client_sends_statistic_request_and_downloads_png() -> None:
             "headers": {},
             "json": {
                 "mode": "social",
-                "profile": "default",
+
                 "ticker": "NVDA",
                 "action": "all",
                 "source": "all",
@@ -254,7 +289,7 @@ async def test_client_reports_failed_job() -> None:
     client = StockSumHttpClient(session=session, poll_seconds=0)
 
     with pytest.raises(StockSumRequestError, match="LLM failed"):
-        await client.run_report(profile="default", output_format="html")
+        await client.run_social_report(output_format="html")
 
 
 async def test_client_downloads_successful_job_with_warnings() -> None:
@@ -274,7 +309,7 @@ async def test_client_downloads_successful_job_with_warnings() -> None:
     )
     client = StockSumHttpClient(session=session, poll_seconds=0)
 
-    artifact = await client.run_report(profile="default", output_format="discord")
+    artifact = await client.run_social_report(output_format="discord")
 
     assert artifact.content == b"report"
     assert artifact.status["warnings"][0]["section"] == "collector"
@@ -291,7 +326,7 @@ async def test_client_retries_transient_poll_disconnect() -> None:
     )
     client = StockSumHttpClient(session=session, poll_seconds=0, timeout_seconds=10)
 
-    artifact = await client.run_report(profile="default", output_format="text")
+    artifact = await client.run_social_report(output_format="text")
 
     assert artifact.job_id == "job-retry"
     assert artifact.content == b"ok"
@@ -309,7 +344,7 @@ async def test_client_reports_timeout() -> None:
     )
 
     with pytest.raises(StockSumRequestError, match="timed out"):
-        await client.run_report(profile="default", output_format="html")
+        await client.run_social_report(output_format="html")
 
 
 async def test_client_maps_blacklist_failure() -> None:
@@ -320,30 +355,24 @@ async def test_client_maps_blacklist_failure() -> None:
     client = StockSumHttpClient(session=session)
 
     with pytest.raises(StockSumRequestError, match="blacklisted"):
-        await client.run_report(profile="default", output_format="html")
+        await client.run_social_report(output_format="html")
 
 
 async def test_client_management_json_methods_send_expected_requests() -> None:
     session = FakeSession(
         post_responses=[FakeResponse(200, {"created": True})],
-        get_responses=[FakeResponse(200, {"profiles": []})],
-        patch_responses=[FakeResponse(200, {"updated": True})],
-        put_responses=[FakeResponse(200, {"set": True})],
+        get_responses=[FakeResponse(200, {"x_users": []})],
         delete_responses=[FakeResponse(200, {"deleted": "x.demo"})],
     )
     client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
 
-    assert await client.get_json("/v1/profiles") == {"profiles": []}
-    assert await client.post_json("/v1/profiles", payload={"name": "morning"}) == {"created": True}
-    assert await client.patch_json("/v1/llm/config", payload={"provider": "deepseek"}) == {"updated": True}
-    assert await client.put_json("/v1/secrets/DEEPSEEK_API_KEY", payload={"value": "secret"}) == {"set": True}
+    assert await client.get_json("/v1/sources/x-users") == {"x_users": []}
+    assert await client.post_json("/v1/sources/x-users", payload={"handle": "demo"}) == {"created": True}
     assert await client.delete_json("/v1/sources/x-users/demo") == {"deleted": "x.demo"}
 
     assert session.requests == [
-        ("GET", "http://stock-sum.local/v1/profiles", {"headers": {}}),
-        ("POST", "http://stock-sum.local/v1/profiles", {"headers": {}, "json": {"name": "morning"}}),
-        ("PATCH", "http://stock-sum.local/v1/llm/config", {"headers": {}, "json": {"provider": "deepseek"}}),
-        ("PUT", "http://stock-sum.local/v1/secrets/DEEPSEEK_API_KEY", {"headers": {}, "json": {"value": "secret"}}),
+        ("GET", "http://stock-sum.local/v1/sources/x-users", {"headers": {}}),
+        ("POST", "http://stock-sum.local/v1/sources/x-users", {"headers": {}, "json": {"handle": "demo"}}),
         ("DELETE", "http://stock-sum.local/v1/sources/x-users/demo", {"headers": {}}),
     ]
 
@@ -378,7 +407,7 @@ async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.socialreport(interaction, profile="default", format="discord")
+    await report.socialreport(interaction)
 
     assert interaction.response.messages == [
         {
@@ -404,9 +433,9 @@ async def test_report_command_sends_public_discord_report_directly_to_channel(mo
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.socialreport(interaction, profile="default", format="discord", detail="medium")
+    await report.socialreport(interaction, detail="medium")
 
-    assert client.social_calls == [{"profile": "default", "output_format": "discord", "detail": "medium"}]
+    assert client.social_calls == [{ "output_format": "discord", "detail": "medium"}]
     assert interaction.response.messages == [
         {
             "content": "Social report is being generated, please wait a few minutes.",
@@ -419,30 +448,6 @@ async def test_report_command_sends_public_discord_report_directly_to_channel(mo
     ]
 
 
-async def test_report_command_sends_file_for_non_discord_format(monkeypatch) -> None:
-    interaction = FakeInteraction()
-    report = StockSumReport(bot=None)
-    client = FakeStockSumClient(content=b"<html>report</html>", filename="report.html")
-    monkeypatch.setattr(
-        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
-        lambda: client,
-    )
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
-
-    await report.socialreport(interaction, profile="default", format="html", detail="full")
-
-    assert client.social_calls == [{"profile": "default", "output_format": "html", "detail": "full"}]
-    assert interaction.response.messages[0]["content"] == "Social report is being generated, please wait a few minutes."
-    assert interaction.followup.messages == []
-    assert interaction.channel.messages == [
-        {
-            "content": "Report generated.",
-            "file": "report.html",
-            "suppress_embeds": True,
-        }
-    ]
-
-
 async def test_report_command_sends_failure_message(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
@@ -452,7 +457,7 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     )
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.socialreport(interaction, profile="default", format="discord")
+    await report.socialreport(interaction)
 
     assert interaction.response.messages[0]["content"] == "Social report is being generated, please wait a few minutes."
     assert interaction.channel.messages == [
@@ -463,25 +468,6 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     ]
 
 
-async def test_socialreport_rejects_invalid_parameters_before_api_call(monkeypatch) -> None:
-    interaction = FakeInteraction()
-    report = StockSumReport(bot=None)
-    client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-
-    await report.socialreport(interaction, profile="bad profile!", format="discord", detail="minimum")
-
-    assert client.social_calls == []
-    assert interaction.response.messages == [
-        {
-            "content": "stock-sum report failed: profile must be 1-64 characters using letters, numbers, dot, underscore, or dash.",
-            "ephemeral": True,
-            "suppress_embeds": True,
-        }
-    ]
-    assert interaction.followup.messages == []
-
-
 async def test_tradingreport_command_rejects_missing_filters(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
@@ -490,7 +476,7 @@ async def test_tradingreport_command_rejects_missing_filters(monkeypatch) -> Non
         lambda: FakeStockSumClient(content=b"unused"),
     )
 
-    await report.tradingreport(interaction, format="discord")
+    await report.tradingreport(interaction)
 
     assert interaction.response.messages == [
         {
@@ -513,7 +499,6 @@ async def test_tradingreport_rejects_invalid_date_and_limit_before_api_call(monk
         name="Pelosi",
         start_date="2026-13-01",
         limit=0,
-        format="discord",
     )
 
     assert client.trading_calls == []
@@ -533,7 +518,7 @@ async def test_tradingreport_rejects_unknown_asset_type_before_api_call(monkeypa
     client = FakeStockSumClient(content=b"unused")
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.tradingreport(interaction, asset_type="bad!", format="discord")
+    await report.tradingreport(interaction, asset_type="bad!")
 
     assert client.trading_calls == []
     assert "asset_type must be" in interaction.response.messages[0]["content"]
@@ -553,7 +538,6 @@ async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
         asset_type="st",
         ticker="amzn",
         limit=25,
-        format="discord",
         force_refresh=True,
     )
 
@@ -579,6 +563,32 @@ async def test_tradingreport_command_sends_discord_report(monkeypatch) -> None:
     assert interaction.channel.messages == [{"content": "trade one\n\ntrade two", "suppress_embeds": True}]
 
 
+async def test_tradingreport_command_omits_limit_when_unset(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"trade")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.tradingreport(interaction, days=30)
+
+    assert client.trading_calls[0]["output_format"] == "discord"
+    assert client.trading_calls[0]["limit"] is None
+
+
+async def test_tradingreport_command_does_not_clip_large_limit(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"trade")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.tradingreport(interaction, days=30, limit=5000)
+
+    assert client.trading_calls[0]["output_format"] == "discord"
+    assert client.trading_calls[0]["limit"] == 5000
+
+
 async def test_13freport_rejects_invalid_filters_before_api_call(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
@@ -591,13 +601,31 @@ async def test_13freport_rejects_invalid_filters_before_api_call(monkeypatch) ->
         period_start="2026-04-01",
         period_end="2026-03-31",
         limit=101,
-        format="discord",
     )
 
     assert client.sec_13f_calls == []
     assert interaction.response.messages == [
         {
             "content": "stock-sum report failed: period_start must be on or before period_end.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+    assert interaction.followup.messages == []
+
+
+async def test_13freport_rejects_invalid_limit_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.thirteenfreport(interaction, issuer="NVIDIA", limit=0)
+
+    assert client.sec_13f_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: limit must be 1 or greater.",
             "ephemeral": True,
             "suppress_embeds": True,
         }
@@ -623,7 +651,6 @@ async def test_13freport_command_sends_discord_report(monkeypatch) -> None:
         period_end="2026-03-31",
         min_value=1000,
         limit=25,
-        format="discord",
         force_refresh=True,
     )
 
@@ -654,6 +681,32 @@ async def test_13freport_command_sends_discord_report(monkeypatch) -> None:
         }
     ]
     assert interaction.channel.messages == [{"content": "holding one\n\nholding two", "suppress_embeds": True}]
+
+
+async def test_13freport_command_omits_limit_when_unset(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"holding")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.thirteenfreport(interaction, issuer="NVIDIA")
+
+    assert client.sec_13f_calls[0]["output_format"] == "discord"
+    assert client.sec_13f_calls[0]["limit"] is None
+
+
+async def test_13freport_command_does_not_clip_large_limit(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"holding")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+
+    await report.thirteenfreport(interaction, issuer="NVIDIA", limit=5000)
+
+    assert client.sec_13f_calls[0]["output_format"] == "discord"
+    assert client.sec_13f_calls[0]["limit"] == 5000
 
 
 async def test_statistic_rejects_invalid_parameters_before_api_call(monkeypatch) -> None:
@@ -695,7 +748,7 @@ async def test_statistic_command_sends_png_file(monkeypatch) -> None:
     assert client.statistic_calls == [
         {
             "mode": "trading",
-            "profile": "default",
+
             "ticker": "AAPL",
             "fuzzy_tag": None,
             "name": "Pelosi",
@@ -771,11 +824,11 @@ async def test_statistic_fuzzy_search_selects_social_tag_with_reaction(monkeypat
 
     await report.statistic(interaction, mode="social", fuzzy_search="NVIDIA", days=30)
 
-    assert client.fuzzy_calls == [{"mode": "social", "profile": "default", "query": "NVIDIA", "limit": 5}]
+    assert client.fuzzy_calls == [{"mode": "social",  "query": "NVIDIA", "limit": 5}]
     assert client.statistic_calls == [
         {
             "mode": "social",
-            "profile": "default",
+
             "ticker": None,
             "fuzzy_tag": "nvidia",
             "name": None,
@@ -949,13 +1002,13 @@ async def test_statistic_fuzzy_search_defer_failure_still_posts_channel_prompt(m
     assert client.statistic_calls[0]["asset_name"] == "OpenAI Global LLC [OI]"
 
 
-async def test_management_command_blocks_non_owner(monkeypatch) -> None:
+async def test_settings_command_blocks_non_owner(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=False))
     client = FakeManagementClient()
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.sources_add_x(interaction, handle="aleabitoreddit")
+    await report.settings_add_x(interaction, handle="aleabitoreddit")
 
     assert client.calls == []
     assert interaction.response.messages == [
@@ -967,129 +1020,92 @@ async def test_management_command_blocks_non_owner(monkeypatch) -> None:
     ]
 
 
-async def test_management_source_add_calls_api_for_owner(monkeypatch) -> None:
+async def test_settings_list_formats_sources(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=FakeBot(owner=False))
+    client = FakeManagementClient()
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.settings_list(interaction)
+
+    assert client.calls == [("get", "/v1/sources", None)]
+    assert interaction.response.messages == [
+        {
+            "content": "**Stock-Sum Sources**\n\n**X users**\n- @aleabitoreddit (enabled, fetch cap: 100, lookback: 24h)\n\n**Subreddits**\n- r/wallstreetbets (enabled, fetch cap: 100, lookback: 24h, comments: 10)",
+            "ephemeral": False,
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_settings_source_add_calls_api_for_owner(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.sources_add_x(
+    await report.settings_add_x(
         interaction,
         handle="@aleabitoreddit",
-        profile="default",
-        limit=150,
-        lookback_hours=12,
-        enabled=True,
     )
 
     assert client.calls == [
         (
             "post",
             "/v1/sources/x-users",
-            {"handle": "@aleabitoreddit", "profile": "default", "limit": 150, "lookback_hours": 12, "enabled": True},
+            {"handle": "@aleabitoreddit"},
         )
     ]
     assert interaction.response.messages[0]["ephemeral"] is True
     assert "Added X source @aleabitoreddit" in interaction.response.messages[0]["content"]
 
 
-async def test_management_source_add_rejects_invalid_handle_and_limit(monkeypatch) -> None:
+async def test_settings_source_add_rejects_invalid_handle(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.sources_add_x(interaction, handle="bad/handle", limit=999)
+    await report.settings_add_x(interaction, handle="bad/handle")
 
     assert client.calls == []
     assert "X handle must be" in interaction.response.messages[0]["content"]
 
 
-async def test_management_reddit_source_add_defaults_to_comments(monkeypatch) -> None:
+async def test_settings_reddit_source_add_uses_endpoint_defaults(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.sources_add_reddit(interaction, subreddit="wallstreetbets")
+    await report.settings_add_reddit(interaction, subreddit="wallstreetbets")
 
     assert client.calls == [
         (
             "post",
             "/v1/sources/subreddits",
-            {
-                "subreddit": "wallstreetbets",
-                "profile": "default",
-                "limit": 100,
-                "lookback_hours": 24,
-                "include_comments": True,
-                "comments_per_post": 10,
-            },
+            {"subreddit": "wallstreetbets"},
         )
     ]
     assert interaction.response.messages[0]["ephemeral"] is True
     assert "Added subreddit wallstreetbets" in interaction.response.messages[0]["content"]
 
 
-async def test_management_house_ptr_source_set(monkeypatch) -> None:
+async def test_settings_delete_sources(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
 
-    await report.sources_house_set(
-        interaction,
-        profile="default",
-        enabled=True,
-        year=2026,
-        download_concurrency=3,
-        parse_concurrency=2,
-    )
+    await report.settings_remove_x(interaction, handle="@aleabitoreddit")
+    await report.settings_remove_reddit(interaction, subreddit="r/wallstreetbets")
 
     assert client.calls == [
-        (
-            "patch",
-            "/v1/sources/house-ptr",
-            {
-                "profile": "default",
-                "enabled": True,
-                "year": 2026,
-                "refresh_ttl_seconds": 21600,
-                "download_concurrency": 3,
-                "parse_concurrency": 2,
-            },
-        )
+        ("delete", "/v1/sources/x-users/%40aleabitoreddit", None),
+        ("delete", "/v1/sources/subreddits/r%2Fwallstreetbets", None),
     ]
     assert interaction.response.messages[0]["ephemeral"] is True
-    assert "Updated House PTR source" in interaction.response.messages[0]["content"]
-
-
-async def test_secret_set_rejects_invalid_name_before_api_call(monkeypatch) -> None:
-    interaction = FakeInteraction()
-    report = StockSumReport(bot=FakeBot(owner=True))
-    client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-
-    await report.secrets_set(interaction, name="not-a-secret", value="secret")
-
-    assert client.calls == []
-    assert "Secret name must be" in interaction.response.messages[0]["content"]
-    assert interaction.followup.messages == []
-
-
-async def test_secret_set_command_is_ephemeral_and_redacted(monkeypatch) -> None:
-    interaction = FakeInteraction()
-    report = StockSumReport(bot=FakeBot(owner=True))
-    client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-
-    await report.secrets_set(interaction, name="DEEPSEEK_API_KEY", value="sk-real-secret")
-
-    assert client.calls == [
-        ("put", "/v1/secrets/DEEPSEEK_API_KEY", {"value": "sk-real-secret"}),
-    ]
-    assert interaction.response.messages[0]["ephemeral"] is True
-    assert "sk-real-secret" not in interaction.response.messages[0]["content"]
+    assert interaction.followup.messages[0]["ephemeral"] is True
 
 
 class FakeSession:
@@ -1098,14 +1114,10 @@ class FakeSession:
         *,
         post_responses: list[FakeResponse],
         get_responses: list[FakeResponse | Exception],
-        patch_responses: list[FakeResponse] | None = None,
-        put_responses: list[FakeResponse] | None = None,
         delete_responses: list[FakeResponse] | None = None,
     ) -> None:
         self.post_responses = post_responses
         self.get_responses = get_responses
-        self.patch_responses = patch_responses or []
-        self.put_responses = put_responses or []
         self.delete_responses = delete_responses or []
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
         self.closed = False
@@ -1120,14 +1132,6 @@ class FakeSession:
         if isinstance(response, Exception):
             raise response
         return FakeContext(response)
-
-    def patch(self, url: str, **kwargs: Any) -> "FakeContext":
-        self.requests.append(("PATCH", url, kwargs))
-        return FakeContext(self.patch_responses.pop(0))
-
-    def put(self, url: str, **kwargs: Any) -> "FakeContext":
-        self.requests.append(("PUT", url, kwargs))
-        return FakeContext(self.put_responses.pop(0))
 
     def delete(self, url: str, **kwargs: Any) -> "FakeContext":
         self.requests.append(("DELETE", url, kwargs))
@@ -1185,8 +1189,8 @@ class FakeStockSumClient:
         self.fuzzy_matches: list[dict[str, Any]] = []
         self.fuzzy_calls: list[dict[str, Any]] = []
 
-    async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
-        self.social_calls.append({"profile": profile, "output_format": output_format, "detail": detail})
+    async def run_social_report(self, *, output_format: str, detail: str = "minimum") -> StockSumArtifact:
+        self.social_calls.append({"output_format": output_format, "detail": detail})
         return StockSumArtifact(
             job_id="job-1",
             filename=self.filename,
@@ -1255,7 +1259,7 @@ class FakeStockSumClient:
 
 
 class FakeFailingStockSumClient:
-    async def run_report(self, *, profile: str, output_format: str, detail: str = "minimum") -> StockSumArtifact:
+    async def run_social_report(self, *, output_format: str, detail: str = "minimum") -> StockSumArtifact:
         raise StockSumRequestError("broken")
 
     async def run_trading_report(self, **kwargs: Any) -> StockSumArtifact:
@@ -1423,19 +1427,24 @@ class FakeManagementClient:
 
     async def get_json(self, path: str) -> dict[str, Any]:
         self.calls.append(("get", path, None))
+        if path == "/v1/sources":
+            return {
+                "x_users": [{"handle": "aleabitoreddit", "enabled": True, "limit": 100, "lookback_hours": 24}],
+                "subreddits": [
+                    {
+                        "subreddit": "wallstreetbets",
+                        "enabled": True,
+                        "limit": 100,
+                        "lookback_hours": 24,
+                        "comments_per_post": 10,
+                    }
+                ],
+            }
         return {"ok": True}
 
     async def post_json(self, path: str, *, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         self.calls.append(("post", path, payload))
         return {"ok": True}
-
-    async def patch_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
-        self.calls.append(("patch", path, payload))
-        return {"ok": True}
-
-    async def put_json(self, path: str, *, payload: dict[str, Any]) -> dict[str, Any]:
-        self.calls.append(("put", path, payload))
-        return {"name": path.rsplit("/", 1)[-1], "set": True}
 
     async def delete_json(self, path: str) -> dict[str, Any]:
         self.calls.append(("delete", path, None))

@@ -38,8 +38,6 @@ def test_example_config_is_valid() -> None:
     assert config.llm.analysis_x_posts_per_chunk == 10
     assert config.llm.analysis_max_chars_per_chunk == 12000
     assert config.llm.analysis_max_concurrency == 1
-    assert "default" in config.reports
-    assert config.reports["default"].collector_ids == ["x.aleabitoreddit", "reddit.wallstreetbets", "house.ptr"]
     assert config.sources.x_users[0].handle == "aleabitoreddit"
     assert config.sources.x_users[0].enabled is True
     assert config.sources.x_users[0].limit == 100

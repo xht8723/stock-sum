@@ -6,7 +6,7 @@ from stock_sum.llm.prompts import build_trading_summary_messages
 def test_trading_summary_prompt_preserves_source_separation() -> None:
     messages = build_trading_summary_messages(
         {
-            "profile": "default",
+            "report_type": "social",
             "sources": {
                 "x": [{"handle": "aleabitoreddit", "posts": [{"id": "x1", "text": "x text"}]}],
                 "reddit": [{"subreddit": "wallstreetbets", "posts": [{"id": "r1", "title": "post"}]}],
