@@ -201,6 +201,80 @@ async def test_due_daily_report_runs_once_per_utc_day() -> None:
     assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
 
 
+async def test_daily_report_waits_until_prestart_window() -> None:
+    user = FakeUser(100)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient()
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="09:30")
+
+    await report._run_due_daily_reports_once(
+        now=datetime(2026, 7, 7, 8, 59, tzinfo=timezone.utc),
+        client=client,
+    )
+
+    assert client.calls == []
+    assert user.dm_messages == []
+
+
+async def test_daily_report_starts_thirty_minutes_before_set_time() -> None:
+    user = FakeUser(100)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient()
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="09:30")
+
+    await report._run_due_daily_reports_once(
+        now=datetime(2026, 7, 7, 9, 0, tzinfo=timezone.utc),
+        client=client,
+    )
+
+    assert [name for name, _kwargs in client.calls] == ["trendings", "social", "trading"]
+    assert len(user.dm_messages) == 1
+    subscriptions = await report._daily_store.all_subscriptions()
+    assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
+
+
+async def test_daily_report_starts_immediately_when_set_time_is_within_thirty_minutes() -> None:
+    user = FakeUser(100)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient()
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="09:30")
+
+    await report._run_due_daily_reports_once(
+        now=datetime(2026, 7, 7, 9, 5, tzinfo=timezone.utc),
+        client=client,
+    )
+
+    assert [name for name, _kwargs in client.calls] == ["trendings", "social", "trading"]
+    subscriptions = await report._daily_store.all_subscriptions()
+    assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
+
+
+async def test_daily_report_midnight_prestart_marks_target_utc_date() -> None:
+    user = FakeUser(100)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient()
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="00:10")
+
+    await report._run_due_daily_reports_once(
+        now=datetime(2026, 7, 6, 23, 40, tzinfo=timezone.utc),
+        client=client,
+    )
+    await report._run_due_daily_reports_once(
+        now=datetime(2026, 7, 7, 0, 10, tzinfo=timezone.utc),
+        client=client,
+    )
+
+    assert len(client.calls) == 3
+    assert len(user.dm_messages) == 1
+    subscriptions = await report._daily_store.all_subscriptions()
+    assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
+    assert "UTC date: 2026-07-07" in user.dm_messages[0]["content"]
+
+
 async def test_daily_report_keeps_order_and_continues_after_job_failure() -> None:
     user = FakeUser(100)
     bot = FakeBot(users={100: user})

@@ -74,8 +74,11 @@ message chunks.
 Plot output is always a PNG file attachment.
 `/daily` stores a per-user UTC delivery time in `HH:MM` format and sends one
 daily DM containing `/trendings`, `/recent_posts` default output, and
-`/ptr_search days:1` output. The cog checks schedules locally; stock-sum does
-not run outbound delivery. `/cancel_daily` disables the caller's subscription.
+`/ptr_search days:1` output. Report jobs start 30 minutes before the configured
+UTC time; if the configured time is already inside that 30-minute window, the
+next scheduler check starts the jobs immediately. The cog checks schedules
+locally; stock-sum does not run outbound delivery. `/cancel_daily` disables the
+caller's subscription.
 
 Slash commands validate common input mistakes before calling stock-sum:
 malformed dates, invalid source names, invalid asset/ticker identifiers, and

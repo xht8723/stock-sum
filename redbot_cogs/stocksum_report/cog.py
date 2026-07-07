@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any, Protocol
 from urllib.parse import quote
@@ -77,6 +77,7 @@ DEFAULT_POLL_SECONDS = 60.0
 DEFAULT_TIMEOUT_SECONDS = 30 * 60
 DAILY_CONFIG_IDENTIFIER = 8723001001
 DAILY_CHECK_SECONDS = 60.0
+DAILY_PRESTART_SECONDS = 30 * 60
 DISCORD_INLINE_LIMIT = 1900
 DISCORD_FAILURE_LIMIT = 1900
 SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
@@ -1518,17 +1519,16 @@ class StockSumReport(commands.Cog):
         client: Any | None = None,
     ) -> None:
         now_utc = _coerce_utc(now or datetime.now(timezone.utc))
-        today = now_utc.date().isoformat()
-        current_time = now_utc.strftime("%H:%M")
         subscriptions = await self._daily_store.all_subscriptions()
         for user_id, subscription in subscriptions.items():
-            if not _daily_subscription_due(subscription, current_time=current_time, today=today):
+            target_date = _daily_target_date_if_due(subscription, now_utc=now_utc)
+            if target_date is None:
                 continue
             if user_id in self._daily_running_users:
                 continue
             self._daily_running_users.add(user_id)
             try:
-                await self._deliver_daily_report(user_id, sent_utc_date=today, client=client)
+                await self._deliver_daily_report(user_id, sent_utc_date=target_date, client=client)
             finally:
                 self._daily_running_users.discard(user_id)
 
@@ -1633,15 +1633,29 @@ def _coerce_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _daily_subscription_due(subscription: dict[str, Any], *, current_time: str, today: str) -> bool:
+def _daily_target_date_if_due(subscription: dict[str, Any], *, now_utc: datetime) -> str | None:
     normalized = _normalize_daily_subscription(subscription)
     if not normalized["enabled"]:
-        return False
-    if not normalized["time_utc"]:
-        return False
-    if normalized["last_sent_utc_date"] == today:
-        return False
-    return current_time >= normalized["time_utc"]
+        return None
+    try:
+        hour_text, minute_text = normalized["time_utc"].split(":", 1)
+        scheduled_hour = int(hour_text)
+        scheduled_minute = int(minute_text)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    try:
+        scheduled_today = now_utc.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
+    except ValueError:
+        return None
+    prestart = timedelta(seconds=DAILY_PRESTART_SECONDS)
+    for scheduled_at in (scheduled_today + timedelta(days=1), scheduled_today):
+        target_date = scheduled_at.date().isoformat()
+        if normalized["last_sent_utc_date"] == target_date:
+            continue
+        if now_utc >= scheduled_at - prestart:
+            return target_date
+    return None
 
 
 async def _daily_section(title: str, runner: Any) -> DailyReportSection:
@@ -1938,7 +1952,7 @@ def _format_help_message() -> str:
         "`/13f_search` - Search SEC 13F holdings. Provide at least one filter such as manager, issuer, CIK, security ID, dates, min_value, or min_shares.",
         "`/trendings` - Trending stocks and sectors from Adanos.",
         "`/plot` - Generate a sentiment or disclosure statistic chart. Provide mode plus ticker, fuzzy_search, name, asset_type, days, or dates.",
-        "`/daily time:HH:MM` - DM a daily UTC report with trendings, recent posts, and last-24-hour PTR search.",
+        "`/daily time:HH:MM` - DM a daily UTC report with trendings, recent posts, and last-24-hour PTR search; jobs start 30 minutes early.",
         "`/cancel_daily` - Cancel your daily stock-sum DM report.",
         "`/settings list` - List configured X users and subreddits.",
         "`/settings add-x` - Owner only. Add an X user source, e.g. `aleabitoreddit` or `@aleabitoreddit`.",
