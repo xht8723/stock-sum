@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from redbot_cogs.stocksum_report.cog import (
+from .cog import (
     _validate_13f_identifier,
     _validate_asset_type,
     _validate_date_range,

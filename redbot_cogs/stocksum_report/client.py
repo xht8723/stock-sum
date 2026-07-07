@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from redbot_cogs.stocksum_report.cog import (
+from .cog import (
     StockSumArtifact,
     StockSumConfigurationError,
     StockSumCogError,
