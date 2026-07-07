@@ -16,6 +16,8 @@ from redbot_cogs.stocksum_report.stocksum_report import (
     StockSumHttpClient,
     StockSumRequestError,
     _failure_message,
+    _send_command_output,
+    _send_report_output,
     _split_discord_markdown,
 )
 
@@ -160,6 +162,22 @@ async def test_cancel_daily_disables_subscription() -> None:
     assert interaction.followup.messages == [
         {"content": "Daily stock-sum DM report canceled.", "ephemeral": True, "suppress_embeds": True}
     ]
+
+
+async def test_command_output_omits_none_file_keyword() -> None:
+    interaction = StrictFileNoneInteraction()
+
+    await _send_command_output(interaction, "ok", private=True)
+
+    assert interaction.response.calls == [("ok", {"ephemeral": True, "suppress_embeds": True})]
+
+
+async def test_report_output_omits_none_file_keyword_for_followup() -> None:
+    interaction = StrictFileNoneInteraction(channel=None)
+
+    await _send_report_output(interaction, "ok", private=False)
+
+    assert interaction.followup.calls == [("ok", {"ephemeral": False, "suppress_embeds": True})]
 
 
 async def test_due_daily_report_runs_once_per_utc_day() -> None:
@@ -1559,6 +1577,31 @@ class FakeInteraction:
         self.followup = FakeFollowupSender()
         self.channel = FakeChannelSender()
         self.user = FakeUser(100)
+
+
+class StrictFileNoneInteraction:
+    def __init__(self, *, channel: Any | None = object()) -> None:
+        self.response = StrictFileNoneSender()
+        self.followup = StrictFileNoneSender()
+        self.channel = channel
+
+
+class StrictFileNoneSender:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def is_done(self) -> bool:
+        return False
+
+    async def send_message(self, content: str, **kwargs: Any) -> None:
+        if kwargs.get("file") is None and "file" in kwargs:
+            raise AssertionError("file=None must not be sent to discord.py")
+        self.calls.append((content, kwargs))
+
+    async def send(self, content: str, **kwargs: Any) -> None:
+        if kwargs.get("file") is None and "file" in kwargs:
+            raise AssertionError("file=None must not be sent to discord.py")
+        self.calls.append((content, kwargs))
 
 
 class FakeResponseSender:

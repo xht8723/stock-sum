@@ -1808,7 +1808,10 @@ async def _send_command_output(interaction, content: str, *, private: bool, file
     if response is not None and hasattr(response, "send_message"):
         done = is_done() if callable(is_done) else False
         if not done:
-            await response.send_message(content, ephemeral=private, file=file, suppress_embeds=True)
+            kwargs: dict[str, Any] = {"ephemeral": private, "suppress_embeds": True}
+            if file is not None:
+                kwargs["file"] = file
+            await response.send_message(content, **kwargs)
             return
     await _send_report_output(interaction, content, private=private, file=file)
 
@@ -1817,7 +1820,10 @@ async def _send_report_output(interaction, content: str, *, private: bool, file:
     """Send final report output without replying to the acknowledgement when public."""
 
     if private:
-        await interaction.followup.send(content, ephemeral=True, file=file, suppress_embeds=True)
+        kwargs: dict[str, Any] = {"ephemeral": True, "suppress_embeds": True}
+        if file is not None:
+            kwargs["file"] = file
+        await interaction.followup.send(content, **kwargs)
         return
 
     channel = getattr(interaction, "channel", None)
@@ -1828,7 +1834,10 @@ async def _send_report_output(interaction, content: str, *, private: bool, file:
             await channel.send(content, file=file, suppress_embeds=True)
         return
 
-    await interaction.followup.send(content, ephemeral=False, file=file, suppress_embeds=True)
+    kwargs = {"ephemeral": False, "suppress_embeds": True}
+    if file is not None:
+        kwargs["file"] = file
+    await interaction.followup.send(content, **kwargs)
 
 
 async def _send_public_interaction_message(interaction, content: str) -> Any:
