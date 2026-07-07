@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -29,6 +30,7 @@ def test_required_slash_command_parameters_are_explicit() -> None:
         "settings_remove_x": {"handle"},
         "settings_add_reddit": {"subreddit"},
         "settings_remove_reddit": {"subreddit"},
+        "daily": {"time"},
         "plot": {"mode"},
     }
     for method_name, parameter_names in required_parameters.items():
@@ -82,6 +84,8 @@ def test_discord_command_names_match_public_contract() -> None:
     assert '@app_commands.command(name="13f_search"' in source
     assert '@app_commands.command(name="trendings"' in source
     assert '@app_commands.command(name="plot"' in source
+    assert '@app_commands.command(name="daily"' in source
+    assert '@app_commands.command(name="cancel_daily"' in source
     assert '@app_commands.command(name="help"' in source
     assert "def help(" not in source
 
@@ -106,6 +110,8 @@ async def test_help_command_lists_available_commands() -> None:
         "/13f_search",
         "/trendings",
         "/plot",
+        "/daily",
+        "/cancel_daily",
         "/settings list",
         "/settings add-x",
         "/settings remove-x",
@@ -114,6 +120,112 @@ async def test_help_command_lists_available_commands() -> None:
         "/help",
     ):
         assert command in message["content"]
+
+
+async def test_daily_command_stores_utc_subscription() -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+
+    await report.daily(interaction, "09:30")
+
+    subscriptions = await report._daily_store.all_subscriptions()
+    subscription = subscriptions[100]
+    assert subscription["enabled"] is True
+    assert subscription["time_utc"] == "09:30"
+    assert subscription["last_sent_utc_date"] == ""
+    assert interaction.response.messages == [
+        {"content": "Daily stock-sum DM report enabled for 09:30 UTC.", "ephemeral": True, "suppress_embeds": True}
+    ]
+
+
+async def test_daily_command_rejects_invalid_time() -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+
+    await report.daily(interaction, "24:00")
+
+    assert "daily time must be UTC HH:MM" in interaction.response.messages[0]["content"]
+    assert await report._daily_store.all_subscriptions() == {}
+
+
+async def test_cancel_daily_disables_subscription() -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+
+    await report.daily(interaction, "09:30")
+    await report.cancel_daily(interaction)
+
+    subscriptions = await report._daily_store.all_subscriptions()
+    assert subscriptions[100]["enabled"] is False
+    assert interaction.followup.messages == [
+        {"content": "Daily stock-sum DM report canceled.", "ephemeral": True, "suppress_embeds": True}
+    ]
+
+
+async def test_due_daily_report_runs_once_per_utc_day() -> None:
+    user = FakeUser(100)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient()
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="09:30")
+    now = datetime(2026, 7, 7, 9, 30, tzinfo=timezone.utc)
+
+    await report._run_due_daily_reports_once(now=now, client=client)
+    await report._run_due_daily_reports_once(now=now, client=client)
+
+    assert client.calls == [
+        ("trendings", {"output_format": "discord"}),
+        ("social", {"output_format": "discord", "detail": "minimum"}),
+        ("trading", {"output_format": "discord", "days": 1}),
+    ]
+    assert len(user.dm_messages) == 1
+    subscriptions = await report._daily_store.all_subscriptions()
+    assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
+
+
+async def test_daily_report_keeps_order_and_continues_after_job_failure() -> None:
+    user = FakeUser(100)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient(fail_methods={"social"})
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="09:30")
+
+    await report._run_due_daily_reports_once(
+        now=datetime(2026, 7, 7, 9, 30, tzinfo=timezone.utc),
+        client=client,
+    )
+
+    assert client.calls == [
+        ("trendings", {"output_format": "discord"}),
+        ("social", {"output_format": "discord", "detail": "minimum"}),
+        ("trading", {"output_format": "discord", "days": 1}),
+    ]
+    message = user.dm_messages[0]["content"]
+    trendings_index = message.index("## Trendings")
+    recent_index = message.index("## Recent Posts")
+    ptr_index = message.index("## PTR Search")
+    assert trendings_index < recent_index < ptr_index
+    assert "trendings body" in message
+    assert "Warning: Recent Posts failed: social broken" in message
+    assert "trading body" in message
+    assert "social body" not in message
+
+
+async def test_daily_dm_failure_marks_sent_to_avoid_retry_spam() -> None:
+    user = FakeUser(100, fail_send=True)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient()
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="09:30")
+    now = datetime(2026, 7, 7, 9, 30, tzinfo=timezone.utc)
+
+    await report._run_due_daily_reports_once(now=now, client=client)
+    await report._run_due_daily_reports_once(now=now, client=client)
+
+    assert len(client.calls) == 3
+    subscriptions = await report._daily_store.all_subscriptions()
+    assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
+    assert "Could not send Discord DM" in subscriptions[100]["last_error"]
 
 
 async def test_client_sends_report_request_and_downloads_artifact() -> None:
@@ -1407,6 +1519,40 @@ class FakeFailingStockSumClient:
         raise StockSumRequestError("broken")
 
 
+class FakeDailyStockSumClient:
+    def __init__(self, *, fail_methods: set[str] | None = None) -> None:
+        self.fail_methods = fail_methods or set()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def run_trendings_report(self, **kwargs: Any) -> StockSumArtifact:
+        self.calls.append(("trendings", kwargs))
+        if "trendings" in self.fail_methods:
+            raise StockSumRequestError("trendings broken")
+        return _daily_artifact("trendings body")
+
+    async def run_social_report(self, **kwargs: Any) -> StockSumArtifact:
+        self.calls.append(("social", kwargs))
+        if "social" in self.fail_methods:
+            raise StockSumRequestError("social broken")
+        return _daily_artifact("social body")
+
+    async def run_trading_report(self, **kwargs: Any) -> StockSumArtifact:
+        self.calls.append(("trading", kwargs))
+        if "trading" in self.fail_methods:
+            raise StockSumRequestError("trading broken")
+        return _daily_artifact("trading body")
+
+
+def _daily_artifact(content: str) -> StockSumArtifact:
+    return StockSumArtifact(
+        job_id="daily",
+        filename="daily.md",
+        content_type="text/markdown; charset=utf-8",
+        content=content.encode("utf-8"),
+        status={"status": "succeeded"},
+    )
+
+
 class FakeInteraction:
     def __init__(self) -> None:
         self.response = FakeResponseSender()
@@ -1499,14 +1645,29 @@ class FakeDiscord:
 
 
 class FakeBot:
-    def __init__(self, *, owner: bool = True, reaction_emoji: str = "1️⃣", reaction_user_id: int = 100, timeout: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        owner: bool = True,
+        reaction_emoji: str = "1️⃣",
+        reaction_user_id: int = 100,
+        timeout: bool = False,
+        users: dict[int, "FakeUser"] | None = None,
+    ) -> None:
         self.owner = owner
         self.reaction_emoji = reaction_emoji
         self.reaction_user_id = reaction_user_id
         self.timeout = timeout
+        self.users = users or {}
 
     async def is_owner(self, _user: object) -> bool:
         return self.owner
+
+    def get_user(self, user_id: int) -> "FakeUser" | None:
+        return self.users.get(user_id)
+
+    async def fetch_user(self, user_id: int) -> "FakeUser" | None:
+        return self.users.get(user_id)
 
     async def wait_for(self, _event: str, *, timeout: float, check: Any) -> Any:
         if self.timeout:
@@ -1519,8 +1680,15 @@ class FakeBot:
 
 
 class FakeUser:
-    def __init__(self, user_id: int) -> None:
+    def __init__(self, user_id: int, *, fail_send: bool = False) -> None:
         self.id = user_id
+        self.fail_send = fail_send
+        self.dm_messages: list[dict[str, Any]] = []
+
+    async def send(self, content: str, *, suppress_embeds: bool = False) -> None:
+        if self.fail_send:
+            raise RuntimeError("DMs closed")
+        self.dm_messages.append({"content": content, "suppress_embeds": suppress_embeds})
 
 
 class FakeReaction:

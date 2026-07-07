@@ -1,8 +1,9 @@
 # stocksum_report
 
 Red Discord Bot cog that exposes `/recent_posts`, `/ptr_search`,
-`/13f_search`, `/trendings`, `/plot`, and `/settings`, then bridges those slash commands
-to the local `stock-sum` HTTP server.
+`/13f_search`, `/trendings`, `/plot`, `/daily`, `/cancel_daily`, and
+`/settings`, then bridges those slash commands to the local `stock-sum` HTTP
+server.
 
 ## Environment
 
@@ -34,6 +35,8 @@ Then sync slash commands with Red's slash-command management command and run:
 /trendings from:2026-07-01 to:2026-07-06 limit:5
 /plot mode:social ticker:NVDA days:30
 /plot mode:social fuzzy_search:nvidia days:30
+/daily time:13:30
+/cancel_daily
 /settings list
 /settings add-x handle:aleabitoreddit
 /settings add-reddit subreddit:wallstreetbets
@@ -69,14 +72,19 @@ names. Do not provide both `ticker` and `fuzzy_search`.
 Report commands always use Discord-specific markdown and are sent inline in
 message chunks.
 Plot output is always a PNG file attachment.
+`/daily` stores a per-user UTC delivery time in `HH:MM` format and sends one
+daily DM containing `/trendings`, `/recent_posts` default output, and
+`/ptr_search days:1` output. The cog checks schedules locally; stock-sum does
+not run outbound delivery. `/cancel_daily` disables the caller's subscription.
 
 Slash commands validate common input mistakes before calling stock-sum:
 malformed dates, invalid source names, invalid asset/ticker identifiers, and
 out-of-range numeric limits return an immediate validation error message.
 
 The cog polls stock-sum job status once per minute while a report is running.
-Report and plot commands post publicly. Source mutation settings commands
-are restricted to Redbot owners and respond privately.
+Report and plot commands post publicly. Daily reports are sent by DM. Source
+mutation settings commands are restricted to Redbot owners and respond
+privately.
 
 ## Settings Commands
 

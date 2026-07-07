@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from io import BytesIO
 from typing import Any, Protocol
 from urllib.parse import quote
@@ -13,9 +13,10 @@ import re
 
 try:  # pragma: no cover - exercised in a Redbot runtime, not the project venv.
     import discord
-    from redbot.core import app_commands, commands
+    from redbot.core import Config, app_commands, commands
 except ModuleNotFoundError:  # pragma: no cover - lets local tests import the HTTP client helpers.
     discord = None
+    Config = None
 
     class _FallbackCog:
         pass
@@ -74,6 +75,8 @@ except ModuleNotFoundError:  # pragma: no cover - lets local tests import the HT
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_POLL_SECONDS = 60.0
 DEFAULT_TIMEOUT_SECONDS = 30 * 60
+DAILY_CONFIG_IDENTIFIER = 8723001001
+DAILY_CHECK_SECONDS = 60.0
 DISCORD_INLINE_LIMIT = 1900
 DISCORD_FAILURE_LIMIT = 1900
 SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
@@ -98,6 +101,7 @@ _CUSIP_RE = re.compile(r"^[A-Z0-9]{1,12}$")
 _FIGI_RE = re.compile(r"^[A-Z0-9]{1,24}$")
 _CIK_RE = re.compile(r"^[0-9]{1,10}$")
 _ACCESSION_RE = re.compile(r"^[A-Za-z0-9-]{1,32}$")
+_DAILY_TIME_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
 
 class StockSumCogError(Exception):
@@ -157,6 +161,157 @@ class StockSumArtifact:
     content_type: str
     content: bytes
     status: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DailyReportSection:
+    """One completed section of the daily DM bundle."""
+
+    title: str
+    content: str
+    error: str | None = None
+
+
+def _empty_daily_subscription() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "time_utc": "",
+        "last_sent_utc_date": "",
+        "last_error": "",
+        "created_at": "",
+        "updated_at": "",
+    }
+
+
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _user_id_value(user: Any) -> int:
+    return int(getattr(user, "id"))
+
+
+def _normalize_daily_subscription(payload: Any) -> dict[str, Any]:
+    normalized = _empty_daily_subscription()
+    if isinstance(payload, dict):
+        normalized.update({key: value for key, value in payload.items() if key in normalized})
+    normalized["enabled"] = bool(normalized["enabled"])
+    normalized["time_utc"] = str(normalized["time_utc"] or "")
+    normalized["last_sent_utc_date"] = str(normalized["last_sent_utc_date"] or "")
+    normalized["last_error"] = str(normalized["last_error"] or "")
+    return normalized
+
+
+class _DailyReportStore(Protocol):
+    async def set_subscription(self, user: Any, *, time_utc: str) -> dict[str, Any]:
+        ...
+
+    async def cancel_subscription(self, user: Any) -> None:
+        ...
+
+    async def all_subscriptions(self) -> dict[int, dict[str, Any]]:
+        ...
+
+    async def mark_sent(self, user_id: int, *, sent_utc_date: str, last_error: str = "") -> None:
+        ...
+
+
+class _InMemoryDailyReportStore:
+    def __init__(self) -> None:
+        self.subscriptions: dict[int, dict[str, Any]] = {}
+
+    async def set_subscription(self, user: Any, *, time_utc: str) -> dict[str, Any]:
+        user_id = _user_id_value(user)
+        now = _now_utc_iso()
+        existing = _normalize_daily_subscription(self.subscriptions.get(user_id))
+        created_at = existing.get("created_at") or now
+        subscription = {
+            **existing,
+            "enabled": True,
+            "time_utc": time_utc,
+            "last_error": "",
+            "created_at": created_at,
+            "updated_at": now,
+        }
+        self.subscriptions[user_id] = subscription
+        return subscription
+
+    async def cancel_subscription(self, user: Any) -> None:
+        user_id = _user_id_value(user)
+        existing = _normalize_daily_subscription(self.subscriptions.get(user_id))
+        self.subscriptions[user_id] = {
+            **existing,
+            "enabled": False,
+            "last_error": "",
+            "updated_at": _now_utc_iso(),
+        }
+
+    async def all_subscriptions(self) -> dict[int, dict[str, Any]]:
+        return {user_id: _normalize_daily_subscription(payload) for user_id, payload in self.subscriptions.items()}
+
+    async def mark_sent(self, user_id: int, *, sent_utc_date: str, last_error: str = "") -> None:
+        existing = _normalize_daily_subscription(self.subscriptions.get(user_id))
+        self.subscriptions[user_id] = {
+            **existing,
+            "last_sent_utc_date": sent_utc_date,
+            "last_error": last_error,
+            "updated_at": _now_utc_iso(),
+        }
+
+
+class _RedbotDailyReportStore:
+    def __init__(self, cog: Any) -> None:
+        if Config is None:
+            raise StockSumConfigurationError("Redbot Config is not available.")
+        self.config = Config.get_conf(cog, identifier=DAILY_CONFIG_IDENTIFIER, force_registration=True)
+        self.config.register_user(daily_subscription=_empty_daily_subscription())
+
+    async def set_subscription(self, user: Any, *, time_utc: str) -> dict[str, Any]:
+        group = self.config.user(user)
+        existing = _normalize_daily_subscription(await group.daily_subscription())
+        now = _now_utc_iso()
+        subscription = {
+            **existing,
+            "enabled": True,
+            "time_utc": time_utc,
+            "last_error": "",
+            "created_at": existing.get("created_at") or now,
+            "updated_at": now,
+        }
+        await group.daily_subscription.set(subscription)
+        return subscription
+
+    async def cancel_subscription(self, user: Any) -> None:
+        group = self.config.user(user)
+        existing = _normalize_daily_subscription(await group.daily_subscription())
+        await group.daily_subscription.set(
+            {
+                **existing,
+                "enabled": False,
+                "last_error": "",
+                "updated_at": _now_utc_iso(),
+            }
+        )
+
+    async def all_subscriptions(self) -> dict[int, dict[str, Any]]:
+        users = await self.config.all_users()
+        subscriptions: dict[int, dict[str, Any]] = {}
+        for user_id, payload in users.items():
+            if isinstance(payload, dict):
+                subscriptions[int(user_id)] = _normalize_daily_subscription(payload.get("daily_subscription"))
+        return subscriptions
+
+    async def mark_sent(self, user_id: int, *, sent_utc_date: str, last_error: str = "") -> None:
+        group = self.config.user_from_id(user_id)
+        existing = _normalize_daily_subscription(await group.daily_subscription())
+        await group.daily_subscription.set(
+            {
+                **existing,
+                "last_sent_utc_date": sent_utc_date,
+                "last_error": last_error,
+                "updated_at": _now_utc_iso(),
+            }
+        )
 
 
 class StockSumHttpClient:
@@ -662,12 +817,47 @@ class StockSumReport(commands.Cog):
 
     def __init__(self, bot) -> None:
         self.bot = bot
+        self._daily_running_users: set[int] = set()
+        self._daily_store: _DailyReportStore = _RedbotDailyReportStore(self) if Config is not None else _InMemoryDailyReportStore()
+        self._daily_report_task: asyncio.Task | None = None
+        if Config is not None and bot is not None:
+            try:
+                self._daily_report_task = asyncio.create_task(self._daily_report_loop())
+            except RuntimeError:  # pragma: no cover - Redbot normally constructs cogs inside an event loop.
+                self._daily_report_task = None
+
+    def cog_unload(self) -> None:
+        if self._daily_report_task is not None:
+            self._daily_report_task.cancel()
 
     @app_commands.command(name="help", description="List available stock-sum slash commands.")
     async def stocksum_help(self, interaction) -> None:
         """Slash command handler for listing stock-sum commands."""
 
         await interaction.response.send_message(_format_help_message(), ephemeral=False)
+
+    @app_commands.command(name="daily", description="DM the daily stock-sum report at a UTC time.")
+    @app_commands.describe(time="UTC time in HH:MM, 24-hour format")
+    async def daily(self, interaction, time: str) -> None:
+        """Slash command handler for daily DM report scheduling."""
+
+        time_utc, error = _validate_daily_time(time)
+        if error:
+            await _send_validation_error(interaction, error)
+            return
+        await self._daily_store.set_subscription(interaction.user, time_utc=time_utc)
+        await _send_command_output(
+            interaction,
+            f"Daily stock-sum DM report enabled for {time_utc} UTC.",
+            private=True,
+        )
+
+    @app_commands.command(name="cancel_daily", description="Cancel your daily stock-sum DM report.")
+    async def cancel_daily(self, interaction) -> None:
+        """Slash command handler for removing daily DM report scheduling."""
+
+        await self._daily_store.cancel_subscription(interaction.user)
+        await _send_command_output(interaction, "Daily stock-sum DM report canceled.", private=True)
 
     @app_commands.command(name="recent_posts", description="Generate a stock-sum social media market report.")
     @app_commands.describe(
@@ -1311,6 +1501,96 @@ class StockSumReport(commands.Cog):
             return
         await _send_command_output(interaction, _format_json_message(title, response), private=private)
 
+    async def _daily_report_loop(self) -> None:
+        while True:
+            try:
+                await self._run_due_daily_reports_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            await asyncio.sleep(DAILY_CHECK_SECONDS)
+
+    async def _run_due_daily_reports_once(
+        self,
+        *,
+        now: datetime | None = None,
+        client: Any | None = None,
+    ) -> None:
+        now_utc = _coerce_utc(now or datetime.now(timezone.utc))
+        today = now_utc.date().isoformat()
+        current_time = now_utc.strftime("%H:%M")
+        subscriptions = await self._daily_store.all_subscriptions()
+        for user_id, subscription in subscriptions.items():
+            if not _daily_subscription_due(subscription, current_time=current_time, today=today):
+                continue
+            if user_id in self._daily_running_users:
+                continue
+            self._daily_running_users.add(user_id)
+            try:
+                await self._deliver_daily_report(user_id, sent_utc_date=today, client=client)
+            finally:
+                self._daily_running_users.discard(user_id)
+
+    async def _deliver_daily_report(
+        self,
+        user_id: int,
+        *,
+        sent_utc_date: str,
+        client: Any | None = None,
+    ) -> None:
+        user = await self._daily_report_user(user_id)
+        if user is None:
+            await self._daily_store.mark_sent(user_id, sent_utc_date=sent_utc_date, last_error="Could not find Discord user.")
+            return
+
+        report_client = client or StockSumHttpClient.from_env()
+        sections = await self._run_daily_report_bundle(report_client)
+        rendered = _format_daily_report(sections, sent_utc_date=sent_utc_date)
+        try:
+            await _send_daily_dm(user, rendered)
+        except Exception as exc:
+            await self._daily_store.mark_sent(user_id, sent_utc_date=sent_utc_date, last_error=f"Could not send Discord DM: {exc}")
+            return
+
+        warning = "; ".join(section.error for section in sections if section.error)
+        await self._daily_store.mark_sent(user_id, sent_utc_date=sent_utc_date, last_error=warning)
+
+    async def _daily_report_user(self, user_id: int) -> Any | None:
+        if self.bot is None:
+            return None
+        getter = getattr(self.bot, "get_user", None)
+        if callable(getter):
+            user = getter(user_id)
+            if user is not None:
+                return user
+        fetcher = getattr(self.bot, "fetch_user", None)
+        if callable(fetcher):
+            return await fetcher(user_id)
+        return None
+
+    async def _run_daily_report_bundle(self, client: Any) -> list[DailyReportSection]:
+        sections: list[DailyReportSection] = []
+        sections.append(
+            await _daily_section(
+                "Trendings",
+                lambda: client.run_trendings_report(output_format="discord"),
+            )
+        )
+        sections.append(
+            await _daily_section(
+                "Recent Posts",
+                lambda: client.run_social_report(output_format="discord", detail="minimum"),
+            )
+        )
+        sections.append(
+            await _daily_section(
+                "PTR Search",
+                lambda: client.run_trading_report(output_format="discord", days=1),
+            )
+        )
+        return sections
+
 
 async def _response_error_text(response: _ClientResponse) -> str:
     try:
@@ -1338,6 +1618,64 @@ def _validate_report_options(*, output_format: str, detail: str | None = None) -
     if detail is not None and detail not in SUPPORTED_SOCIAL_DETAILS:
         return f"Unsupported social report detail: {detail}. Use minimum, medium, or full."
     return None
+
+
+def _validate_daily_time(value: str) -> tuple[str | None, str | None]:
+    clean = value.strip()
+    if not _DAILY_TIME_RE.fullmatch(clean):
+        return None, "daily time must be UTC HH:MM in 24-hour format."
+    return clean, None
+
+
+def _coerce_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _daily_subscription_due(subscription: dict[str, Any], *, current_time: str, today: str) -> bool:
+    normalized = _normalize_daily_subscription(subscription)
+    if not normalized["enabled"]:
+        return False
+    if not normalized["time_utc"]:
+        return False
+    if normalized["last_sent_utc_date"] == today:
+        return False
+    return current_time >= normalized["time_utc"]
+
+
+async def _daily_section(title: str, runner: Any) -> DailyReportSection:
+    try:
+        artifact = await runner()
+    except Exception as exc:
+        return DailyReportSection(title=title, content="", error=f"{title} failed: {exc}")
+    content = artifact.content.decode("utf-8", errors="replace").strip()
+    return DailyReportSection(title=title, content=content or "Report generated, but it did not contain any text.")
+
+
+def _format_daily_report(sections: list[DailyReportSection], *, sent_utc_date: str) -> str:
+    lines = [
+        "**Stock-Sum Daily Report**",
+        f"UTC date: {sent_utc_date}",
+    ]
+    for section in sections:
+        lines.extend(["", f"## {section.title}"])
+        if section.error:
+            lines.append(f"Warning: {section.error}")
+        else:
+            lines.append(section.content)
+    return "\n".join(lines)
+
+
+async def _send_daily_dm(user: Any, content: str) -> None:
+    sender = getattr(user, "send", None)
+    if not callable(sender):
+        raise StockSumRequestError("Discord user cannot receive DMs.")
+    for chunk in _split_discord_markdown(content):
+        try:
+            await sender(chunk, suppress_embeds=True)
+        except TypeError:
+            await sender(chunk)
 
 
 def _validate_x_handle(value: str) -> str | None:
@@ -1591,6 +1929,8 @@ def _format_help_message() -> str:
         "`/13f_search` - Search SEC 13F holdings. Provide at least one filter such as manager, issuer, CIK, security ID, dates, min_value, or min_shares.",
         "`/trendings` - Trending stocks and sectors from Adanos.",
         "`/plot` - Generate a sentiment or disclosure statistic chart. Provide mode plus ticker, fuzzy_search, name, asset_type, days, or dates.",
+        "`/daily time:HH:MM` - DM a daily UTC report with trendings, recent posts, and last-24-hour PTR search.",
+        "`/cancel_daily` - Cancel your daily stock-sum DM report.",
         "`/settings list` - List configured X users and subreddits.",
         "`/settings add-x` - Owner only. Add an X user source, e.g. `aleabitoreddit` or `@aleabitoreddit`.",
         "`/settings remove-x` - Owner only. Remove an X user source.",

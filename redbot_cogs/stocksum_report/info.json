@@ -7,5 +7,5 @@
   "tags": ["stock-sum", "reports", "slash"],
   "requirements": [],
   "min_bot_version": "3.5.0",
-  "end_user_data_statement": "This cog sends Discord user requests to a local stock-sum HTTP service and does not persist Discord user data."
+  "end_user_data_statement": "This cog sends Discord user requests to a local stock-sum HTTP service. Daily report subscriptions persist Discord user IDs, UTC delivery times, last-sent dates, and last delivery errors until canceled."
 }
