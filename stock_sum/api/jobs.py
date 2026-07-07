@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 from uuid import uuid4
 import asyncio
 import hashlib
@@ -18,174 +18,41 @@ import time as monotonic_time
 from stock_sum.config.models import AppConfig
 from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID
 from stock_sum.collectors.factory import social_collector_ids
+from stock_sum.api.job_models import (
+    HttpJobRecord,
+    JobKind,
+    JobStatus,
+    ReportMode,
+    Sec13FReportJobOptions,
+    SocialReportJobOptions,
+    StatisticBucket,
+    StatisticJobOptions,
+    StatisticMode,
+    TradingReportJobOptions,
+    TrendingsReportJobOptions,
+    WorkerOperation,
+    _InFlightReport,
+)
+from stock_sum.api.job_store import (
+    _job_record_from_dict,
+    _job_sort_datetime,
+    _parse_utc_datetime,
+    _utc_now,
+)
+from stock_sum.api.job_validation import (
+    _parse_date_filter,
+    _sec_13f_filter_data,
+    _statistic_date_window,
+    _statistic_filter_data,
+    _trading_date_window,
+    _trading_filter_data,
+    _trendings_date_window,
+    _validate_13f_filters,
+    _validate_statistic_filters,
+    _validate_trading_filters,
+    _validate_trendings_filters,
+)
 from stock_sum.llm.analysis import PROMPT_VERSION
-
-JobStatus = Literal["queued", "running", "succeeded", "failed"]
-JobKind = Literal["social_report", "trading_report", "13f_report", "trendings_report", "statistic", "collect"]
-ReportMode = Literal["html", "markdown", "discord", "text", "json"]
-StatisticMode = Literal["social", "trading"]
-StatisticBucket = Literal["auto", "day", "week", "month"]
-WorkerOperation = Literal[
-    "http_social_report",
-    "http_trading_report",
-    "http_13f_report",
-    "http_trendings_report",
-    "http_statistic",
-    "http_collect",
-    "http_render_cached_artifact_job",
-    "http_render_coalesced_artifact_job",
-]
-
-
-@dataclass(frozen=True)
-class SocialReportJobOptions:
-    """Options for a full report job."""
-
-    mode: ReportMode = "html"
-    detail: Literal["minimum", "medium", "full"] = "minimum"
-    x_method: Literal["xpoz", "rss"] = "xpoz"
-    reddit_method: Literal["xpoz", "rss"] = "xpoz"
-    download_images: bool = False
-    instructions: str | None = None
-    title: str = "Market Social Digest"
-    max_images_per_post: int = 3
-    max_images_total: int = 20
-
-
-@dataclass(frozen=True)
-class TradingReportJobOptions:
-    """Options for a House PTR trading disclosure report job."""
-
-    mode: ReportMode = "html"
-    name: str | None = None
-    start_date: str | None = None
-    end_date: str | None = None
-    days: int | None = None
-    asset_type: str | None = None
-    ticker: str | None = None
-    limit: int = 100
-    title: str = "Official Trading Disclosures"
-    force_refresh: bool = False
-
-    def __post_init__(self) -> None:
-        if self.limit is None:
-            object.__setattr__(self, "limit", 100)
-
-
-@dataclass(frozen=True)
-class Sec13FReportJobOptions:
-    """Options for an SEC 13F holdings report job."""
-
-    mode: ReportMode = "html"
-    manager: str | None = None
-    cik: str | None = None
-    accession_number: str | None = None
-    issuer: str | None = None
-    cusip: str | None = None
-    figi: str | None = None
-    put_call: str | None = None
-    period_start: str | None = None
-    period_end: str | None = None
-    filing_start: str | None = None
-    filing_end: str | None = None
-    min_value: int | None = None
-    min_shares: int | None = None
-    limit: int = 20
-    title: str = "SEC 13F Holdings"
-    force_refresh: bool = False
-
-    def __post_init__(self) -> None:
-        if self.limit is None:
-            object.__setattr__(self, "limit", 20)
-
-
-@dataclass(frozen=True)
-class TrendingsReportJobOptions:
-    """Options for an Adanos trendings report job."""
-
-    mode: ReportMode = "html"
-    from_date: str | None = None
-    to_date: str | None = None
-    limit: int = 5
-    title: str = "Trending Market Sentiment"
-
-    def __post_init__(self) -> None:
-        if self.limit is None:
-            object.__setattr__(self, "limit", 5)
-
-
-@dataclass(frozen=True)
-class StatisticJobOptions:
-    """Options for a read-only statistic PNG job."""
-
-    mode: StatisticMode = "social"
-    ticker: str | None = None
-    fuzzy_tag: str | None = None
-    name: str | None = None
-    asset_name: str | None = None
-    asset_type: str | None = None
-    action: Literal["purchase", "sell", "sell_partial", "all"] = "all"
-    source: Literal["x", "reddit", "all"] = "all"
-    sentiment: Literal["bullish", "bearish", "mixed", "neutral", "unclear", "all"] = "all"
-    start_date: str | None = None
-    end_date: str | None = None
-    days: int | None = None
-    bucket: StatisticBucket = "auto"
-    title: str = "Stock-Sum Statistic"
-
-
-@dataclass
-class HttpJobRecord:
-    """Persisted local HTTP job metadata."""
-
-    job_id: str
-    kind: JobKind
-    scope: str
-    status: JobStatus
-    phase: str
-    created_at: str
-    updated_at: str
-    started_at: str | None = None
-    finished_at: str | None = None
-    error: str | None = None
-    mode: str | None = None
-    artifact_path: str | None = None
-    artifact_media_type: str | None = None
-    summary_path: str | None = None
-    collection_result: dict[str, Any] | None = None
-    warnings: list[dict[str, Any]] = field(default_factory=list)
-    cache_key: str | None = None
-    cache_hit: bool = False
-    cached_from_job_id: str | None = None
-    cache_age_seconds: int | None = None
-    coalesced_from_job_id: str | None = None
-    coalesced_wait_seconds: int | None = None
-    cleanup_result: dict[str, Any] | None = None
-    in_memory_jobs: int | None = None
-    inflight_reports: int | None = None
-    max_in_memory_jobs: int | None = None
-    evicted_in_memory_jobs: int | None = None
-    worker_pid: int | None = None
-    worker_started_at: str | None = None
-    worker_finished_at: str | None = None
-    worker_exit_code: int | None = None
-    worker_runtime_seconds: float | None = None
-    worker_mode: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-safe representation."""
-
-        return asdict(self)
-
-
-@dataclass
-class _InFlightReport:
-    """An artifact job currently producing a summary for a cache key."""
-
-    cache_key: str
-    leader_job_id: str
-    started_at: datetime
-    done: asyncio.Event
 
 
 class HttpJobManager:
@@ -1779,233 +1646,6 @@ class HttpJobManager:
     def _write_json(path: Path, data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _parse_utc_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _job_sort_datetime(record: HttpJobRecord) -> datetime:
-    return (
-        _parse_utc_datetime(record.finished_at)
-        or _parse_utc_datetime(record.updated_at)
-        or _parse_utc_datetime(record.created_at)
-        or datetime.min.replace(tzinfo=timezone.utc)
-    )
-
-
-def _validate_trading_filters(options: TradingReportJobOptions) -> None:
-    if not any((options.name, options.start_date, options.end_date, options.days, options.asset_type, options.ticker)):
-        raise ValueError("Trading report requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
-    if options.days is not None and (options.start_date or options.end_date):
-        raise ValueError("Trading report accepts either days or explicit start/end dates, not both.")
-
-
-def _validate_13f_filters(options: Sec13FReportJobOptions) -> None:
-    has_filter = any(
-        (
-            options.manager,
-            options.cik,
-            options.accession_number,
-            options.issuer,
-            options.cusip,
-            options.figi,
-            options.put_call,
-            options.period_start,
-            options.period_end,
-            options.filing_start,
-            options.filing_end,
-            options.min_value is not None,
-            options.min_shares is not None,
-        )
-    )
-    if not has_filter:
-        raise ValueError("13F report requires at least one filter: manager, issuer, CIK, accession, CUSIP, FIGI, date, value, or shares.")
-    if options.limit < 1:
-        raise ValueError("13F report limit must be at least 1.")
-
-
-def _validate_trendings_filters(options: TrendingsReportJobOptions) -> None:
-    if options.mode not in {"html", "markdown", "discord", "text", "json"}:
-        raise ValueError("Trendings report mode must be html, markdown, discord, text, or json.")
-    if options.limit < 1:
-        raise ValueError("Trendings report limit must be at least 1.")
-    _trendings_date_window(options)
-
-
-def _validate_statistic_filters(options: StatisticJobOptions) -> None:
-    if options.mode not in {"social", "trading"}:
-        raise ValueError("Statistic mode must be social or trading.")
-    if options.bucket not in {"auto", "day", "week", "month"}:
-        raise ValueError("Statistic bucket must be auto, day, week, or month.")
-    if options.days is not None and options.days < 1:
-        raise ValueError("Statistic days must be a positive integer.")
-    if options.days is not None and (options.start_date or options.end_date):
-        raise ValueError("Statistic accepts either days or explicit start/end dates, not both.")
-    if options.mode == "social":
-        if options.source not in {"x", "reddit", "all"}:
-            raise ValueError("Statistic source must be x, reddit, or all.")
-        if options.sentiment not in {"bullish", "bearish", "mixed", "neutral", "unclear", "all"}:
-            raise ValueError("Statistic sentiment must be bullish, bearish, mixed, neutral, unclear, or all.")
-    if options.mode == "trading" and options.action not in {"purchase", "sell", "sell_partial", "all"}:
-        raise ValueError("Statistic action must be purchase, sell, sell_partial, or all.")
-    has_filter = any(
-        (
-            options.ticker,
-            options.fuzzy_tag,
-            options.name,
-            options.asset_name,
-            options.asset_type,
-            options.days,
-            options.start_date,
-            options.end_date,
-        )
-    )
-    if not has_filter:
-        raise ValueError("Statistic requires at least one filter: ticker, fuzzy_tag, name, asset_name, asset_type, days, or date range.")
-
-
-def _trading_date_window(options: TradingReportJobOptions) -> tuple[datetime | None, datetime | None]:
-    if options.days is not None:
-        now = datetime.now(timezone.utc)
-        return now - timedelta(days=options.days), now
-    return _parse_date_filter(options.start_date, end_of_day=False), _parse_date_filter(options.end_date, end_of_day=True)
-
-
-def _statistic_date_window(options: StatisticJobOptions) -> tuple[datetime | None, datetime | None]:
-    if options.days is not None:
-        now = datetime.now(timezone.utc)
-        return now - timedelta(days=options.days), now
-    return _parse_date_filter(options.start_date, end_of_day=False), _parse_date_filter(options.end_date, end_of_day=True)
-
-
-def _trendings_date_window(options: TrendingsReportJobOptions) -> tuple[date, date]:
-    today = datetime.now(timezone.utc).date()
-    from_date = _parse_yyyy_mm_dd(options.from_date, "from") if options.from_date else None
-    to_date = _parse_yyyy_mm_dd(options.to_date, "to") if options.to_date else None
-    if from_date is None and to_date is None:
-        to_date = today
-        from_date = to_date - timedelta(days=6)
-    elif from_date is None and to_date is not None:
-        from_date = to_date - timedelta(days=6)
-    elif from_date is not None and to_date is None:
-        to_date = from_date + timedelta(days=6)
-    assert from_date is not None and to_date is not None
-    if from_date > to_date:
-        raise ValueError("Trendings report from date must be on or before to date.")
-    return from_date, to_date
-
-
-def _parse_yyyy_mm_dd(value: str, label: str) -> date:
-    try:
-        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
-    except ValueError as exc:
-        raise ValueError(f"Trendings report {label} date must use YYYY-MM-DD.") from exc
-
-
-def _parse_date_filter(value: str | None, *, end_of_day: bool) -> datetime | None:
-    if not value:
-        return None
-    text = value.strip()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            parsed_date = datetime.strptime(text, fmt).date()
-            return datetime.combine(parsed_date, time.max if end_of_day else time.min, tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    parsed = _parse_utc_datetime(text)
-    if parsed is None:
-        raise ValueError(f"Invalid trading report date: {value}")
-    if end_of_day and parsed.time() == time.min:
-        return datetime.combine(parsed.date(), time.max, tzinfo=timezone.utc)
-    return parsed
-
-
-def _trading_filter_data(
-    options: TradingReportJobOptions,
-    transaction_start: datetime | None,
-    transaction_end: datetime | None,
-) -> dict[str, Any]:
-    return {
-        "name": options.name,
-        "start_date": options.start_date,
-        "end_date": options.end_date,
-        "days": options.days,
-        "asset_type": options.asset_type,
-        "ticker": options.ticker,
-        "transaction_start": transaction_start.isoformat() if transaction_start else None,
-        "transaction_end": transaction_end.isoformat() if transaction_end else None,
-        "limit": options.limit,
-        "force_refresh": options.force_refresh,
-    }
-
-
-def _sec_13f_filter_data(
-    options: Sec13FReportJobOptions,
-    period_start: datetime | None,
-    period_end: datetime | None,
-    filing_start: datetime | None,
-    filing_end: datetime | None,
-) -> dict[str, Any]:
-    return {
-        "manager": options.manager,
-        "cik": options.cik,
-        "accession_number": options.accession_number,
-        "issuer": options.issuer,
-        "cusip": options.cusip,
-        "figi": options.figi,
-        "put_call": options.put_call,
-        "period_start": period_start.date().isoformat() if period_start else None,
-        "period_end": period_end.date().isoformat() if period_end else None,
-        "filing_start": filing_start.date().isoformat() if filing_start else None,
-        "filing_end": filing_end.date().isoformat() if filing_end else None,
-        "min_value": options.min_value,
-        "min_shares": options.min_shares,
-        "limit": options.limit,
-        "force_refresh": options.force_refresh,
-    }
-
-
-def _statistic_filter_data(
-    options: StatisticJobOptions,
-    start_at: datetime | None,
-    end_at: datetime | None,
-) -> dict[str, Any]:
-    return {
-        "mode": options.mode,
-        "ticker": options.ticker,
-        "fuzzy_tag": options.fuzzy_tag if options.mode == "social" else None,
-        "name": options.name,
-        "asset_name": options.asset_name if options.mode == "trading" else None,
-        "asset_type": options.asset_type,
-        "action": options.action,
-        "source": options.source if options.mode == "social" else None,
-        "sentiment": options.sentiment if options.mode == "social" else None,
-        "start_date": options.start_date,
-        "end_date": options.end_date,
-        "days": options.days,
-        "bucket": options.bucket,
-        "window_start": start_at.isoformat() if start_at else None,
-        "window_end": end_at.isoformat() if end_at else None,
-    }
-
-
-def _job_record_from_dict(data: dict[str, Any]) -> HttpJobRecord:
-    allowed = {item.name for item in fields(HttpJobRecord)}
-    return HttpJobRecord(**{key: value for key, value in data.items() if key in allowed})
-
 
 def _worker_error_detail(stdout: bytes, stderr: bytes) -> str:
     text = (stderr or stdout).decode("utf-8", errors="replace").strip()

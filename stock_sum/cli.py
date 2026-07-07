@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 import asyncio
 import ast
 import json
-import shutil
 
 import typer
 import uvicorn
@@ -18,10 +16,8 @@ from rich.console import Console
 from stock_sum.config.loader import load_config
 from stock_sum.config.secrets import (
     load_env_file,
-    missing_secret_names,
     read_env_file,
     remove_secret,
-    required_secret_names,
     set_secret,
     write_env_file,
 )
@@ -39,9 +35,31 @@ from stock_sum.config.writer import (
     set_dotted_value,
     write_default_config,
 )
+from stock_sum.cli_serialization import _collection_run_to_jsonable, _pipeline_result_to_jsonable
+from stock_sum.cli_setup import (
+    _managed_targets_from_config,
+    _remove_reset_target,
+    _resolve_config_path,
+    _setup_issues,
+    _sqlite_reset_targets,
+    _unique_paths,
+    _validate_runtime_setup,
+)
+from stock_sum.cli_state import (
+    DEFAULT_ENV_FILE,
+    DEFAULT_EXAMPLE_CONFIG_PATH,
+    DEFAULT_LOCAL_CONFIG_PATH,
+    DEFAULT_SETUP_STATE_FILE,
+    _read_setup_state,
+    _resolve_config_option,
+    _resolve_data_dir_option,
+    _resolve_env_file_option,
+    _resolve_path,
+    _state_file_path,
+    _write_setup_state,
+)
 from stock_sum.core.context import RuntimeContext
 from stock_sum.core.errors import ConfigurationError, StockSumError
-from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult
 from stock_sum.core.pipeline import ReportPipeline
 from stock_sum.llm.analysis import LLMAnalysisService
 from stock_sum.llm.catalog import load_models_dev_catalog
@@ -79,50 +97,6 @@ config_app.add_typer(subreddit_app, name="subreddit")
 config_app.add_typer(house_ptr_app, name="house-ptr")
 console = Console()
 
-DEFAULT_SETUP_STATE_FILE = Path(".stock-sum-state.json")
-DEFAULT_ENV_FILE = Path(".env")
-DEFAULT_LOCAL_CONFIG_PATH = Path("config.toml")
-DEFAULT_EXAMPLE_CONFIG_PATH = Path("stock_sum/config/example.toml")
-
-
-def _state_file_path(state_file: Path | None = None) -> Path:
-    return state_file or DEFAULT_SETUP_STATE_FILE
-
-
-def _remembered_path(key: str, *, state_file: Path | None = None) -> Path | None:
-    state = _read_setup_state(_state_file_path(state_file))
-    value = state.get(key)
-    return Path(value) if value else None
-
-
-def _resolve_remembered_path(
-    explicit: Path | None,
-    *,
-    state_key: str,
-    fallback: Path,
-    state_file: Path | None = None,
-) -> Path:
-    if explicit is not None:
-        return explicit
-    return _remembered_path(state_key, state_file=state_file) or fallback
-
-
-def _resolve_config_option(
-    config: Path | None,
-    *,
-    fallback: Path = DEFAULT_EXAMPLE_CONFIG_PATH,
-    state_file: Path | None = None,
-) -> Path:
-    return _resolve_remembered_path(config, state_key="config", fallback=fallback, state_file=state_file)
-
-
-def _resolve_env_file_option(env_file: Path | None, *, state_file: Path | None = None) -> Path:
-    return _resolve_remembered_path(env_file, state_key="env_file", fallback=DEFAULT_ENV_FILE, state_file=state_file)
-
-
-def _resolve_data_dir_option(data_dir: Path | None, *, state_file: Path | None = None) -> Path:
-    return _resolve_remembered_path(data_dir, state_key="data_dir", fallback=Path("data"), state_file=state_file)
-
 
 def _parse_config_get_args(args: list[str]) -> tuple[Path, str]:
     if len(args) == 1:
@@ -148,170 +122,10 @@ def _parse_value(raw: str) -> Any:
         return raw
 
 
-def _collection_run_to_jsonable(result: CollectionRunResult) -> dict[str, Any]:
-    return asdict(result)
-
-
-def _pipeline_result_to_jsonable(result: PipelineCollectionResult) -> dict[str, Any]:
-    data = asdict(result)
-    data["collected_count"] = result.collected_count
-    data["inserted_count"] = result.inserted_count
-    data["updated_count"] = result.updated_count
-    return data
-
-
 def _load_env_file(path: Path = Path(".env"), *, override: bool = False) -> None:
     """Load simple KEY=VALUE pairs from a local env file."""
 
     load_env_file(path, override=override)
-
-
-def _setup_issues(config_path: Path, env_file: Path) -> list[str]:
-    """Return actionable setup issues."""
-
-    issues: list[str] = []
-    try:
-        settings = load_config(config_path)
-    except Exception as exc:
-        return [f"Config is invalid: {exc}"]
-
-    try:
-        provider = get_llm_provider(settings.llm.provider)
-        if not provider.implemented:
-            issues.append(f"LLM provider is not implemented: {settings.llm.provider}")
-    except ConfigurationError as exc:
-        issues.append(str(exc))
-
-    required = required_secret_names(
-        xpoz_api_key_env=settings.providers.xpoz.api_key_env,
-        llm_api_key_env=settings.llm.api_key_env,
-    )
-    missing = missing_secret_names(required, env_file=env_file)
-    if missing:
-        issues.append(f"Missing required secrets: {', '.join(missing)}")
-
-    storage_parent = Path(settings.storage.sqlite_path).parent
-    try:
-        storage_parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        issues.append(f"SQLite directory is not writable: {storage_parent} ({exc})")
-    return issues
-
-
-def _validate_runtime_setup(settings, *, env_file: Path = Path(".env")) -> None:
-    """Fail daemon startup with actionable setup guidance."""
-
-    missing = missing_secret_names(
-        required_secret_names(
-            xpoz_api_key_env=settings.providers.xpoz.api_key_env,
-            llm_api_key_env=settings.llm.api_key_env,
-        ),
-        env_file=env_file,
-    )
-    if missing:
-        raise ConfigurationError(
-            "Missing required environment variables: "
-            f"{', '.join(missing)}. Run `stock-sum setup init` or set them in an env file."
-        )
-
-
-def _remove_reset_target(path: Path) -> bool:
-    """Remove one setup reset target if it exists."""
-
-    if not path.exists():
-        return False
-    if path.is_dir():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
-    return True
-
-
-def _resolve_path(path: Path) -> Path:
-    """Resolve a path without requiring it to already exist."""
-
-    try:
-        return path.expanduser().resolve()
-    except OSError:
-        return path.expanduser().absolute()
-
-
-def _resolve_config_path(value: str, config_path: Path) -> Path:
-    """Resolve a TOML path value relative to the config file directory."""
-
-    path = Path(value)
-    if path.is_absolute():
-        return _resolve_path(path)
-    return _resolve_path(config_path.parent / path)
-
-
-def _read_setup_state(state_file: Path) -> dict[str, str]:
-    """Read remembered non-secret setup paths."""
-
-    try:
-        return json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _write_setup_state(state_file: Path, *, config: Path, env_file: Path, data_dir: Path) -> None:
-    """Remember setup paths so reset targets the active install."""
-
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(
-        json.dumps(
-            {
-                "config": str(_resolve_path(config)),
-                "env_file": str(_resolve_path(env_file)),
-                "data_dir": str(_resolve_path(data_dir)),
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-
-def _managed_targets_from_config(config_path: Path) -> list[Path]:
-    """Return runtime output paths from the active config."""
-
-    if not config_path.exists():
-        return []
-    try:
-        settings = load_config(config_path)
-    except Exception:
-        return []
-    sqlite_path = _resolve_config_path(settings.storage.sqlite_path, config_path)
-    return [
-        _resolve_config_path(settings.server.artifact_dir, config_path),
-        _resolve_config_path(settings.media.root_dir, config_path),
-        *_sqlite_reset_targets(sqlite_path),
-    ]
-
-
-def _unique_paths(paths: list[Path]) -> list[Path]:
-    """Deduplicate paths while preserving order."""
-
-    seen: set[str] = set()
-    result: list[Path] = []
-    for path in paths:
-        resolved = _resolve_path(path)
-        key = str(resolved).casefold()
-        if key not in seen:
-            seen.add(key)
-            result.append(resolved)
-    return result
-
-
-def _sqlite_reset_targets(sqlite_path: Path) -> list[Path]:
-    """Return SQLite database and sidecar files that can be reset together."""
-
-    return [
-        sqlite_path,
-        Path(f"{sqlite_path}-wal"),
-        Path(f"{sqlite_path}-shm"),
-        Path(f"{sqlite_path}-journal"),
-    ]
 
 
 def _run_retention_after_pipeline(settings) -> RetentionSummary | None:
