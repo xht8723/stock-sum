@@ -166,6 +166,84 @@ async def test_adanos_trendings_are_persisted_and_read(tmp_path) -> None:
     assert raw_rows == ['[{"sector":"Technology"}]', '[{"ticker":"NVDA"}]']
 
 
+async def test_adanos_prior_stock_history_query_returns_latest_per_platform_ticker(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    await repository.initialize()
+    old_time = datetime.now(timezone.utc) - timedelta(days=2)
+    newer_time = datetime.now(timezone.utc) - timedelta(hours=4)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+    await repository.save_adanos_trendings(
+        job_id="old-job",
+        from_date="2026-07-01",
+        to_date="2026-07-02",
+        responses=[
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={},
+                status="succeeded",
+                raw_response_text="[]",
+                fetched_at=old_time,
+                rows=[{"ticker": "NVDA", "rank": 1, "mentions": 100, "bullish_pct": 40, "bearish_pct": 20}],
+            ),
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={},
+                status="succeeded",
+                raw_response_text="[]",
+                fetched_at=newer_time,
+                rows=[{"ticker": "NVDA", "rank": 1, "mentions": 150, "bullish_pct": 60, "bearish_pct": 10}],
+            ),
+            AdanosEndpointResult(
+                platform="x",
+                category="stocks",
+                endpoint="/x/stocks/v1/trending",
+                request_args={},
+                status="succeeded",
+                raw_response_text="[]",
+                fetched_at=newer_time,
+                rows=[{"ticker": "NVDA", "rank": 2, "mentions": 90, "bullish_pct": 55, "bearish_pct": 15}],
+            ),
+        ],
+    )
+    await repository.save_adanos_trendings(
+        job_id="current-job",
+        from_date="2026-07-06",
+        to_date="2026-07-07",
+        responses=[
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={},
+                status="succeeded",
+                raw_response_text="[]",
+                rows=[{"ticker": "NVDA", "rank": 1, "mentions": 300}],
+            )
+        ],
+    )
+
+    assert await repository.has_prior_adanos_trending_stock_history(
+        exclude_job_id="current-job",
+        since_fetched_at=cutoff,
+    )
+    rows = await repository.read_latest_prior_adanos_trending_stocks(
+        exclude_job_id="current-job",
+        tickers=["NVDA"],
+        since_fetched_at=cutoff,
+    )
+
+    assert sorted((row.platform, row.ticker, row.mentions) for row in rows) == [
+        ("reddit", "NVDA", 150),
+        ("x", "NVDA", 90),
+    ]
+
+
 async def test_save_x_items_upserts_posts_media_and_index(tmp_path) -> None:
     db_path = tmp_path / "storage.sqlite3"
     repository = SQLiteStorageRepository(db_path)

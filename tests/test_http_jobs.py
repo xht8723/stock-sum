@@ -321,6 +321,127 @@ async def test_trendings_job_fetches_persists_and_renders(tmp_path, monkeypatch)
     summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
     assert summary["filters"]["display_limit"] == 1
     assert summary["summary"]["stocks"][0]["ticker"] == "NVDA"
+    assert summary["summary"]["changes"] == []
+
+
+async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tmp_path, monkeypatch) -> None:
+    async def fake_fetch(self, *, from_date, to_date):
+        return AdanosTrendingsResult(
+            skipped=False,
+            responses=[
+                AdanosEndpointResult(
+                    platform="reddit",
+                    category="stocks",
+                    endpoint="/reddit/stocks/v1/trending",
+                    request_args={"from": from_date.isoformat(), "to": to_date.isoformat(), "limit": 100},
+                    status="succeeded",
+                    raw_response_text="[]",
+                    rows=[
+                        {
+                            "ticker": "NVDA",
+                            "company_name": "NVIDIA Corp",
+                            "rank": 1,
+                            "trend": "up",
+                            "mentions": 200,
+                            "bullish_pct": 75,
+                            "bearish_pct": 5,
+                        },
+                        {
+                            "ticker": "TSLA",
+                            "company_name": "Tesla Inc",
+                            "rank": 2,
+                            "trend": "up",
+                            "mentions": 120,
+                            "bullish_pct": 45,
+                            "bearish_pct": 30,
+                        },
+                        {
+                            "ticker": "LOWVOL",
+                            "company_name": "Low Volume",
+                            "rank": 3,
+                            "trend": "up",
+                            "mentions": 10,
+                            "bullish_pct": 95,
+                            "bearish_pct": 0,
+                        },
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    repository.adanos_stocks.extend(
+        [
+            StoredAdanosTrendingStock(
+                job_id="prior-job",
+                platform="reddit",
+                rank=1,
+                window_from="2026-06-30",
+                window_to="2026-07-01",
+                ticker="NVDA",
+                company_name="NVIDIA Corp",
+                trend="flat",
+                mentions=100,
+                bullish_pct=40,
+                bearish_pct=30,
+                sentiment_score=None,
+                buzz_score=None,
+                trend_history=[],
+                raw_metadata={},
+                fetched_at=datetime.now(timezone.utc).isoformat(),
+            ),
+            StoredAdanosTrendingStock(
+                job_id="prior-job",
+                platform="x",
+                rank=1,
+                window_from="2026-06-30",
+                window_to="2026-07-01",
+                ticker="AMD",
+                company_name="Advanced Micro Devices",
+                trend="flat",
+                mentions=100,
+                bullish_pct=40,
+                bearish_pct=30,
+                sentiment_score=None,
+                buzz_score=None,
+                trend_history=[],
+                raw_metadata={},
+                fetched_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        ]
+    )
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    options = TrendingsReportJobOptions(
+        mode="discord",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        minimum_mentions=50,
+        mentions_change_pct=30,
+        sentiment_change_pct=30,
+    )
+    job = manager.create_trendings_report_job(options)
+
+    await manager.run_trendings_report_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    changes = summary["summary"]["changes"]
+
+    assert [(row["ticker"], row["change_type"]) for row in changes] == [
+        ("NVDA", "mentions + sentiment"),
+        ("TSLA", "darkhorse"),
+    ]
+    nvda = changes[0]
+    assert nvda["previous_mentions"] == 100
+    assert nvda["current_mentions"] == 200
+    assert nvda["mentions_delta_pct"] == 100.0
+    assert nvda["bullish_delta_points"] == 35
+    assert all(row["ticker"] != "LOWVOL" for row in changes)
 
 
 async def test_trading_report_sorts_rows_by_transaction_date(tmp_path) -> None:
@@ -1316,6 +1437,20 @@ class FakeRepository:
     async def read_adanos_trending_stocks(self, *, job_id: str, limit=None):
         rows = [row for row in self.adanos_stocks if row.job_id == job_id]
         return rows if limit is None else rows[:limit]
+
+    async def read_latest_prior_adanos_trending_stocks(self, *, exclude_job_id: str, tickers, since_fetched_at):
+        ticker_set = {str(ticker).upper() for ticker in tickers}
+        latest: dict[tuple[str, str], StoredAdanosTrendingStock] = {}
+        for row in self.adanos_stocks:
+            if row.job_id == exclude_job_id or row.ticker.upper() not in ticker_set or row.fetched_at < since_fetched_at:
+                continue
+            key = (row.platform, row.ticker.upper())
+            if key not in latest or row.fetched_at > latest[key].fetched_at:
+                latest[key] = row
+        return list(latest.values())
+
+    async def has_prior_adanos_trending_stock_history(self, *, exclude_job_id: str, since_fetched_at: str):
+        return any(row.job_id != exclude_job_id and row.fetched_at >= since_fetched_at for row in self.adanos_stocks)
 
     async def read_adanos_trending_sectors(self, *, job_id: str, limit=None):
         rows = [row for row in self.adanos_sectors if row.job_id == job_id]

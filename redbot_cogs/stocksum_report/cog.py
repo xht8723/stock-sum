@@ -496,6 +496,10 @@ class StockSumHttpClient:
         from_date: str | None = None,
         to_date: str | None = None,
         limit: int | None = None,
+        days: int | None = None,
+        mentions_change_pct: float | None = None,
+        sentiment_change_pct: float | None = None,
+        minimum_mentions: int | None = None,
     ) -> StockSumArtifact:
         """Create, poll, and download one Adanos trendings report job."""
 
@@ -508,6 +512,10 @@ class StockSumHttpClient:
                 "from": from_date,
                 "to": to_date,
                 "limit": limit,
+                "days": days,
+                "mentions_change_pct": mentions_change_pct,
+                "sentiment_change_pct": sentiment_change_pct,
+                "minimum_mentions": minimum_mentions,
             }
             job = await self._create_trendings_report_job(
                 session,
@@ -1138,6 +1146,10 @@ class StockSumReport(commands.Cog):
         from_date="start date, YYYY-MM-DD; defaults to 7-day window",
         to_date="end date, YYYY-MM-DD; defaults to current UTC date",
         limit="rows to display per platform and section; stock-sum default if omitted",
+        days="comparison/report window in days; stock-sum default is 7",
+        mentions_change_pct="mentions change threshold percentage; stock-sum default is 30",
+        sentiment_change_pct="sentiment percentage-point threshold; stock-sum default is 30",
+        minimum_mentions="minimum current mentions for change detection; stock-sum default is 50",
     )
     async def trendings(
         self,
@@ -1145,6 +1157,10 @@ class StockSumReport(commands.Cog):
         from_date: str = "",
         to_date: str = "",
         limit: int | None = None,
+        days: int | None = None,
+        mentions_change_pct: float | None = None,
+        sentiment_change_pct: float | None = None,
+        minimum_mentions: int | None = None,
     ) -> None:
         """Slash command handler for Adanos trendings reports."""
 
@@ -1160,6 +1176,18 @@ class StockSumReport(commands.Cog):
         if error := _validate_positive_int(limit, label="limit"):
             await _send_validation_error(interaction, error)
             return
+        if error := _validate_positive_int(days, label="days"):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_float(mentions_change_pct, label="mentions_change_pct"):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_float(sentiment_change_pct, label="sentiment_change_pct"):
+            await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(minimum_mentions, label="minimum_mentions"):
+            await _send_validation_error(interaction, error)
+            return
 
         await interaction.response.send_message(
             "Trendings report is being generated, please wait a few minutes.",
@@ -1171,6 +1199,10 @@ class StockSumReport(commands.Cog):
                 from_date=from_filter,
                 to_date=to_filter,
                 limit=limit,
+                days=days,
+                mentions_change_pct=mentions_change_pct,
+                sentiment_change_pct=sentiment_change_pct,
+                minimum_mentions=minimum_mentions,
             )
         except StockSumCogError as exc:
             await _send_report_output(interaction, _failure_message(exc), private=False)
@@ -1741,6 +1773,14 @@ def _validate_positive_int(value: int | None, *, label: str, maximum: int | None
         return f"{label} must be {'0 or greater' if allow_zero else '1 or greater'}."
     if maximum is not None and value > maximum:
         return f"{label} must be {maximum} or less."
+    return None
+
+
+def _validate_positive_float(value: float | None, *, label: str) -> str | None:
+    if value is None:
+        return None
+    if value <= 0:
+        return f"{label} must be greater than 0."
     return None
 
 

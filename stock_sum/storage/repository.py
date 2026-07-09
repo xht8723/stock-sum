@@ -221,6 +221,23 @@ class StorageRepository(Protocol):
     ) -> list[StoredAdanosTrendingStock]:
         """Read stored Adanos trending stock rows for one job."""
 
+    async def read_latest_prior_adanos_trending_stocks(
+        self,
+        *,
+        exclude_job_id: str,
+        tickers: list[str],
+        since_fetched_at: str,
+    ) -> list[StoredAdanosTrendingStock]:
+        """Read latest historical Adanos stock rows for each platform/ticker."""
+
+    async def has_prior_adanos_trending_stock_history(
+        self,
+        *,
+        exclude_job_id: str,
+        since_fetched_at: str,
+    ) -> bool:
+        """Return whether any prior Adanos stock history exists in the comparison window."""
+
     async def read_adanos_trending_sectors(
         self,
         *,

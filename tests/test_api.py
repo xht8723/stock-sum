@@ -222,6 +222,10 @@ def test_trendings_job_accepts_from_alias_and_limit(tmp_path) -> None:
         "from_date": "2026-07-01",
         "to_date": "2026-07-06",
         "limit": 3,
+        "days": 7,
+        "mentions_change_pct": 30.0,
+        "sentiment_change_pct": 30.0,
+        "minimum_mentions": 50,
     }
 
 
@@ -293,6 +297,10 @@ class FakeJobManager:
             "from_date": options.from_date,
             "to_date": options.to_date,
             "limit": options.limit,
+            "days": options.days,
+            "mentions_change_pct": options.mentions_change_pct,
+            "sentiment_change_pct": options.sentiment_change_pct,
+            "minimum_mentions": options.minimum_mentions,
         }
         job = FakeJob(job_id="job-trendings", kind="trendings_report", scope="trendings")
         self.jobs[job.job_id] = job

@@ -95,11 +95,23 @@ class TrendingsReportJobOptions:
     from_date: str | None = None
     to_date: str | None = None
     limit: int = 5
+    days: int = 7
+    mentions_change_pct: float = 30.0
+    sentiment_change_pct: float = 30.0
+    minimum_mentions: int = 50
     title: str = "Trending Market Sentiment"
 
     def __post_init__(self) -> None:
         if self.limit is None:
             object.__setattr__(self, "limit", 5)
+        if self.days is None:
+            object.__setattr__(self, "days", 7)
+        if self.mentions_change_pct is None:
+            object.__setattr__(self, "mentions_change_pct", 30.0)
+        if self.sentiment_change_pct is None:
+            object.__setattr__(self, "sentiment_change_pct", 30.0)
+        if self.minimum_mentions is None:
+            object.__setattr__(self, "minimum_mentions", 50)
 
 
 @dataclass(frozen=True)

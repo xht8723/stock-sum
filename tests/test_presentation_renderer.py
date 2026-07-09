@@ -541,6 +541,24 @@ def test_renderer_outputs_adanos_trendings_in_discord_and_empty_state() -> None:
                     "bearish_pct": 20,
                 }
             ],
+            "changes": [
+                {
+                    "platform": "reddit",
+                    "ticker": "NVDA",
+                    "company_name": "NVIDIA Corp",
+                    "change_type": "mentions + sentiment",
+                    "current_mentions": 84,
+                    "previous_mentions": 42,
+                    "mentions_delta": 42,
+                    "mentions_delta_pct": 100.0,
+                    "current_bullish_pct": 65,
+                    "previous_bullish_pct": 30,
+                    "bullish_delta_points": 35,
+                    "current_bearish_pct": 12,
+                    "previous_bearish_pct": 45,
+                    "bearish_delta_points": -33,
+                }
+            ],
         }
     }
 
@@ -555,4 +573,8 @@ def test_renderer_outputs_adanos_trendings_in_discord_and_empty_state() -> None:
     assert "**Trending sectors**" in discord
     assert "• **Technology**" in discord
     assert "Top tickers: **NVDA, AMD**" in discord
+    assert "**Trending changes**" in discord
+    assert "Change: **Mentions + Sentiment**" in discord
+    assert "Mentions: 42 -> 84; delta: +42 (+100.0%)" in discord
+    assert "Bullish: 30% -> 65% (+35 pts); Bearish: 45% -> 12% (-33 pts)" in discord
     assert "Adanos API key is not configured" in skipped

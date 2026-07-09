@@ -547,6 +547,10 @@ async def test_client_sends_trendings_request_and_downloads_artifact() -> None:
         from_date="2026-07-01",
         to_date="2026-07-06",
         limit=3,
+        days=14,
+        mentions_change_pct=40.5,
+        sentiment_change_pct=25.0,
+        minimum_mentions=80,
     )
 
     assert artifact.filename == "stock-sum-report-trend-1.md"
@@ -555,7 +559,15 @@ async def test_client_sends_trendings_request_and_downloads_artifact() -> None:
         "http://stock-sum.local/v1/trendings/jobs/discord",
         {
             "headers": {},
-            "json": {"from": "2026-07-01", "to": "2026-07-06", "limit": 3},
+            "json": {
+                "from": "2026-07-01",
+                "to": "2026-07-06",
+                "limit": 3,
+                "days": 14,
+                "mentions_change_pct": 40.5,
+                "sentiment_change_pct": 25.0,
+                "minimum_mentions": 80,
+            },
         },
     )
 
@@ -754,7 +766,16 @@ async def test_trendings_command_sends_public_discord_report(monkeypatch) -> Non
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.trendings(interaction, from_date="2026-07-01", to_date="2026-07-06", limit=3)
+    await report.trendings(
+        interaction,
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        limit=3,
+        days=14,
+        mentions_change_pct=40.0,
+        sentiment_change_pct=25.0,
+        minimum_mentions=80,
+    )
 
     assert client.trendings_calls == [
         {
@@ -762,6 +783,10 @@ async def test_trendings_command_sends_public_discord_report(monkeypatch) -> Non
             "from_date": "2026-07-01",
             "to_date": "2026-07-06",
             "limit": 3,
+            "days": 14,
+            "mentions_change_pct": 40.0,
+            "sentiment_change_pct": 25.0,
+            "minimum_mentions": 80,
         }
     ]
     assert interaction.response.messages == [
@@ -787,6 +812,24 @@ async def test_trendings_command_rejects_invalid_date_and_limit(monkeypatch) -> 
     assert interaction.response.messages == [
         {
             "content": "stock-sum report failed: from must be in YYYY-MM-DD format.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_trendings_command_rejects_invalid_change_thresholds(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.trendings(interaction, mentions_change_pct=0)
+
+    assert client.trendings_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: mentions_change_pct must be greater than 0.",
             "ephemeral": True,
             "suppress_embeds": True,
         }

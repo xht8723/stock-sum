@@ -402,6 +402,88 @@ class SQLiteStorageRepository:
             for row in rows
         ]
 
+    async def read_latest_prior_adanos_trending_stocks(
+        self,
+        *,
+        exclude_job_id: str,
+        tickers: list[str],
+        since_fetched_at: str,
+    ) -> list[StoredAdanosTrendingStock]:
+        """Read latest historical Adanos stock rows for each platform/ticker."""
+
+        await self.initialize()
+        normalized_tickers = sorted({ticker.upper().strip() for ticker in tickers if ticker and ticker.strip()})
+        if not normalized_tickers:
+            return []
+        placeholders = ", ".join("?" for _ in normalized_tickers)
+        sql = f"""
+            WITH latest AS (
+                SELECT platform, ticker, MAX(fetched_at) AS latest_fetched_at
+                FROM raw_adanos_trending_stocks
+                WHERE job_id != ?
+                  AND fetched_at >= ?
+                  AND ticker IN ({placeholders})
+                GROUP BY platform, ticker
+            )
+            SELECT s.job_id, s.platform, s.rank, s.window_from, s.window_to, s.ticker,
+                   s.company_name, s.trend, s.mentions, s.bullish_pct, s.bearish_pct,
+                   s.sentiment_score, s.buzz_score, s.trend_history_json, s.raw_json, s.fetched_at
+            FROM raw_adanos_trending_stocks s
+            JOIN latest l
+              ON s.platform = l.platform
+             AND s.ticker = l.ticker
+             AND s.fetched_at = l.latest_fetched_at
+            WHERE s.job_id != ?
+            ORDER BY s.platform ASC, s.ticker ASC, s.fetched_at DESC
+        """
+        params: list[Any] = [exclude_job_id, since_fetched_at, *normalized_tickers, exclude_job_id]
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            rows = await db.execute_fetchall(sql, params)
+        return [
+            StoredAdanosTrendingStock(
+                job_id=row[0],
+                platform=row[1],
+                rank=row[2],
+                window_from=row[3],
+                window_to=row[4],
+                ticker=row[5],
+                company_name=row[6],
+                trend=row[7],
+                mentions=row[8],
+                bullish_pct=row[9],
+                bearish_pct=row[10],
+                sentiment_score=row[11],
+                buzz_score=row[12],
+                trend_history=_json_list(row[13]),
+                raw_metadata=_json_obj(row[14]),
+                fetched_at=row[15],
+            )
+            for row in rows
+        ]
+
+    async def has_prior_adanos_trending_stock_history(
+        self,
+        *,
+        exclude_job_id: str,
+        since_fetched_at: str,
+    ) -> bool:
+        """Return whether any prior Adanos stock history exists in the comparison window."""
+
+        await self.initialize()
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT 1
+                FROM raw_adanos_trending_stocks
+                WHERE job_id != ?
+                  AND fetched_at >= ?
+                LIMIT 1
+                """,
+                (exclude_job_id, since_fetched_at),
+            )
+            row = await cursor.fetchone()
+        return row is not None
+
     async def read_adanos_trending_sectors(
         self,
         *,

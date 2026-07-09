@@ -497,12 +497,27 @@ def _html_trendings(response: dict[str, Any], summary: dict[str, Any], limit: in
         return _html_section("Trending stocks", '<p class="empty">Adanos API key is not configured.</p>')
     stocks = _trendings_rows(summary, "stocks", limit)
     sectors = _trendings_rows(summary, "sectors", limit)
-    return "\n".join(
-        [
-            _html_section("Trending stocks", "\n".join(_html_trendings_platform_rows(stocks, is_sector=False))),
-            _html_section("Trending sectors", "\n".join(_html_trendings_platform_rows(sectors, is_sector=True))),
-        ]
-    )
+    changes = _trendings_changes(summary)
+    sections = [
+        _html_section("Trending stocks", "\n".join(_html_trendings_platform_rows(stocks, is_sector=False))),
+        _html_section("Trending sectors", "\n".join(_html_trendings_platform_rows(sectors, is_sector=True))),
+    ]
+    if changes:
+        sections.append(_html_section("Trending changes", "\n".join(_html_trendings_change_rows(changes))))
+    return "\n".join(sections)
+
+
+def _html_trendings_change_rows(rows: list[dict[str, Any]]) -> list[str]:
+    parts = ['<div class="items">']
+    for row in rows:
+        parts.append('<article class="item">')
+        parts.append(f"<h4>{escape(_trendings_change_title(row))}</h4>")
+        parts.append(f"<p><strong>Change:</strong> {escape(_display_value(row.get('change_type')).title())}</p>")
+        parts.append(f"<p>{escape(_trendings_change_stats(row))}</p>")
+        parts.append(f"<p>{escape(_trendings_change_sentiment(row))}</p>")
+        parts.append("</article>")
+    parts.append("</div>")
+    return parts
 
 
 def _html_trendings_platform_rows(grouped: dict[str, list[dict[str, Any]]], *, is_sector: bool) -> list[str]:
@@ -561,6 +576,17 @@ def _plain_trendings(response: dict[str, Any], summary: dict[str, Any], limit: i
                 lines.extend(_trendings_plain_item(row, is_sector=is_sector, bullet=bullet, heading=heading))
                 lines.append("")
         lines.append("")
+    changes = _trendings_changes(summary)
+    if changes:
+        if heading == "**":
+            lines.append("**Trending changes**")
+        elif heading:
+            lines.append(f"{heading} Trending changes")
+        else:
+            lines.append("TRENDING CHANGES")
+        for row in changes:
+            lines.extend(_trendings_change_plain_item(row, bullet=bullet, heading=heading))
+            lines.append("")
     return "\n".join(lines).strip()
 
 
@@ -594,6 +620,61 @@ def _trendings_rows(summary: dict[str, Any], key: str, limit: int) -> dict[str, 
     return grouped
 
 
+def _trendings_changes(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    changes = summary.get("changes")
+    if not isinstance(changes, list):
+        return []
+    return [row for row in changes if isinstance(row, dict)]
+
+
+def _trendings_change_plain_item(row: dict[str, Any], *, bullet: str, heading: str) -> list[str]:
+    title = _trendings_change_title(row)
+    bold_title = heading in {"##", "**"}
+    title_text = f"**{title}**" if bold_title else title
+    change_type = _display_value(row.get("change_type")).title()
+    if bold_title and change_type != "N/A":
+        change_type = f"**{change_type}**"
+    return [
+        f"{bullet} {title_text}",
+        f"  Change: {change_type}",
+        f"  {_trendings_change_stats(row)}",
+        f"  {_trendings_change_sentiment(row)}",
+    ]
+
+
+def _trendings_change_title(row: dict[str, Any]) -> str:
+    ticker = str(row.get("ticker") or "UNKNOWN")
+    company = row.get("company_name")
+    platform = _platform_label(str(row.get("platform") or ""))
+    base = f"{ticker} - {company}" if company else ticker
+    return f"{base} ({platform})"
+
+
+def _trendings_change_stats(row: dict[str, Any]) -> str:
+    current = _display_value(row.get("current_mentions"))
+    previous = _display_value(row.get("previous_mentions"))
+    delta = _format_signed(row.get("mentions_delta"))
+    delta_pct = _format_signed_percent(row.get("mentions_delta_pct"))
+    if row.get("change_type") == "darkhorse":
+        return f"Mentions: {current}; previous: none"
+    return f"Mentions: {previous} -> {current}; delta: {delta} ({delta_pct})"
+
+
+def _trendings_change_sentiment(row: dict[str, Any]) -> str:
+    bullish = _format_sentiment_change(row, "bullish")
+    bearish = _format_sentiment_change(row, "bearish")
+    return f"Bullish: {bullish}; Bearish: {bearish}"
+
+
+def _format_sentiment_change(row: dict[str, Any], key: str) -> str:
+    current = _display_percent(row.get(f"current_{key}_pct"))
+    previous = _display_percent(row.get(f"previous_{key}_pct"))
+    delta = _format_signed_points(row.get(f"{key}_delta_points"))
+    if row.get("change_type") == "darkhorse":
+        return current
+    return f"{previous} -> {current} ({delta})"
+
+
 def _trendings_title(row: dict[str, Any], *, is_sector: bool) -> str:
     if is_sector:
         return str(row.get("sector") or "Unknown sector")
@@ -625,6 +706,36 @@ def _display_percent(value: Any) -> str:
     if value is None:
         return "N/A"
     return f"{value}%"
+
+
+def _format_signed(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{number:+d}"
+
+
+def _format_signed_percent(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{number:+.1f}%"
+
+
+def _format_signed_points(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{number:+d} pts"
 
 
 def _display_value(value: Any) -> str:

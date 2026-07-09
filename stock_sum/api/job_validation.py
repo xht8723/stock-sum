@@ -49,6 +49,14 @@ def validate_trendings_filters(options: TrendingsReportJobOptions) -> None:
         raise ValueError("Trendings report mode must be html, markdown, discord, text, or json.")
     if options.limit < 1:
         raise ValueError("Trendings report limit must be at least 1.")
+    if options.days < 1:
+        raise ValueError("Trendings report days must be at least 1.")
+    if options.mentions_change_pct <= 0:
+        raise ValueError("Trendings report mentions_change_pct must be greater than 0.")
+    if options.sentiment_change_pct <= 0:
+        raise ValueError("Trendings report sentiment_change_pct must be greater than 0.")
+    if options.minimum_mentions < 1:
+        raise ValueError("Trendings report minimum_mentions must be at least 1.")
     trendings_date_window(options)
 
 
@@ -102,13 +110,14 @@ def trendings_date_window(options: TrendingsReportJobOptions) -> tuple[date, dat
     today = datetime.now(timezone.utc).date()
     from_date = parse_yyyy_mm_dd(options.from_date, "from") if options.from_date else None
     to_date = parse_yyyy_mm_dd(options.to_date, "to") if options.to_date else None
+    span = max(int(options.days), 1) - 1
     if from_date is None and to_date is None:
         to_date = today
-        from_date = to_date - timedelta(days=6)
+        from_date = to_date - timedelta(days=span)
     elif from_date is None and to_date is not None:
-        from_date = to_date - timedelta(days=6)
+        from_date = to_date - timedelta(days=span)
     elif from_date is not None and to_date is None:
-        to_date = from_date + timedelta(days=6)
+        to_date = from_date + timedelta(days=span)
     assert from_date is not None and to_date is not None
     if from_date > to_date:
         raise ValueError("Trendings report from date must be on or before to date.")

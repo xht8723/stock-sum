@@ -710,22 +710,46 @@ class HttpJobManager:
             self._update(job_id, phase="rendering")
             stocks = await repository.read_adanos_trending_stocks(job_id=job_id)
             sectors = await repository.read_adanos_trending_sectors(job_id=job_id)
+            comparison_cutoff = datetime.now(timezone.utc) - timedelta(days=options.days)
+            has_trending_history = await repository.has_prior_adanos_trending_stock_history(
+                exclude_job_id=job_id,
+                since_fetched_at=comparison_cutoff.isoformat(),
+            )
+            prior_stocks = await repository.read_latest_prior_adanos_trending_stocks(
+                exclude_job_id=job_id,
+                tickers=[row.ticker for row in stocks],
+                since_fetched_at=comparison_cutoff.isoformat(),
+            )
+            changes = _adanos_trending_change_dicts(
+                stocks,
+                prior_stocks,
+                has_history=has_trending_history,
+                mentions_change_pct=options.mentions_change_pct,
+                sentiment_change_pct=options.sentiment_change_pct,
+                minimum_mentions=options.minimum_mentions,
+            )
             warning_data = _warnings_to_dicts(warnings)
             response_data = {
                 "report_type": "trendings",
                 "summary": {
                     "stocks": _adanos_stock_rows_to_dicts(stocks),
                     "sectors": _adanos_sector_rows_to_dicts(sectors),
+                    "changes": changes,
                 },
                 "trendings": {
                     "stocks": _adanos_stock_rows_to_dicts(stocks),
                     "sectors": _adanos_sector_rows_to_dicts(sectors),
+                    "changes": changes,
                 },
                 "filters": {
                     "from": from_date.isoformat(),
                     "to": to_date.isoformat(),
                     "display_limit": options.limit,
                     "fetch_limit": 100,
+                    "days": options.days,
+                    "mentions_change_pct": options.mentions_change_pct,
+                    "sentiment_change_pct": options.sentiment_change_pct,
+                    "minimum_mentions": options.minimum_mentions,
                 },
                 "skipped": result.skipped,
                 "skip_reason": "ADANOS_API_KEY is not configured." if result.skipped else None,
@@ -1510,6 +1534,10 @@ class HttpJobManager:
                     "options": {
                         "from": from_date.isoformat(),
                         "to": to_date.isoformat(),
+                        "days": options.days,
+                        "mentions_change_pct": options.mentions_change_pct,
+                        "sentiment_change_pct": options.sentiment_change_pct,
+                        "minimum_mentions": options.minimum_mentions,
                     },
                 }
             )
@@ -1806,6 +1834,136 @@ def _adanos_sector_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def _adanos_trending_change_dicts(
+    current_rows: list[Any],
+    prior_rows: list[Any],
+    *,
+    has_history: bool,
+    mentions_change_pct: float,
+    sentiment_change_pct: float,
+    minimum_mentions: int,
+) -> list[dict[str, Any]]:
+    """Compare current Adanos stock rows to latest prior platform/ticker rows."""
+
+    if not has_history:
+        return []
+    prior_by_key = {
+        (str(row.platform).lower(), str(row.ticker).upper()): row
+        for row in prior_rows
+        if getattr(row, "platform", None) and getattr(row, "ticker", None)
+    }
+    changes: list[dict[str, Any]] = []
+    for row in current_rows:
+        current_mentions = _safe_int(getattr(row, "mentions", None))
+        if current_mentions is None or current_mentions < minimum_mentions:
+            continue
+        key = (str(getattr(row, "platform", "")).lower(), str(getattr(row, "ticker", "")).upper())
+        if not key[0] or not key[1]:
+            continue
+        prior = prior_by_key.get(key)
+        if prior is None:
+            changes.append(_adanos_darkhorse_change(row))
+            continue
+        mention_delta, mention_delta_pct, mention_flagged = _mentions_change(
+            current_mentions,
+            _safe_int(getattr(prior, "mentions", None)),
+            threshold=mentions_change_pct,
+        )
+        bullish_delta, bullish_flagged = _sentiment_point_change(
+            _safe_int(getattr(row, "bullish_pct", None)),
+            _safe_int(getattr(prior, "bullish_pct", None)),
+            threshold=sentiment_change_pct,
+        )
+        bearish_delta, bearish_flagged = _sentiment_point_change(
+            _safe_int(getattr(row, "bearish_pct", None)),
+            _safe_int(getattr(prior, "bearish_pct", None)),
+            threshold=sentiment_change_pct,
+        )
+        change_parts: list[str] = []
+        if mention_flagged:
+            change_parts.append("mentions")
+        if bullish_flagged or bearish_flagged:
+            change_parts.append("sentiment")
+        if not change_parts:
+            continue
+        changes.append(
+            {
+                "platform": row.platform,
+                "ticker": row.ticker,
+                "company_name": row.company_name,
+                "change_type": " + ".join(change_parts),
+                "current_mentions": current_mentions,
+                "previous_mentions": _safe_int(getattr(prior, "mentions", None)),
+                "mentions_delta": mention_delta,
+                "mentions_delta_pct": mention_delta_pct,
+                "current_bullish_pct": _safe_int(getattr(row, "bullish_pct", None)),
+                "previous_bullish_pct": _safe_int(getattr(prior, "bullish_pct", None)),
+                "bullish_delta_points": bullish_delta,
+                "current_bearish_pct": _safe_int(getattr(row, "bearish_pct", None)),
+                "previous_bearish_pct": _safe_int(getattr(prior, "bearish_pct", None)),
+                "bearish_delta_points": bearish_delta,
+                "current_fetched_at": row.fetched_at,
+                "previous_fetched_at": prior.fetched_at,
+                "current_window_from": row.window_from,
+                "current_window_to": row.window_to,
+                "previous_window_from": prior.window_from,
+                "previous_window_to": prior.window_to,
+            }
+        )
+    return changes
+
+
+def _adanos_darkhorse_change(row: Any) -> dict[str, Any]:
+    return {
+        "platform": row.platform,
+        "ticker": row.ticker,
+        "company_name": row.company_name,
+        "change_type": "darkhorse",
+        "current_mentions": _safe_int(getattr(row, "mentions", None)),
+        "previous_mentions": None,
+        "mentions_delta": None,
+        "mentions_delta_pct": None,
+        "current_bullish_pct": _safe_int(getattr(row, "bullish_pct", None)),
+        "previous_bullish_pct": None,
+        "bullish_delta_points": None,
+        "current_bearish_pct": _safe_int(getattr(row, "bearish_pct", None)),
+        "previous_bearish_pct": None,
+        "bearish_delta_points": None,
+        "current_fetched_at": row.fetched_at,
+        "previous_fetched_at": None,
+        "current_window_from": row.window_from,
+        "current_window_to": row.window_to,
+        "previous_window_from": None,
+        "previous_window_to": None,
+    }
+
+
+def _mentions_change(current: int, previous: int | None, *, threshold: float) -> tuple[int | None, float | None, bool]:
+    if previous is None:
+        return None, None, False
+    delta = current - previous
+    if previous == 0:
+        return delta, None, current != 0
+    delta_pct = (delta / previous) * 100
+    return delta, delta_pct, abs(delta_pct) >= threshold
+
+
+def _sentiment_point_change(current: int | None, previous: int | None, *, threshold: float) -> tuple[int | None, bool]:
+    if current is None or previous is None:
+        return None, False
+    delta = current - previous
+    return delta, abs(delta) >= threshold
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sort_house_ptr_rows(rows: list[Any]) -> list[Any]:
