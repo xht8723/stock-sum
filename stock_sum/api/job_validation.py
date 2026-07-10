@@ -51,6 +51,8 @@ def validate_trendings_filters(options: TrendingsReportJobOptions) -> None:
         raise ValueError("Trendings report limit must be at least 1.")
     if options.days < 1:
         raise ValueError("Trendings report days must be at least 1.")
+    if options.comparison_days < 1:
+        raise ValueError("Trendings report comparison_days must be at least 1.")
     if options.mentions_change_pct <= 0:
         raise ValueError("Trendings report mentions_change_pct must be greater than 0.")
     if options.sentiment_change_pct <= 0:

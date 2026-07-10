@@ -364,6 +364,15 @@ async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tm
                             "bullish_pct": 95,
                             "bearish_pct": 0,
                         },
+                        {
+                            "ticker": "AMD",
+                            "company_name": "Advanced Micro Devices",
+                            "rank": 4,
+                            "trend": "up",
+                            "mentions": 100,
+                            "bullish_pct": 80,
+                            "bearish_pct": 5,
+                        },
                     ],
                 )
             ],
@@ -393,7 +402,7 @@ async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tm
             ),
             StoredAdanosTrendingStock(
                 job_id="prior-job",
-                platform="x",
+                platform="reddit",
                 rank=1,
                 window_from="2026-06-30",
                 window_to="2026-07-01",
@@ -434,6 +443,7 @@ async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tm
 
     assert [(row["ticker"], row["change_type"]) for row in changes] == [
         ("NVDA", "mentions + sentiment"),
+        ("AMD", "sentiment"),
         ("TSLA", "darkhorse"),
     ]
     nvda = changes[0]

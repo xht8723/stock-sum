@@ -95,7 +95,8 @@ class TrendingsReportJobOptions:
     from_date: str | None = None
     to_date: str | None = None
     limit: int = 5
-    days: int = 7
+    days: int = 1
+    comparison_days: int = 7
     mentions_change_pct: float = 30.0
     sentiment_change_pct: float = 30.0
     minimum_mentions: int = 50
@@ -105,7 +106,9 @@ class TrendingsReportJobOptions:
         if self.limit is None:
             object.__setattr__(self, "limit", 5)
         if self.days is None:
-            object.__setattr__(self, "days", 7)
+            object.__setattr__(self, "days", 1)
+        if self.comparison_days is None:
+            object.__setattr__(self, "comparison_days", 7)
         if self.mentions_change_pct is None:
             object.__setattr__(self, "mentions_change_pct", 30.0)
         if self.sentiment_change_pct is None:

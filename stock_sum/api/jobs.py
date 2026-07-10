@@ -710,7 +710,7 @@ class HttpJobManager:
             self._update(job_id, phase="rendering")
             stocks = await repository.read_adanos_trending_stocks(job_id=job_id)
             sectors = await repository.read_adanos_trending_sectors(job_id=job_id)
-            comparison_cutoff = datetime.now(timezone.utc) - timedelta(days=options.days)
+            comparison_cutoff = datetime.now(timezone.utc) - timedelta(days=options.comparison_days)
             has_trending_history = await repository.has_prior_adanos_trending_stock_history(
                 exclude_job_id=job_id,
                 since_fetched_at=comparison_cutoff.isoformat(),
@@ -747,6 +747,7 @@ class HttpJobManager:
                     "display_limit": options.limit,
                     "fetch_limit": 100,
                     "days": options.days,
+                    "comparison_days": options.comparison_days,
                     "mentions_change_pct": options.mentions_change_pct,
                     "sentiment_change_pct": options.sentiment_change_pct,
                     "minimum_mentions": options.minimum_mentions,
@@ -1535,6 +1536,7 @@ class HttpJobManager:
                         "from": from_date.isoformat(),
                         "to": to_date.isoformat(),
                         "days": options.days,
+                        "comparison_days": options.comparison_days,
                         "mentions_change_pct": options.mentions_change_pct,
                         "sentiment_change_pct": options.sentiment_change_pct,
                         "minimum_mentions": options.minimum_mentions,
@@ -1912,7 +1914,19 @@ def _adanos_trending_change_dicts(
                 "previous_window_to": prior.window_to,
             }
         )
-    return changes
+    return sorted(changes, key=_adanos_trending_change_sort_key)
+
+
+def _adanos_trending_change_sort_key(row: dict[str, Any]) -> tuple[int, str, str]:
+    change_type = str(row.get("change_type") or "")
+    if change_type == "darkhorse":
+        return (99, str(row.get("platform") or ""), str(row.get("ticker") or ""))
+    type_rank = {
+        "mentions + sentiment": 0,
+        "mentions": 1,
+        "sentiment": 2,
+    }.get(change_type, 50)
+    return (type_rank, str(row.get("platform") or ""), str(row.get("ticker") or ""))
 
 
 def _adanos_darkhorse_change(row: Any) -> dict[str, Any]:

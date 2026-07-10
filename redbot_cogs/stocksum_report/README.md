@@ -32,7 +32,7 @@ Then sync slash commands with Red's slash-command management command and run:
 /ptr_search days:30
 /13f_search issuer:NVIDIA
 /trendings
-/trendings from:2026-07-01 to:2026-07-06 limit:5
+/trendings limit:5 comparison_days:7
 /plot mode:social ticker:NVDA days:30
 /plot mode:social fuzzy_search:nvidia days:30
 /daily time:13:30
@@ -57,10 +57,10 @@ filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
 `min_value`, or `min_shares`. If `limit` is omitted, stock-sum applies its
 server-side default.
 `/trendings` generates a concise Adanos trendings report for Reddit Stocks and
-X Stocks. It queries trending stocks and trending sectors; `from` and `to` use
-`YYYY-MM-DD` and default to the latest 7-day UTC window when omitted. `limit`
-controls displayed rows only; stock-sum fetches the provider maximum so SQLite
-keeps more history.
+X Stocks. It queries trending stocks and trending sectors for the latest
+24-hour UTC window. `limit` controls displayed rows only; notable-change
+history can be overridden with `comparison_days` and defaults to 7. stock-sum
+fetches the provider maximum so SQLite keeps more history.
 `/plot` generates a PNG chart from existing SQLite data. Use
 `mode:social` for X/Reddit sentiment over time or `mode:trading` for House PTR
 purchase/sale activity over time. It requires at least one filter such as

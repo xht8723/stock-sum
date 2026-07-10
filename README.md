@@ -134,6 +134,8 @@ analysis tags or House PTR asset names before a PNG job is created.
 Trendings jobs query Adanos Reddit Stocks and X Stocks stock/sector trend
 endpoints with the provider maximum fetch limit, store raw and normalized rows
 in SQLite, and render the requested output mode using the display limit only.
+When dates are omitted, trendings reports default to the latest 24-hour UTC
+window; notable change comparison still looks back 7 days by default.
 
 HTTP jobs are coordinated by the daemon but executed by one short-lived child
 worker process per job. The job status payload includes worker diagnostics such
@@ -169,8 +171,8 @@ API and exposes:
 
 Report commands always use Discord-specific markdown sent inline in chunks.
 `/trendings` returns recent Adanos stock and sector trend rows from Reddit and
-X; optional `from`, `to`, and `limit` arguments control the rendered window and
-row count.
+X. The slash command always uses the latest 24-hour UTC window; `limit` controls
+row count and optional `comparison_days` controls notable-change history.
 `/plot` returns a PNG attachment for social sentiment or House disclosure
 activity over time. Public report/plot slash commands no longer expose a
 private-mode option. `/settings list` is public; owner-only source mutations

@@ -118,6 +118,7 @@ class TrendingsReportJobRequest(BaseModel):
     to_date: str | None = Field(default=None, alias="to")
     limit: int | None = Field(default=None, ge=1)
     days: int | None = Field(default=None, ge=1)
+    comparison_days: int | None = Field(default=None, ge=1)
     mentions_change_pct: float | None = Field(default=None, gt=0)
     sentiment_change_pct: float | None = Field(default=None, gt=0)
     minimum_mentions: int | None = Field(default=None, ge=1)
