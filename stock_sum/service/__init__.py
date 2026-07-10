@@ -1,1 +1,1 @@
-"""Daemon service scaffolding."""
+"""Daemon service package."""

@@ -66,7 +66,8 @@ from stock_sum.llm.catalog import load_models_dev_catalog
 from stock_sum.llm.registry import build_llm_client, get_llm_provider, list_llm_providers
 from stock_sum.media.downloader import MediaDownloader
 from stock_sum.retention import DataRetentionService, RetentionSummary
-from stock_sum.reports.presentation import PresentationRenderError, PresentationRenderer
+from stock_sum.reports.formatting import PresentationRenderError
+from stock_sum.reports.renderer import PresentationRenderer
 from stock_sum.reports.summary_input import SummaryInputBuilder
 from stock_sum.service.daemon import build_daemon
 from stock_sum.storage.sqlite import SQLiteStorageRepository
@@ -96,23 +97,6 @@ config_app.add_typer(x_user_app, name="x-user")
 config_app.add_typer(subreddit_app, name="subreddit")
 config_app.add_typer(house_ptr_app, name="house-ptr")
 console = Console()
-
-
-def _parse_config_get_args(args: list[str]) -> tuple[Path, str]:
-    if len(args) == 1:
-        return _resolve_config_option(None, fallback=DEFAULT_LOCAL_CONFIG_PATH), args[0]
-    if len(args) == 2:
-        return Path(args[0]), args[1]
-    raise typer.BadParameter("Use `config get KEY` or `config get PATH KEY`.")
-
-
-def _parse_config_set_args(args: list[str]) -> tuple[Path, str, str]:
-    if len(args) == 2:
-        config = _resolve_config_option(None, fallback=DEFAULT_LOCAL_CONFIG_PATH)
-        return config, args[0], args[1]
-    if len(args) == 3:
-        return Path(args[0]), args[1], args[2]
-    raise typer.BadParameter("Use `config set KEY VALUE` or `config set PATH KEY VALUE`.")
 
 
 def _parse_value(raw: str) -> Any:
@@ -608,19 +592,22 @@ def config_validate(path: Path | None = typer.Argument(None, help="Config path. 
 
 
 @config_app.command("get")
-def config_get(args: list[str] = typer.Argument(..., help="KEY, or PATH KEY for explicit config.")) -> None:
+def config_get(key: str = typer.Argument(..., help="Dotted config key. Uses remembered setup path, then config.toml.")) -> None:
     """Get a dotted config value."""
 
-    path, key = _parse_config_get_args(args)
+    path = _resolve_config_option(None, fallback=DEFAULT_LOCAL_CONFIG_PATH)
     document = read_toml_document(path)
     console.print(get_dotted_value(document, key))
 
 
 @config_app.command("set")
-def config_set(args: list[str] = typer.Argument(..., help="KEY VALUE, or PATH KEY VALUE for explicit config.")) -> None:
+def config_set(
+    key: str = typer.Argument(..., help="Dotted config key. Uses remembered setup path, then config.toml."),
+    value: str = typer.Argument(..., help="TOML-compatible value."),
+) -> None:
     """Set a dotted config value."""
 
-    path, key, value = _parse_config_set_args(args)
+    path = _resolve_config_option(None, fallback=DEFAULT_LOCAL_CONFIG_PATH)
     set_dotted_value(path, key, _parse_value(value))
     console.print(f"Updated {key}")
 

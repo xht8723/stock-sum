@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from stock_sum.reports.presentation import PresentationRenderError, PresentationRenderer
+from stock_sum.reports.formatting import PresentationRenderError
+from stock_sum.reports.renderer import PresentationRenderer
 
 
 def _response() -> dict:

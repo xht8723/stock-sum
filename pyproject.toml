@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stock-sum"
 version = "0.1.0"
-description = "Modular trading information summarization service scaffold."
+description = "Local API-first trading information summarization service."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

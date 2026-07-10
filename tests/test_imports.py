@@ -1,4 +1,4 @@
-"""Import smoke tests for the architecture scaffold."""
+"""Import smoke tests for the stock-sum package."""
 
 import importlib
 
@@ -11,7 +11,8 @@ MODULES = [
     "stock_sum.core.pipeline",
     "stock_sum.collectors.base",
     "stock_sum.llm.catalog",
-    "stock_sum.reports.presentation",
+    "stock_sum.reports.formatting",
+    "stock_sum.reports.renderer",
     "stock_sum.api.app",
     "stock_sum.api.jobs",
 ]

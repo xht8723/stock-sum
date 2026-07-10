@@ -345,19 +345,21 @@ def test_setup_init_no_overwrite_rejects_existing_config(tmp_path) -> None:
     assert "Config already exists" in result.output
 
 
-def test_setup_check_reports_missing_and_present_secrets(tmp_path) -> None:
+def test_setup_check_reports_missing_and_present_secrets(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "config.toml"
     env_file = tmp_path / ".env"
     runner = CliRunner()
 
     init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    (tmp_path / ".stock-sum-state.json").write_text(json.dumps({"config": str(config_path)}), encoding="utf-8")
     set_xpoz_env = runner.invoke(
         app,
-        ["config", "set", str(config_path), "providers.xpoz.api_key_env", "'MISSING_TEST_XPOZ_KEY'"],
+        ["config", "set", "providers.xpoz.api_key_env", "'MISSING_TEST_XPOZ_KEY'"],
     )
     set_llm_env = runner.invoke(
         app,
-        ["config", "set", str(config_path), "llm.api_key_env", "'MISSING_TEST_DEEPSEEK_KEY'"],
+        ["config", "set", "llm.api_key_env", "'MISSING_TEST_DEEPSEEK_KEY'"],
     )
     missing_result = runner.invoke(app, ["setup", "check", "--config", str(config_path), "--env-file", str(env_file)])
     set_xpoz = runner.invoke(app, ["secrets", "set", "MISSING_TEST_XPOZ_KEY", "--env-file", str(env_file), "--value", "x"])
@@ -502,12 +504,14 @@ def test_setup_reset_cancel_keeps_targets(tmp_path) -> None:
 
 
 def test_daemon_reports_missing_setup_without_starting_server(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "config.toml"
     runner = CliRunner()
     init_result = runner.invoke(app, ["config", "init", str(config_path)])
+    (tmp_path / ".stock-sum-state.json").write_text(json.dumps({"config": str(config_path)}), encoding="utf-8")
     set_result = runner.invoke(
         app,
-        ["config", "set", str(config_path), "llm.api_key_env", "'MISSING_TEST_LLM_KEY'"],
+        ["config", "set", "llm.api_key_env", "'MISSING_TEST_LLM_KEY'"],
     )
     monkeypatch.delenv("MISSING_TEST_LLM_KEY", raising=False)
 
@@ -577,7 +581,7 @@ def test_daemon_uses_remembered_config_and_env_file(tmp_path, monkeypatch) -> No
     assert seen["deepseek"] == "fresh-deepseek"
 
 
-def test_config_get_set_use_remembered_config_and_keep_legacy_path_form(tmp_path, monkeypatch) -> None:
+def test_config_get_set_use_remembered_config_and_reject_path_form(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "active-config.toml"
     (tmp_path / ".stock-sum-state.json").write_text(json.dumps({"config": str(config_path)}), encoding="utf-8")
@@ -586,16 +590,15 @@ def test_config_get_set_use_remembered_config_and_keep_legacy_path_form(tmp_path
     init_result = runner.invoke(app, ["config", "init", str(config_path)])
     remembered_set = runner.invoke(app, ["config", "set", "server.port", "9090"])
     remembered_get = runner.invoke(app, ["config", "get", "server.port"])
-    legacy_set = runner.invoke(app, ["config", "set", str(config_path), "server.host", "'0.0.0.0'"])
-    legacy_get = runner.invoke(app, ["config", "get", str(config_path), "server.host"])
+    path_set = runner.invoke(app, ["config", "set", str(config_path), "server.host", "'0.0.0.0'"])
+    path_get = runner.invoke(app, ["config", "get", str(config_path), "server.host"])
 
     assert init_result.exit_code == 0
     assert remembered_set.exit_code == 0
     assert remembered_get.exit_code == 0
     assert "9090" in remembered_get.output
-    assert legacy_set.exit_code == 0
-    assert legacy_get.exit_code == 0
-    assert "0.0.0.0" in legacy_get.output
+    assert path_set.exit_code != 0
+    assert path_get.exit_code != 0
 
 
 def test_config_source_commands_use_remembered_config(tmp_path, monkeypatch) -> None:

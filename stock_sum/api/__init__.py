@@ -1,4 +1,4 @@
-"""HTTP API scaffolding."""
+"""HTTP API package."""
 
 from stock_sum.api.app import create_app
 

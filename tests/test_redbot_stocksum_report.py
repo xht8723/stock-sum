@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from redbot_cogs.stocksum_report.stocksum_report import (
+from redbot_cogs.stocksum_report.cog import (
     DEFAULT_TIMEOUT_SECONDS,
     StockSumArtifact,
     StockSumReport,
@@ -714,10 +714,10 @@ async def test_report_command_sends_ack_then_split_discord_report(monkeypatch) -
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     monkeypatch.setattr(
-        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        "redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env",
         lambda: FakeStockSumClient(content=("first paragraph\n\n" + ("x" * 1950)).encode("utf-8")),
     )
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.recent_posts(interaction)
 
@@ -740,10 +740,10 @@ async def test_report_command_sends_public_discord_report_directly_to_channel(mo
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=("first paragraph\n\nsecond paragraph").encode("utf-8"))
     monkeypatch.setattr(
-        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        "redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env",
         lambda: client,
     )
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.recent_posts(interaction, detail="medium")
 
@@ -764,10 +764,10 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     monkeypatch.setattr(
-        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        "redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env",
         lambda: FakeFailingStockSumClient(),
     )
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.recent_posts(interaction)
 
@@ -784,8 +784,8 @@ async def test_trendings_command_sends_public_discord_report(monkeypatch) -> Non
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"**Trending stocks**\n- NVDA")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.trendings(
         interaction,
@@ -822,7 +822,7 @@ async def test_trendings_command_rejects_invalid_limit(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.trendings(interaction, limit=0)
 
@@ -840,7 +840,7 @@ async def test_trendings_command_rejects_invalid_comparison_days(monkeypatch) ->
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.trendings(interaction, comparison_days=0)
 
@@ -858,7 +858,7 @@ async def test_trendings_command_rejects_invalid_change_thresholds(monkeypatch) 
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.trendings(interaction, mentions_change_pct=0)
 
@@ -876,7 +876,7 @@ async def test_ptr_search_command_rejects_missing_filters(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     monkeypatch.setattr(
-        "redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env",
+        "redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env",
         lambda: FakeStockSumClient(content=b"unused"),
     )
 
@@ -896,7 +896,7 @@ async def test_ptr_search_rejects_invalid_date_and_limit_before_api_call(monkeyp
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.ptr_search(
         interaction,
@@ -920,7 +920,7 @@ async def test_ptr_search_rejects_invalid_filing_date_before_api_call(monkeypatc
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.ptr_search(interaction, filing_start_date="bad-date")
 
@@ -938,7 +938,7 @@ async def test_ptr_search_rejects_mixed_filing_days_and_dates(monkeypatch) -> No
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.ptr_search(interaction, filing_days=1, filing_start_date="2026-07-01")
 
@@ -956,7 +956,7 @@ async def test_ptr_search_rejects_unknown_asset_type_before_api_call(monkeypatch
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.ptr_search(interaction, asset_type="bad!")
 
@@ -968,8 +968,8 @@ async def test_ptr_search_command_sends_discord_report(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=("trade one\n\ntrade two").encode("utf-8"))
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.ptr_search(
         interaction,
@@ -1011,8 +1011,8 @@ async def test_ptr_search_command_omits_limit_when_unset(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"trade")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.ptr_search(interaction, filing_days=1)
 
@@ -1025,8 +1025,8 @@ async def test_ptr_search_command_does_not_clip_large_limit(monkeypatch) -> None
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"trade")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.ptr_search(interaction, days=30, limit=5000)
 
@@ -1038,7 +1038,7 @@ async def test_13f_search_rejects_invalid_filters_before_api_call(monkeypatch) -
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.thirteenf_search(
         interaction,
@@ -1063,7 +1063,7 @@ async def test_13f_search_rejects_invalid_limit_before_api_call(monkeypatch) -> 
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.thirteenf_search(interaction, issuer="NVIDIA", limit=0)
 
@@ -1082,8 +1082,8 @@ async def test_13f_search_command_sends_discord_report(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=("holding one\n\nholding two").encode("utf-8"))
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.thirteenf_search(
         interaction,
@@ -1132,8 +1132,8 @@ async def test_13f_search_command_omits_limit_when_unset(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"holding")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.thirteenf_search(interaction, issuer="NVIDIA")
 
@@ -1145,8 +1145,8 @@ async def test_13f_search_command_does_not_clip_large_limit(monkeypatch) -> None
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"holding")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.thirteenf_search(interaction, issuer="NVIDIA", limit=5000)
 
@@ -1158,7 +1158,7 @@ async def test_plot_rejects_invalid_parameters_before_api_call(monkeypatch) -> N
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.plot(interaction, mode="social", ticker="bad ticker!", days=30)
 
@@ -1176,8 +1176,8 @@ async def test_plot_command_sends_png_file(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
     client = FakeStockSumClient(content=b"png", filename="statistic.png")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.plot(
         interaction,
@@ -1227,7 +1227,7 @@ async def test_plot_rejects_ticker_and_fuzzy_search_before_api_call(monkeypatch)
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot())
     client = FakeStockSumClient(content=b"unused")
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.plot(interaction, mode="social", ticker="NVDA", fuzzy_search="nvidia", days=30)
 
@@ -1264,8 +1264,8 @@ async def test_plot_fuzzy_search_selects_social_tag_with_reaction(monkeypatch) -
             "statistic_filters": {"fuzzy_tag": "nvidia"},
         },
     ]
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.plot(interaction, mode="social", fuzzy_search="NVIDIA", days=30)
 
@@ -1318,8 +1318,8 @@ async def test_plot_fuzzy_search_accepts_plain_digit_reaction(monkeypatch) -> No
             "statistic_filters": {"fuzzy_tag": "openai"},
         },
     ]
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.plot(interaction, mode="social", fuzzy_search="AI", days=30)
 
@@ -1341,7 +1341,7 @@ async def test_plot_fuzzy_search_timeout_edits_selection_message(monkeypatch) ->
             "statistic_filters": {"asset_name": "Apple Inc. - Common Stock (AAPL) [ST]", "ticker": "AAPL"},
         }
     ]
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.plot(interaction, mode="trading", fuzzy_search="Apple", days=180)
 
@@ -1364,7 +1364,7 @@ async def test_plot_fuzzy_search_ignores_other_user_reaction(monkeypatch) -> Non
             "statistic_filters": {"fuzzy_tag": "ai"},
         }
     ]
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.plot(interaction, mode="social", fuzzy_search="AI", days=30)
 
@@ -1386,7 +1386,7 @@ async def test_plot_fuzzy_search_ignores_unsupported_reaction(monkeypatch) -> No
             "statistic_filters": {"fuzzy_tag": "ai"},
         }
     ]
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.plot(interaction, mode="social", fuzzy_search="AI", days=30)
 
@@ -1413,8 +1413,8 @@ async def test_plot_fuzzy_search_reaction_add_failure_does_not_crash(monkeypatch
         raise RuntimeError("missing permission")
 
     monkeypatch.setattr(FakeMessage, "add_reaction", failing_add_reaction)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.plot(interaction, mode="social", fuzzy_search="AI", days=30)
 
@@ -1437,8 +1437,8 @@ async def test_plot_fuzzy_search_defer_failure_still_posts_channel_prompt(monkey
             "statistic_filters": {"asset_name": "OpenAI Global LLC [OI]"},
         }
     ]
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
 
     await report.plot(interaction, mode="trading", fuzzy_search="openai", days=30)
 
@@ -1451,7 +1451,7 @@ async def test_settings_command_blocks_non_owner(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=False))
     client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.settings_add_x(interaction, handle="aleabitoreddit")
 
@@ -1469,7 +1469,7 @@ async def test_settings_list_formats_sources(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=False))
     client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.settings_list(interaction)
 
@@ -1487,7 +1487,7 @@ async def test_settings_source_add_calls_api_for_owner(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.settings_add_x(
         interaction,
@@ -1509,7 +1509,7 @@ async def test_settings_source_add_rejects_invalid_handle(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.settings_add_x(interaction, handle="bad/handle")
 
@@ -1521,7 +1521,7 @@ async def test_settings_reddit_source_add_uses_endpoint_defaults(monkeypatch) ->
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.settings_add_reddit(interaction, subreddit="wallstreetbets")
 
@@ -1540,7 +1540,7 @@ async def test_settings_delete_sources(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=FakeBot(owner=True))
     client = FakeManagementClient()
-    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
 
     await report.settings_remove_x(interaction, handle="@aleabitoreddit")
     await report.settings_remove_reddit(interaction, subreddit="r/wallstreetbets")

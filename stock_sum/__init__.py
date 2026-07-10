@@ -1,3 +1,3 @@
-"""stock-sum service scaffold."""
+"""stock-sum service package."""
 
 __version__ = "0.1.0"

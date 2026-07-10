@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from io import BytesIO
 from typing import Any, Protocol
 from urllib.parse import quote
 import asyncio
 import os
 import re
+
+from redbot_cogs.stocksum_report.daily import (
+    DailyReportSection,
+    _coerce_utc,
+    _daily_section,
+    _daily_target_date_if_due,
+    _empty_daily_subscription,
+    _format_daily_report,
+    _normalize_daily_subscription,
+    _validate_daily_time,
+)
 
 try:  # pragma: no cover - exercised in a Redbot runtime, not the project venv.
     import discord
@@ -77,7 +88,6 @@ DEFAULT_POLL_SECONDS = 60.0
 DEFAULT_TIMEOUT_SECONDS = 30 * 60
 DAILY_CONFIG_IDENTIFIER = 8723001001
 DAILY_CHECK_SECONDS = 60.0
-DAILY_PRESTART_SECONDS = 30 * 60
 DISCORD_INLINE_LIMIT = 1900
 DISCORD_FAILURE_LIMIT = 1900
 SUPPORTED_FORMATS = {"discord", "html", "markdown", "text", "json"}
@@ -102,7 +112,6 @@ _CUSIP_RE = re.compile(r"^[A-Z0-9]{1,12}$")
 _FIGI_RE = re.compile(r"^[A-Z0-9]{1,24}$")
 _CIK_RE = re.compile(r"^[0-9]{1,10}$")
 _ACCESSION_RE = re.compile(r"^[A-Za-z0-9-]{1,32}$")
-_DAILY_TIME_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
 
 class StockSumCogError(Exception):
@@ -164,43 +173,12 @@ class StockSumArtifact:
     status: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class DailyReportSection:
-    """One completed section of the daily DM bundle."""
-
-    title: str
-    content: str
-    error: str | None = None
-
-
-def _empty_daily_subscription() -> dict[str, Any]:
-    return {
-        "enabled": False,
-        "time_utc": "",
-        "last_sent_utc_date": "",
-        "last_error": "",
-        "created_at": "",
-        "updated_at": "",
-    }
-
-
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _user_id_value(user: Any) -> int:
     return int(getattr(user, "id"))
-
-
-def _normalize_daily_subscription(payload: Any) -> dict[str, Any]:
-    normalized = _empty_daily_subscription()
-    if isinstance(payload, dict):
-        normalized.update({key: value for key, value in payload.items() if key in normalized})
-    normalized["enabled"] = bool(normalized["enabled"])
-    normalized["time_utc"] = str(normalized["time_utc"] or "")
-    normalized["last_sent_utc_date"] = str(normalized["last_sent_utc_date"] or "")
-    normalized["last_error"] = str(normalized["last_error"] or "")
-    return normalized
 
 
 class _DailyReportStore(Protocol):
@@ -1684,67 +1662,6 @@ def _validate_report_options(*, output_format: str, detail: str | None = None) -
     if detail is not None and detail not in SUPPORTED_SOCIAL_DETAILS:
         return f"Unsupported social report detail: {detail}. Use minimum, medium, or full."
     return None
-
-
-def _validate_daily_time(value: str) -> tuple[str | None, str | None]:
-    clean = value.strip()
-    if not _DAILY_TIME_RE.fullmatch(clean):
-        return None, "daily time must be UTC HH:MM in 24-hour format."
-    return clean, None
-
-
-def _coerce_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _daily_target_date_if_due(subscription: dict[str, Any], *, now_utc: datetime) -> str | None:
-    normalized = _normalize_daily_subscription(subscription)
-    if not normalized["enabled"]:
-        return None
-    try:
-        hour_text, minute_text = normalized["time_utc"].split(":", 1)
-        scheduled_hour = int(hour_text)
-        scheduled_minute = int(minute_text)
-    except (AttributeError, TypeError, ValueError):
-        return None
-
-    try:
-        scheduled_today = now_utc.replace(hour=scheduled_hour, minute=scheduled_minute, second=0, microsecond=0)
-    except ValueError:
-        return None
-    prestart = timedelta(seconds=DAILY_PRESTART_SECONDS)
-    for scheduled_at in (scheduled_today + timedelta(days=1), scheduled_today):
-        target_date = scheduled_at.date().isoformat()
-        if normalized["last_sent_utc_date"] == target_date:
-            continue
-        if now_utc >= scheduled_at - prestart:
-            return target_date
-    return None
-
-
-async def _daily_section(title: str, runner: Any) -> DailyReportSection:
-    try:
-        artifact = await runner()
-    except Exception as exc:
-        return DailyReportSection(title=title, content="", error=f"{title} failed: {exc}")
-    content = artifact.content.decode("utf-8", errors="replace").strip()
-    return DailyReportSection(title=title, content=content or "Report generated, but it did not contain any text.")
-
-
-def _format_daily_report(sections: list[DailyReportSection], *, sent_utc_date: str) -> str:
-    lines = [
-        "**Stock-Sum Daily Report**",
-        f"UTC date: {sent_utc_date}",
-    ]
-    for section in sections:
-        lines.extend(["", f"## {section.title}"])
-        if section.error:
-            lines.append(f"Warning: {section.error}")
-        else:
-            lines.append(section.content)
-    return "\n".join(lines)
 
 
 async def _send_daily_dm(user: Any, content: str) -> None:

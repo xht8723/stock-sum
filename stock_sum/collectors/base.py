@@ -10,7 +10,7 @@ from stock_sum.core.models import RawItem
 
 @runtime_checkable
 class Collector(Protocol):
-    """Common interface for API, Playwright, and site-specific collectors."""
+    """Common interface for external source collectors."""
 
     collector_id: str
 

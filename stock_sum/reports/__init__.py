@@ -1,5 +1,5 @@
-"""Report presentation rendering."""
+"""Report rendering exports."""
 
-from stock_sum.reports.presentation import PresentationRenderer
+from stock_sum.reports.renderer import PresentationRenderer
 
 __all__ = ["PresentationRenderer"]

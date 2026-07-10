@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .stocksum_report import StockSumReport
+from .cog import StockSumReport
 
 
 async def setup(bot):
