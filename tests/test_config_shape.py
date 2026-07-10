@@ -44,16 +44,8 @@ def test_example_config_is_valid() -> None:
     assert config.llm.analysis_x_posts_per_chunk == 10
     assert config.llm.analysis_max_chars_per_chunk == 12000
     assert config.llm.analysis_max_concurrency == 1
-    assert config.sources.x_users[0].handle == "aleabitoreddit"
-    assert config.sources.x_users[0].enabled is True
-    assert config.sources.x_users[0].limit == 100
-    assert config.sources.x_users[0].lookback_hours == 24
-    assert config.sources.subreddits[0].subreddit == "wallstreetbets"
-    assert config.sources.subreddits[0].enabled is True
-    assert config.sources.subreddits[0].limit == 100
-    assert config.sources.subreddits[0].lookback_hours == 24
-    assert config.sources.subreddits[0].include_comments is True
-    assert config.sources.subreddits[0].comments_per_post == 10
+    assert config.sources.x_users == []
+    assert config.sources.subreddits == []
     assert config.sources.house_ptr.enabled is True
     assert config.sources.house_ptr.year == 0
     assert config.sources.house_ptr.download_concurrency == 1

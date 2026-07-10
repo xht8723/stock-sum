@@ -132,6 +132,32 @@ def test_trading_report_accepts_asset_type_and_ticker_filters(tmp_path) -> None:
     assert manager.last_trading_ticker == "amzn"
 
 
+def test_trading_report_accepts_filing_date_filters(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    response = client.post(
+        "/v1/trading-reports/jobs/discord",
+        json={"filing_start_date": "2026-07-01", "filing_end_date": "2026-07-08", "filing_days": None},
+    )
+
+    assert response.status_code == 202
+    assert manager.last_trading_filing_start_date == "2026-07-01"
+    assert manager.last_trading_filing_end_date == "2026-07-08"
+
+
+def test_trading_report_accepts_filing_days(tmp_path) -> None:
+    config = _test_config(tmp_path)
+    manager = FakeJobManager(tmp_path)
+    client = TestClient(create_app(config, job_manager=manager))
+
+    response = client.post("/v1/trading-reports/jobs/discord", json={"filing_days": 1})
+
+    assert response.status_code == 202
+    assert manager.last_trading_filing_days == 1
+
+
 def test_13f_report_omitted_limit_uses_stock_sum_default(tmp_path) -> None:
     config = _test_config(tmp_path)
     manager = FakeJobManager(tmp_path)
@@ -256,6 +282,9 @@ class FakeJobManager:
         self.last_trading_limit: int | None = None
         self.last_trading_asset_type: str | None = None
         self.last_trading_ticker: str | None = None
+        self.last_trading_filing_start_date: str | None = None
+        self.last_trading_filing_end_date: str | None = None
+        self.last_trading_filing_days: int | None = None
         self.last_13f_limit: int | None = None
         self.last_statistic_mode: str | None = None
         self.last_statistic_ticker: str | None = None
@@ -273,6 +302,9 @@ class FakeJobManager:
         self.last_trading_limit = options.limit
         self.last_trading_asset_type = options.asset_type
         self.last_trading_ticker = options.ticker
+        self.last_trading_filing_start_date = options.filing_start_date
+        self.last_trading_filing_end_date = options.filing_end_date
+        self.last_trading_filing_days = options.filing_days
         job = FakeJob(job_id="job-trading", kind="trading_report", scope="trading")
         self.jobs[job.job_id] = job
         return job

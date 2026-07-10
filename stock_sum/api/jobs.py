@@ -45,6 +45,7 @@ from stock_sum.api.job_validation import (
     _statistic_date_window,
     _statistic_filter_data,
     _trading_date_window,
+    _trading_filing_date_window,
     _trading_filter_data,
     _trendings_date_window,
     _validate_13f_filters,
@@ -462,15 +463,20 @@ class HttpJobManager:
 
             self._update(job_id, phase="querying")
             transaction_start, transaction_end = _trading_date_window(options)
+            filing_start, filing_end = _trading_filing_date_window(options)
+            order_by_filing_date = filing_start is not None or filing_end is not None
             rows = await repository.read_house_ptr_trades(
                 name_contains=options.name,
                 transaction_start=transaction_start,
                 transaction_end=transaction_end,
+                filing_start=filing_start,
+                filing_end=filing_end,
                 asset_type=options.asset_type,
                 ticker=options.ticker,
                 limit=options.limit,
+                order_by_filing_date=order_by_filing_date,
             )
-            rows = _sort_house_ptr_rows(rows)
+            rows = _sort_house_ptr_rows(rows, prefer_filing_date=order_by_filing_date)
             if not rows:
                 message = "No House PTR trade rows matched the trading report filters."
                 if warnings:
@@ -482,7 +488,7 @@ class HttpJobManager:
                 "report_type": "trading",
                 "summary": {"house_ptr": _house_ptr_rows_to_dicts(rows)},
                 "house_ptr": _house_ptr_rows_to_dicts(rows),
-                "filters": _trading_filter_data(options, transaction_start, transaction_end),
+                "filters": _trading_filter_data(options, transaction_start, transaction_end, filing_start, filing_end),
                 "pipeline_warnings": warning_data,
                 "failed_sections": warning_data,
             }
@@ -1483,6 +1489,9 @@ class HttpJobManager:
                         "start_date": options.start_date,
                         "end_date": options.end_date,
                         "days": options.days,
+                        "filing_start_date": options.filing_start_date,
+                        "filing_end_date": options.filing_end_date,
+                        "filing_days": options.filing_days,
                         "asset_type": options.asset_type,
                         "ticker": options.ticker,
                         "limit": options.limit,
@@ -1980,13 +1989,13 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
-def _sort_house_ptr_rows(rows: list[Any]) -> list[Any]:
-    """Sort House PTR rows newest-first by transaction date for final reports."""
+def _sort_house_ptr_rows(rows: list[Any], *, prefer_filing_date: bool = False) -> list[Any]:
+    """Sort House PTR rows newest-first for final reports."""
 
-    return sorted(rows, key=_house_ptr_row_sort_key, reverse=True)
+    return sorted(rows, key=lambda row: _house_ptr_row_sort_key(row, prefer_filing_date=prefer_filing_date), reverse=True)
 
 
-def _house_ptr_row_sort_key(row: Any) -> tuple[datetime, datetime, datetime, str, int, int]:
+def _house_ptr_row_sort_key(row: Any, *, prefer_filing_date: bool = False) -> tuple[datetime, datetime, datetime, str, int, int]:
     minimum = datetime.min.replace(tzinfo=timezone.utc)
     transaction_at = _parse_utc_datetime(getattr(row, "transaction_date_utc", None))
     if transaction_at is None:
@@ -1995,9 +2004,11 @@ def _house_ptr_row_sort_key(row: Any) -> tuple[datetime, datetime, datetime, str
     if filing_at is None:
         filing_at = _parse_simple_date(getattr(row, "filing_date", None)) or minimum
     collected_at = _parse_utc_datetime(getattr(row, "collected_at", None)) or minimum
+    primary_at = filing_at if prefer_filing_date else transaction_at
+    secondary_at = transaction_at if prefer_filing_date else filing_at
     return (
-        transaction_at,
-        filing_at,
+        primary_at,
+        secondary_at,
         collected_at,
         str(getattr(row, "doc_id", "")),
         int(getattr(row, "table_index", 0) or 0),

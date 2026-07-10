@@ -197,8 +197,6 @@ def setup_init(
     xpoz_api_key: str | None = typer.Option(None, "--xpoz-api-key", help="Xpoz API key to store in env file."),
     adanos_api_key: str | None = typer.Option(None, "--adanos-api-key", help="Optional Adanos API key to store in env file."),
     llm_api_key: str | None = typer.Option(None, "--llm-api-key", help="LLM API key to store in env file."),
-    x_user: str | None = typer.Option(None, "--x-user", help="Optional first X handle to collect."),
-    subreddit: str | None = typer.Option(None, "--subreddit", help="Optional first subreddit to collect."),
 ) -> None:
     """Run the first-time interactive setup wizard."""
 
@@ -255,30 +253,6 @@ def setup_init(
     env_values[descriptor.api_key_env] = llm_api_key
     write_env_file(env_file, env_values)
     _write_setup_state(state_file, config=config, env_file=env_file, data_dir=config.parent / "data")
-
-    if not yes:
-        x_user = typer.prompt("First X handle to collect (blank to skip)", default=x_user or "")
-        subreddit = typer.prompt("First subreddit to collect (blank to skip)", default=subreddit or "")
-    try:
-        if x_user:
-            add_x_user(config, x_user, enabled=True, limit=100, lookback_hours=24, overwrite=True)
-        if subreddit:
-            add_subreddit(
-                config,
-                subreddit,
-                enabled=True,
-                sort="new",
-                timeframe="day",
-                limit=100,
-                lookback_hours=24,
-                trim=True,
-                include_comments=True,
-                comments_per_post=10,
-                overwrite=True,
-            )
-    except (KeyError, ValueError) as exc:
-        console.print(str(exc))
-        raise typer.Exit(code=1) from exc
 
     console.print(f"Wrote config: {config}")
     console.print(f"Wrote env file: {env_file}")

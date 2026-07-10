@@ -745,6 +745,82 @@ async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
     ]
 
 
+async def test_read_house_ptr_trades_filters_and_orders_by_filing_date(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    old_filing_new_transaction = RawItem(
+        source_id="old-filing",
+        source_type="house_ptr_disclosures",
+        url="https://example.com/old.pdf",
+        text="Old Filing House PTR disclosure",
+        metadata={
+            "entity_type": "house_ptr_filing",
+            "doc_id": "old-filing",
+            "year": 2026,
+            "name": "Old Filing",
+            "filing_date": "2026-07-01",
+            "pdf_url": "https://example.com/old.pdf",
+            "raw_xml": {"DocID": "old-filing"},
+            "tables": [],
+            "trade_rows": [
+                {
+                    "table_index": 0,
+                    "row_index": 0,
+                    "cells": ["Apple Inc. - Common Stock (AAPL) [ST]", "Purchase", "2026-07-09", "$1,001 - $15,000"],
+                    "fields": {
+                        "asset": "Apple Inc. - Common Stock (AAPL) [ST]",
+                        "transaction_type": "Purchase",
+                        "transaction_date": "2026-07-09",
+                        "amount": "$1,001 - $15,000",
+                    },
+                }
+            ],
+            "extraction_status": "succeeded",
+        },
+    )
+    new_filing_old_transaction = RawItem(
+        source_id="new-filing",
+        source_type="house_ptr_disclosures",
+        url="https://example.com/new.pdf",
+        text="New Filing House PTR disclosure",
+        metadata={
+            "entity_type": "house_ptr_filing",
+            "doc_id": "new-filing",
+            "year": 2026,
+            "name": "New Filing",
+            "filing_date": "2026-07-08",
+            "pdf_url": "https://example.com/new.pdf",
+            "raw_xml": {"DocID": "new-filing"},
+            "tables": [],
+            "trade_rows": [
+                {
+                    "table_index": 0,
+                    "row_index": 0,
+                    "cells": ["Microsoft Corporation Common Stock (MSFT) [ST]", "Sale", "2026-06-20", "$1,001 - $15,000"],
+                    "fields": {
+                        "asset": "Microsoft Corporation Common Stock (MSFT) [ST]",
+                        "transaction_type": "Sale",
+                        "transaction_date": "2026-06-20",
+                        "amount": "$1,001 - $15,000",
+                    },
+                }
+            ],
+            "extraction_status": "succeeded",
+        },
+    )
+    await repository.save_raw_items([old_filing_new_transaction, new_filing_old_transaction])
+
+    filing_filtered = await repository.read_house_ptr_trades(
+        filing_start=datetime(2026, 7, 7, tzinfo=timezone.utc),
+        filing_end=datetime(2026, 7, 8, 23, 59, tzinfo=timezone.utc),
+        order_by_filing_date=True,
+    )
+    transaction_order = await repository.read_house_ptr_trades()
+
+    assert [trade.doc_id for trade in filing_filtered] == ["new-filing"]
+    assert [trade.doc_id for trade in transaction_order] == ["old-filing", "new-filing"]
+
+
 async def test_save_and_read_sec_13f_holdings(tmp_path) -> None:
     db_path = tmp_path / "storage.sqlite3"
     repository = SQLiteStorageRepository(db_path)

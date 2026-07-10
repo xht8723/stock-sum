@@ -1036,9 +1036,12 @@ class SQLiteStorageRepository:
         name_contains: str | None = None,
         transaction_start: datetime | None = None,
         transaction_end: datetime | None = None,
+        filing_start: datetime | None = None,
+        filing_end: datetime | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
+        order_by_filing_date: bool = False,
     ) -> list[StoredHousePtrTradeRow]:
         """Read House PTR trade rows joined with filing metadata."""
 
@@ -1065,6 +1068,12 @@ class SQLiteStorageRepository:
         if transaction_end is not None:
             conditions.append("r.transaction_date_utc <= ?")
             params.append(_datetime_param(transaction_end, end_of_day=True))
+        if filing_start is not None:
+            conditions.append("f.filing_date_utc >= ?")
+            params.append(_datetime_param(filing_start))
+        if filing_end is not None:
+            conditions.append("f.filing_date_utc <= ?")
+            params.append(_datetime_param(filing_end, end_of_day=True))
         normalized_asset_type = _normalized_upper_filter(asset_type)
         if normalized_asset_type:
             conditions.append("UPPER(r.asset_type_code) = ?")
@@ -1075,11 +1084,19 @@ class SQLiteStorageRepository:
             params.append(normalized_ticker)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += """
-            ORDER BY COALESCE(r.transaction_date_utc, f.filing_date_utc, f.collected_at) DESC,
-                     f.collected_at DESC,
-                     f.doc_id DESC, r.table_index ASC, r.row_index ASC
-        """
+        if order_by_filing_date:
+            query += """
+                ORDER BY COALESCE(f.filing_date_utc, f.collected_at) DESC,
+                         COALESCE(r.transaction_date_utc, f.filing_date_utc, f.collected_at) DESC,
+                         f.collected_at DESC,
+                         f.doc_id DESC, r.table_index ASC, r.row_index ASC
+            """
+        else:
+            query += """
+                ORDER BY COALESCE(r.transaction_date_utc, f.filing_date_utc, f.collected_at) DESC,
+                         f.collected_at DESC,
+                         f.doc_id DESC, r.table_index ASC, r.row_index ASC
+            """
         if limit is not None:
             query += " LIMIT ?"
             params.append(limit)

@@ -84,23 +84,6 @@ analysis_x_posts_per_chunk = 10
 analysis_max_chars_per_chunk = 12000
 analysis_max_concurrency = 1
 
-[[sources.x_users]]
-enabled = true
-handle = "aleabitoreddit"
-limit = 100
-lookback_hours = 24
-
-[[sources.subreddits]]
-enabled = true
-subreddit = "wallstreetbets"
-sort = "new"
-timeframe = "day"
-limit = 100
-lookback_hours = 24
-trim = true
-include_comments = true
-comments_per_post = 10
-
 [sources.house_ptr]
 enabled = true
 year = 0

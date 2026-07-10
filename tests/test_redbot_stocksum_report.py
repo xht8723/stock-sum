@@ -43,7 +43,17 @@ def test_required_slash_command_parameters_are_explicit() -> None:
 
 def test_conditional_filter_slash_parameters_stay_optional() -> None:
     conditional_optional_parameters = {
-        "ptr_search": {"name", "start_date", "end_date", "days", "asset_type", "ticker"},
+        "ptr_search": {
+            "name",
+            "start_date",
+            "end_date",
+            "days",
+            "filing_start_date",
+            "filing_end_date",
+            "filing_days",
+            "asset_type",
+            "ticker",
+        },
         "thirteenf_search": {
             "manager",
             "issuer",
@@ -194,7 +204,7 @@ async def test_due_daily_report_runs_once_per_utc_day() -> None:
     assert client.calls == [
         ("trendings", {"output_format": "discord"}),
         ("social", {"output_format": "discord", "detail": "minimum"}),
-        ("trading", {"output_format": "discord", "days": 1}),
+        ("trading", {"output_format": "discord", "filing_days": 1}),
     ]
     assert len(user.dm_messages) == 1
     subscriptions = await report._daily_store.all_subscriptions()
@@ -290,7 +300,7 @@ async def test_daily_report_keeps_order_and_continues_after_job_failure() -> Non
     assert client.calls == [
         ("trendings", {"output_format": "discord"}),
         ("social", {"output_format": "discord", "detail": "minimum"}),
-        ("trading", {"output_format": "discord", "days": 1}),
+        ("trading", {"output_format": "discord", "filing_days": 1}),
     ]
     message = user.dm_messages[0]["content"]
     trendings_index = message.index("## Trendings")
@@ -405,6 +415,7 @@ async def test_client_sends_trading_report_request_and_downloads_artifact() -> N
         output_format="discord",
         name="Pelosi",
         days=30,
+        filing_days=1,
         asset_type="ST",
         ticker="AMZN",
         limit=25,
@@ -417,7 +428,15 @@ async def test_client_sends_trading_report_request_and_downloads_artifact() -> N
         "http://stock-sum.local/v1/trading-reports/jobs/discord",
         {
             "headers": {},
-            "json": {"name": "Pelosi", "days": 30, "asset_type": "ST", "ticker": "AMZN", "limit": 25, "force_refresh": True},
+            "json": {
+                "name": "Pelosi",
+                "days": 30,
+                "filing_days": 1,
+                "asset_type": "ST",
+                "ticker": "AMZN",
+                "limit": 25,
+                "force_refresh": True,
+            },
         },
     )
 
@@ -432,14 +451,14 @@ async def test_client_omits_trading_limit_by_default() -> None:
     )
     client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
 
-    await client.run_trading_report(output_format="discord", days=30)
+    await client.run_trading_report(output_format="discord", filing_days=1)
 
     assert session.requests[0] == (
         "POST",
         "http://stock-sum.local/v1/trading-reports/jobs/discord",
         {
             "headers": {},
-            "json": {"days": 30, "force_refresh": False},
+            "json": {"filing_days": 1, "force_refresh": False},
         },
     )
 
@@ -865,7 +884,7 @@ async def test_ptr_search_command_rejects_missing_filters(monkeypatch) -> None:
 
     assert interaction.response.messages == [
         {
-            "content": "stock-sum report failed: ptr_search requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
+            "content": "stock-sum report failed: ptr_search requires at least one filter: name, transaction dates, filing dates, asset_type, or ticker.",
             "ephemeral": True,
             "suppress_embeds": True,
         }
@@ -897,6 +916,42 @@ async def test_ptr_search_rejects_invalid_date_and_limit_before_api_call(monkeyp
     assert interaction.followup.messages == []
 
 
+async def test_ptr_search_rejects_invalid_filing_date_before_api_call(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.ptr_search(interaction, filing_start_date="bad-date")
+
+    assert client.trading_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: filing_start_date must be in YYYY-MM-DD format.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_ptr_search_rejects_mixed_filing_days_and_dates(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"unused")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
+
+    await report.ptr_search(interaction, filing_days=1, filing_start_date="2026-07-01")
+
+    assert client.trading_calls == []
+    assert interaction.response.messages == [
+        {
+            "content": "stock-sum report failed: Use either filing_days or filing start/end dates, not both.",
+            "ephemeral": True,
+            "suppress_embeds": True,
+        }
+    ]
+
+
 async def test_ptr_search_rejects_unknown_asset_type_before_api_call(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
@@ -920,6 +975,7 @@ async def test_ptr_search_command_sends_discord_report(monkeypatch) -> None:
         interaction,
         name="Pelosi",
         days=30,
+        filing_days=1,
         asset_type="st",
         ticker="amzn",
         limit=25,
@@ -933,6 +989,9 @@ async def test_ptr_search_command_sends_discord_report(monkeypatch) -> None:
             "start_date": None,
             "end_date": None,
             "days": 30,
+            "filing_start_date": None,
+            "filing_end_date": None,
+            "filing_days": 1,
             "asset_type": "ST",
             "ticker": "AMZN",
             "limit": 25,
@@ -955,10 +1014,11 @@ async def test_ptr_search_command_omits_limit_when_unset(monkeypatch) -> None:
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.StockSumHttpClient.from_env", lambda: client)
     monkeypatch.setattr("redbot_cogs.stocksum_report.stocksum_report.discord", FakeDiscord)
 
-    await report.ptr_search(interaction, days=30)
+    await report.ptr_search(interaction, filing_days=1)
 
     assert client.trading_calls[0]["output_format"] == "discord"
     assert client.trading_calls[0]["limit"] is None
+    assert client.trading_calls[0]["filing_days"] == 1
 
 
 async def test_ptr_search_command_does_not_clip_large_limit(monkeypatch) -> None:
@@ -1593,6 +1653,9 @@ class FakeStockSumClient:
         start_date: str | None = None,
         end_date: str | None = None,
         days: int | None = None,
+        filing_start_date: str | None = None,
+        filing_end_date: str | None = None,
+        filing_days: int | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
@@ -1605,6 +1668,9 @@ class FakeStockSumClient:
                 "start_date": start_date,
                 "end_date": end_date,
                 "days": days,
+                "filing_start_date": filing_start_date,
+                "filing_end_date": filing_end_date,
+                "filing_days": filing_days,
                 "asset_type": asset_type,
                 "ticker": ticker,
                 "limit": limit,

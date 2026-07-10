@@ -12,6 +12,7 @@ from pathlib import Path
 from stock_sum.api.jobs import HttpJobManager, SocialReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions, TrendingsReportJobOptions
 from stock_sum.collectors.api.adanos import AdanosEndpointResult, AdanosTrendingsResult
 from stock_sum.config.loader import load_config
+from stock_sum.config.models import XUserSourceConfig
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
 from stock_sum.storage.models import (
@@ -184,6 +185,47 @@ async def test_trading_report_filters_by_asset_type_and_ticker(tmp_path) -> None
     summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
     assert summary["house_ptr"][0]["asset_type_code"] == "ST"
     assert summary["house_ptr"][0]["stock_ticker"] == "AMZN"
+
+
+async def test_trading_report_filters_by_filing_days_and_orders_by_filing_date(tmp_path) -> None:
+    repository = FakeRepository(
+        with_social_data=False,
+        house_rows=[
+            _house_row(doc_id="old-filing", transaction_date="2026-07-09", filing_date="2026-07-01"),
+            _house_row(doc_id="new-filing", transaction_date="2026-06-20", filing_date="2026-07-08"),
+        ],
+    )
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: repository,
+        llm_client_factory=lambda: FakeLLM(),
+    )
+    options = TradingReportJobOptions(mode="json", filing_days=14)
+    job = manager.create_trading_report_job(options)
+
+    await manager.run_trading_report_job(job.job_id, options)
+
+    assert repository.last_house_filters["filing_start"] is not None
+    assert repository.last_house_filters["filing_end"] is not None
+    assert repository.last_house_filters["order_by_filing_date"] is True
+    status = manager.get_job(job.job_id)
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    assert [row["doc_id"] for row in summary["house_ptr"]] == ["new-filing", "old-filing"]
+    assert summary["filters"]["filing_days"] == 14
+    assert summary["filters"]["filing_start"] is not None
+    assert summary["filters"]["filing_end"] is not None
+
+
+def test_trading_report_rejects_mixed_filing_relative_and_explicit_dates(tmp_path) -> None:
+    manager = HttpJobManager(_test_config(tmp_path), repository_factory=lambda: FakeRepository(with_social_data=False))
+
+    try:
+        manager.create_trading_report_job(TradingReportJobOptions(filing_days=1, filing_start_date="2026-07-01"))
+    except ValueError as exc:
+        assert "filing_days" in str(exc)
+    else:
+        raise AssertionError("expected filing date validation error")
 
 
 async def test_13f_report_job_renders_matching_holdings_without_llm(tmp_path) -> None:
@@ -1309,17 +1351,32 @@ class FakeRepository:
         name_contains=None,
         transaction_start=None,
         transaction_end=None,
+        filing_start=None,
+        filing_end=None,
         asset_type=None,
         ticker=None,
         limit=None,
+        order_by_filing_date=False,
     ):
         self.house_read_calls += 1
-        self.last_house_filters = {"asset_type": asset_type, "ticker": ticker}
+        self.last_house_filters = {
+            "asset_type": asset_type,
+            "ticker": ticker,
+            "transaction_start": transaction_start,
+            "transaction_end": transaction_end,
+            "filing_start": filing_start,
+            "filing_end": filing_end,
+            "order_by_filing_date": order_by_filing_date,
+        }
         rows = list(self.house_rows)
         if asset_type:
             rows = [row for row in rows if (row.asset_type_code or "").upper() == asset_type.upper()]
         if ticker:
             rows = [row for row in rows if (row.stock_ticker or "").upper() == ticker.upper()]
+        if filing_start:
+            rows = [row for row in rows if row.filing_date_utc and row.filing_date_utc >= filing_start.isoformat()]
+        if filing_end:
+            rows = [row for row in rows if row.filing_date_utc and row.filing_date_utc <= filing_end.isoformat()]
         return rows if limit is None else rows[:limit]
 
     async def read_sec_13f_holdings(
@@ -1639,6 +1696,7 @@ def _house_row(
     asset_type_code: str | None = None,
     stock_ticker: str | None = None,
     transaction_date: str = "2026-06-20",
+    filing_date: str = "2026-06-30",
 ) -> StoredHousePtrTradeRow:
     if asset_type_code is None and asset.endswith("[ST]"):
         asset_type_code = "ST"
@@ -1650,8 +1708,8 @@ def _house_row(
         name="Jane Doe",
         status="Member",
         state="CA",
-        filing_date="2026-06-30",
-        filing_date_utc="2026-06-30T00:00:00+00:00",
+        filing_date=filing_date,
+        filing_date_utc=f"{filing_date}T00:00:00+00:00",
         pdf_url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf",
         table_index=0,
         row_index=0,
@@ -1675,6 +1733,9 @@ def _test_config(tmp_path):
     return config.model_copy(
         update={
             "server": config.server.model_copy(update={"artifact_dir": str(tmp_path / "jobs")}),
+            "sources": config.sources.model_copy(
+                update={"x_users": [XUserSourceConfig(handle="aleabitoreddit")]}
+            ),
             "storage": config.storage.model_copy(update={"sqlite_path": str(tmp_path / "stock_sum.sqlite3")}),
         }
     )

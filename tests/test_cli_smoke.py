@@ -242,7 +242,7 @@ def test_database_reset_cancel_keeps_sqlite_file(tmp_path) -> None:
     assert db_path.exists()
 
 
-def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
+def test_setup_init_yes_writes_config_and_env(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     env_file = tmp_path / ".env"
     state_file = tmp_path / ".stock-sum-state.json"
@@ -268,10 +268,6 @@ def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
             "0.0.0.0",
             "--port",
             "8080",
-            "--x-user",
-            "aleabitoreddit",
-            "--subreddit",
-            "wallstreetbets",
         ],
     )
 
@@ -281,10 +277,8 @@ def test_setup_init_yes_writes_config_env_and_sources(tmp_path) -> None:
     assert 'host = "0.0.0.0"' in config_text
     assert "port = 8080" in config_text
     assert 'provider = "deepseek"' in config_text
-    assert 'handle = "aleabitoreddit"' in config_text
-    assert 'subreddit = "wallstreetbets"' in config_text
-    assert "include_comments = true" in config_text
-    assert "comments_per_post = 10" in config_text
+    assert 'handle = "aleabitoreddit"' not in config_text
+    assert 'subreddit = "wallstreetbets"' not in config_text
     assert "XPOZ_API_KEY=xpoz-secret" in env_text
     assert "DEEPSEEK_API_KEY=deepseek-secret" in env_text
     assert "deepseek-secret" not in result.output

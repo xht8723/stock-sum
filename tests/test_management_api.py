@@ -36,6 +36,8 @@ def test_source_management_hot_reloads_config(tmp_path) -> None:
 
 def test_reddit_source_delete_updates_global_sources(tmp_path) -> None:
     client, config_path, _env_file = _management_client(tmp_path)
+    add_reddit = client.post("/v1/sources/subreddits", json={"subreddit": "wallstreetbets"})
+    assert add_reddit.status_code == 200
 
     response = client.delete("/v1/sources/subreddits/wallstreetbets")
 

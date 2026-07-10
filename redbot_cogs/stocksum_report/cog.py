@@ -381,6 +381,9 @@ class StockSumHttpClient:
         start_date: str | None = None,
         end_date: str | None = None,
         days: int | None = None,
+        filing_start_date: str | None = None,
+        filing_end_date: str | None = None,
+        filing_days: int | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
@@ -390,8 +393,10 @@ class StockSumHttpClient:
 
         if output_format not in SUPPORTED_FORMATS:
             raise StockSumRequestError(f"Unsupported report format: {output_format}")
-        if not any((name, start_date, end_date, days, asset_type, ticker)):
-            raise StockSumRequestError("ptr_search requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.")
+        if not any((name, start_date, end_date, days, filing_start_date, filing_end_date, filing_days, asset_type, ticker)):
+            raise StockSumRequestError(
+                "ptr_search requires at least one filter: name, transaction dates, filing dates, asset_type, or ticker."
+            )
 
         session, owns_session = await self._session()
         try:
@@ -400,6 +405,9 @@ class StockSumHttpClient:
                 "start_date": start_date,
                 "end_date": end_date,
                 "days": days,
+                "filing_start_date": filing_start_date,
+                "filing_end_date": filing_end_date,
+                "filing_days": filing_days,
                 "asset_type": asset_type,
                 "ticker": ticker,
                 "limit": limit,
@@ -923,6 +931,9 @@ class StockSumReport(commands.Cog):
         start_date="transaction start date, YYYY-MM-DD",
         end_date="transaction end date, YYYY-MM-DD",
         days="transaction records from the last N days",
+        filing_start_date="filing start date, YYYY-MM-DD",
+        filing_end_date="filing end date, YYYY-MM-DD",
+        filing_days="filings published in the last N days",
         asset_type="House asset type code, e.g. ST, GS, OI, CS, OT",
         ticker="stock ticker for ST rows, e.g. AMZN",
         limit="maximum rows to return; uses stock-sum default if omitted",
@@ -935,6 +946,9 @@ class StockSumReport(commands.Cog):
         start_date: str = "",
         end_date: str = "",
         days: int | None = None,
+        filing_start_date: str = "",
+        filing_end_date: str = "",
+        filing_days: int | None = None,
         asset_type: str = "",
         ticker: str = "",
         limit: int | None = None,
@@ -952,10 +966,28 @@ class StockSumReport(commands.Cog):
         if error:
             await _send_validation_error(interaction, error)
             return
+        filing_start_filter, filing_end_filter, error = _validate_date_range(
+            filing_start_date,
+            filing_end_date,
+            start_label="filing_start_date",
+            end_label="filing_end_date",
+        )
+        if error:
+            await _send_validation_error(interaction, error)
+            return
         asset_type_filter = asset_type.strip().upper() or None
         ticker_filter = ticker.strip().upper() or None
         if error := _validate_positive_int(days, label="days", maximum=MAX_DAYS_FILTER):
             await _send_validation_error(interaction, error)
+            return
+        if error := _validate_positive_int(filing_days, label="filing_days", maximum=MAX_DAYS_FILTER):
+            await _send_validation_error(interaction, error)
+            return
+        if days is not None and (start_filter or end_filter):
+            await _send_validation_error(interaction, "Use either days or transaction start/end dates, not both.")
+            return
+        if filing_days is not None and (filing_start_filter or filing_end_filter):
+            await _send_validation_error(interaction, "Use either filing_days or filing start/end dates, not both.")
             return
         if error := _validate_positive_int(limit, label="limit"):
             await _send_validation_error(interaction, error)
@@ -966,10 +998,22 @@ class StockSumReport(commands.Cog):
         if error := _validate_ticker(ticker_filter):
             await _send_validation_error(interaction, error)
             return
-        if not any((name_filter, start_filter, end_filter, days, asset_type_filter, ticker_filter)):
+        if not any(
+            (
+                name_filter,
+                start_filter,
+                end_filter,
+                days,
+                filing_start_filter,
+                filing_end_filter,
+                filing_days,
+                asset_type_filter,
+                ticker_filter,
+            )
+        ):
             await _send_validation_error(
                 interaction,
-                "ptr_search requires at least one filter: name, start_date/end_date, days, asset_type, or ticker.",
+                "ptr_search requires at least one filter: name, transaction dates, filing dates, asset_type, or ticker.",
             )
             return
 
@@ -984,6 +1028,9 @@ class StockSumReport(commands.Cog):
                 start_date=start_filter,
                 end_date=end_filter,
                 days=days,
+                filing_start_date=filing_start_filter,
+                filing_end_date=filing_end_filter,
+                filing_days=filing_days,
                 asset_type=asset_type_filter,
                 ticker=ticker_filter,
                 limit=limit,
@@ -1605,7 +1652,7 @@ class StockSumReport(commands.Cog):
         sections.append(
             await _daily_section(
                 "PTR Search",
-                lambda: client.run_trading_report(output_format="discord", days=1),
+                lambda: client.run_trading_report(output_format="discord", filing_days=1),
             )
         )
         return sections
@@ -1975,11 +2022,11 @@ def _format_help_message() -> str:
         "**Stock-Sum Commands**",
         "",
         "`/recent_posts` - Social media market report from configured X and Reddit sources.",
-        "`/ptr_search` - Search official House PTR trading disclosures. Provide at least one filter such as name, ticker, asset_type, days, or dates.",
+        "`/ptr_search` - Search official House PTR trading disclosures. Provide at least one filter such as name, ticker, asset_type, transaction dates, or filing dates.",
         "`/13f_search` - Search SEC 13F holdings. Provide at least one filter such as manager, issuer, CIK, security ID, dates, min_value, or min_shares.",
         "`/trendings` - Trending stocks and sectors from Adanos.",
         "`/plot` - Generate a sentiment or disclosure statistic chart. Provide mode plus ticker, fuzzy_search, name, asset_type, days, or dates.",
-        "`/daily time:HH:MM` - DM a daily UTC report with trendings, recent posts, and last-24-hour PTR search; jobs start 30 minutes early.",
+        "`/daily time:HH:MM` - DM a daily UTC report with trendings, recent posts, and newly filed PTR disclosures; jobs start 30 minutes early.",
         "`/cancel_daily` - Cancel your daily stock-sum DM report.",
         "`/settings list` - List configured X users and subreddits.",
         "`/settings add-x` - Owner only. Add an X user source, e.g. `aleabitoreddit` or `@aleabitoreddit`.",

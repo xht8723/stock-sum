@@ -49,6 +49,9 @@ class TradingReportJobOptions:
     start_date: str | None = None
     end_date: str | None = None
     days: int | None = None
+    filing_start_date: str | None = None
+    filing_end_date: str | None = None
+    filing_days: int | None = None
     asset_type: str | None = None
     ticker: str | None = None
     limit: int = 100

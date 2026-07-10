@@ -47,10 +47,11 @@ Its `detail` option defaults to `minimum`, which shows only high-importance
 posts. Use `medium` for high plus medium, or `full` for all social posts.
 `/ptr_search` generates official House PTR trading disclosure reports from
 SQLite without LLM analysis; it requires at least one filter such as `name`,
-`days`, a transaction-date range, `asset_type`, or `ticker`. Asset type filters
-use House codes such as `ST`, `GS`, `OI`, `CS`, and `OT`; ticker filters apply
-to `ST` stock rows. If `limit` is omitted, stock-sum applies its server-side
-default.
+transaction dates (`days`, `start_date`, `end_date`), filing dates
+(`filing_days`, `filing_start_date`, `filing_end_date`), `asset_type`, or
+`ticker`. Asset type filters use House codes such as `ST`, `GS`, `OI`, `CS`,
+and `OT`; ticker filters apply to `ST` stock rows. If `limit` is omitted,
+stock-sum applies its server-side default.
 `/13f_search` generates official SEC Form 13F holdings reports from the latest
 quarterly SEC dataset in SQLite without LLM analysis. It requires at least one
 filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
@@ -74,11 +75,11 @@ message chunks.
 Plot output is always a PNG file attachment.
 `/daily` stores a per-user UTC delivery time in `HH:MM` format and sends one
 daily DM containing `/trendings`, `/recent_posts` default output, and
-`/ptr_search days:1` output. Report jobs start 30 minutes before the configured
-UTC time; if the configured time is already inside that 30-minute window, the
-next scheduler check starts the jobs immediately. The cog checks schedules
-locally; stock-sum does not run outbound delivery. `/cancel_daily` disables the
-caller's subscription.
+`/ptr_search filing_days:1` output for newly filed PTR disclosures. Report jobs
+start 30 minutes before the configured UTC time; if the configured time is
+already inside that 30-minute window, the next scheduler check starts the jobs
+immediately. The cog checks schedules locally; stock-sum does not run outbound
+delivery. `/cancel_daily` disables the caller's subscription.
 
 Slash commands validate common input mistakes before calling stock-sum:
 malformed dates, invalid source names, invalid asset/ticker identifiers, and

@@ -156,9 +156,12 @@ class StorageRepository(Protocol):
         name_contains: str | None = None,
         transaction_start: datetime | None = None,
         transaction_end: datetime | None = None,
+        filing_start: datetime | None = None,
+        filing_end: datetime | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
+        order_by_filing_date: bool = False,
     ) -> list[StoredHousePtrTradeRow]:
         """Read House PTR trade rows for deterministic report rendering."""
 
