@@ -146,6 +146,21 @@ CREATE TABLE IF NOT EXISTS raw_adanos_trending_responses (
 CREATE INDEX IF NOT EXISTS idx_adanos_trending_responses_job
 ON raw_adanos_trending_responses (job_id, platform, category);
 
+CREATE TABLE IF NOT EXISTS adanos_response_cache_entries (
+    cache_key TEXT PRIMARY KEY,
+    source_job_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    category TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    request_args_json TEXT NOT NULL,
+    raw_response_text TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_adanos_response_cache_fetched_at
+ON adanos_response_cache_entries (fetched_at);
+
 CREATE TABLE IF NOT EXISTS raw_adanos_trending_stocks (
     job_id TEXT NOT NULL,
     platform TEXT NOT NULL,

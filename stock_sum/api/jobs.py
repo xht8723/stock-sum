@@ -16,6 +16,13 @@ import sys
 import time as monotonic_time
 
 from stock_sum.config.models import AppConfig
+from stock_sum.collectors.api.adanos import (
+    AdanosClient,
+    AdanosEndpointRequest,
+    AdanosEndpointResult,
+    adanos_response_cache_key,
+    build_adanos_trending_requests,
+)
 from stock_sum.collectors.api.sec_13f import SEC_13F_COLLECTOR_ID
 from stock_sum.collectors.factory import social_collector_ids
 from stock_sum.api.job_models import (
@@ -92,6 +99,8 @@ class HttpJobManager:
         self._jobs: dict[str, HttpJobRecord] = {}
         self._inflight_reports: dict[str, _InFlightReport] = {}
         self._inflight_lock = asyncio.Lock()
+        self._inflight_adanos_requests: dict[str, _InFlightReport] = {}
+        self._inflight_adanos_lock = asyncio.Lock()
         self._repository_factory = repository_factory or self._default_repository_factory
         self._pipeline_factory = pipeline_factory or self._default_pipeline_factory
         self._llm_client_factory = llm_client_factory or self._default_llm_client_factory
@@ -691,11 +700,12 @@ class HttpJobManager:
     async def _run_trendings_report_job_in_process(self, job_id: str, options: TrendingsReportJobOptions) -> None:
         """Fetch, persist, and render Adanos trendings."""
 
-        from stock_sum.collectors.api.adanos import AdanosClient
         from stock_sum.core.models import PipelineSectionWarning
 
         is_inflight_leader = False
         cache_key: str | None = None
+        is_adanos_inflight_leader = False
+        adanos_inflight_key: str | None = None
         try:
             _validate_trendings_filters(options)
             from_date, to_date = _trendings_date_window(options)
@@ -712,12 +722,141 @@ class HttpJobManager:
                 await self._wait_for_coalesced_report(job_id, inflight_report, options)
                 return
 
-            self._mark_running(job_id, phase="querying_adanos")
+            adanos_inflight_key = self._adanos_response_batch_key(options)
+            while not is_adanos_inflight_leader:
+                is_adanos_inflight_leader, adanos_inflight = await self._join_or_register_inflight_adanos_request(
+                    job_id,
+                    adanos_inflight_key,
+                )
+                if not is_adanos_inflight_leader:
+                    await self._wait_for_inflight_adanos_request(job_id, adanos_inflight)
+
+            self._mark_running(job_id, phase="adanos_response_cache_lookup")
             repository = self._repository_factory()
-            result = await AdanosClient(self.config.providers.adanos).fetch_trendings(
-                from_date=from_date,
-                to_date=to_date,
+            provider_config = self.config.providers.adanos
+            endpoint_requests = build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+            cache_keys_by_endpoint = {
+                (request.platform, request.category): adanos_response_cache_key(provider_config, request)
+                for request in endpoint_requests
+            }
+            requests_by_cache_key = {
+                cache_keys_by_endpoint[(request.platform, request.category)]: request
+                for request in endpoint_requests
+            }
+            cache_lookup_at = datetime.now(timezone.utc)
+            fresh_after = cache_lookup_at - timedelta(seconds=provider_config.response_cache_ttl_seconds)
+            cached_entries = await repository.read_adanos_response_cache_entries(
+                cache_keys=list(requests_by_cache_key),
+                fresh_after=fresh_after.isoformat(),
             )
+
+            cached_responses: dict[tuple[str, str], tuple[AdanosEndpointResult, str, int]] = {}
+            corrupt_cache_keys: list[str] = []
+            cache_warning_messages: list[str] = []
+            for entry in cached_entries:
+                request = requests_by_cache_key.get(entry.cache_key)
+                if request is None:
+                    continue
+                try:
+                    response = _adanos_cached_endpoint_result(entry, request)
+                except ValueError as exc:
+                    corrupt_cache_keys.append(entry.cache_key)
+                    cache_warning_messages.append(
+                        f"Ignored corrupt Adanos response cache entry for {request.platform} {request.category}: {exc}"
+                    )
+                    continue
+                fetched_at = response.fetched_at
+                age_seconds = max(0, int((cache_lookup_at - fetched_at).total_seconds()))
+                cached_responses[(request.platform, request.category)] = (
+                    response,
+                    entry.source_job_id,
+                    age_seconds,
+                )
+            if corrupt_cache_keys:
+                await repository.delete_adanos_response_cache_entries(cache_keys=corrupt_cache_keys)
+
+            missing_requests = [
+                request
+                for request in endpoint_requests
+                if (request.platform, request.category) not in cached_responses
+            ]
+            live_responses: list[AdanosEndpointResult] = []
+            live_warning_messages: list[str] = []
+            fetch_skipped = False
+            if missing_requests:
+                self._mark_running(job_id, phase="querying_adanos")
+                live_result = await AdanosClient(provider_config).fetch_trendings(
+                    from_date=from_date,
+                    to_date=to_date,
+                    requests=missing_requests,
+                )
+                live_responses = live_result.responses
+                live_warning_messages.extend(live_result.warnings)
+                fetch_skipped = live_result.skipped
+                if live_result.skipped:
+                    live_warning_messages.append(
+                        f"ADANOS_API_KEY is not configured; {len(missing_requests)} uncached endpoint(s) are unavailable."
+                    )
+                if live_responses:
+                    await repository.save_adanos_trendings(
+                        job_id=job_id,
+                        from_date=from_date.isoformat(),
+                        to_date=to_date.isoformat(),
+                        responses=live_responses,
+                        cache_keys_by_endpoint=cache_keys_by_endpoint,
+                    )
+
+            live_responses_by_endpoint = {
+                (response.platform, response.category): response
+                for response in live_responses
+            }
+            successful_responses: dict[tuple[str, str], AdanosEndpointResult] = {}
+            source_jobs_by_endpoint: dict[tuple[str, str], str] = {}
+            response_cache_endpoints: list[dict[str, Any]] = []
+            for request in endpoint_requests:
+                endpoint_id = (request.platform, request.category)
+                cached = cached_responses.get(endpoint_id)
+                live = live_responses_by_endpoint.get(endpoint_id)
+                if cached is not None:
+                    response, source_job_id, age_seconds = cached
+                    successful_responses[endpoint_id] = response
+                    source_jobs_by_endpoint[endpoint_id] = source_job_id
+                    response_cache_endpoints.append(
+                        {
+                            "platform": request.platform,
+                            "category": request.category,
+                            "endpoint": request.endpoint,
+                            "cache_hit": True,
+                            "status": "hit",
+                            "source_job_id": source_job_id,
+                            "fetched_at": response.fetched_at.isoformat(),
+                            "age_seconds": age_seconds,
+                        }
+                    )
+                    continue
+                if live is not None and live.status == "succeeded":
+                    successful_responses[endpoint_id] = live
+                    source_jobs_by_endpoint[endpoint_id] = job_id
+                response_cache_endpoints.append(
+                    {
+                        "platform": request.platform,
+                        "category": request.category,
+                        "endpoint": request.endpoint,
+                        "cache_hit": False,
+                        "status": (
+                            "fetched"
+                            if live is not None and live.status == "succeeded"
+                            else "failed"
+                            if live is not None
+                            else "unavailable"
+                        ),
+                        "source_job_id": job_id if live is not None and live.status == "succeeded" else None,
+                        "fetched_at": live.fetched_at.isoformat() if live is not None else None,
+                        "age_seconds": 0 if live is not None else None,
+                    }
+                )
+
+            warning_messages = [*cache_warning_messages, *live_warning_messages]
             warnings = [
                 PipelineSectionWarning(
                     section="trendings",
@@ -725,28 +864,33 @@ class HttpJobManager:
                     phase="querying",
                     message=message,
                 )
-                for message in result.warnings
+                for message in warning_messages
             ]
-            if result.responses:
-                await repository.save_adanos_trendings(
-                    job_id=job_id,
-                    from_date=from_date.isoformat(),
-                    to_date=to_date.isoformat(),
-                    responses=result.responses,
-                )
 
             self._update(job_id, phase="rendering")
-            stocks = await repository.read_adanos_trending_stocks(job_id=job_id)
-            sectors = await repository.read_adanos_trending_sectors(job_id=job_id)
+            stock_sources = [
+                (request.platform, source_jobs_by_endpoint[(request.platform, request.category)])
+                for request in endpoint_requests
+                if request.category == "stocks" and (request.platform, request.category) in successful_responses
+            ]
+            sector_sources = [
+                (request.platform, source_jobs_by_endpoint[(request.platform, request.category)])
+                for request in endpoint_requests
+                if request.category == "sectors" and (request.platform, request.category) in successful_responses
+            ]
+            stocks = await repository.read_adanos_trending_stocks_for_sources(sources=stock_sources)
+            sectors = await repository.read_adanos_trending_sectors_for_sources(sources=sector_sources)
             comparison_cutoff = datetime.now(timezone.utc) - timedelta(days=options.comparison_days)
             has_trending_history = await repository.has_prior_adanos_trending_stock_history(
-                exclude_job_id=job_id,
+                exclude_job_id=None,
                 since_fetched_at=comparison_cutoff.isoformat(),
+                exclude_sources=stock_sources,
             )
             prior_stocks = await repository.read_latest_prior_adanos_trending_stocks(
-                exclude_job_id=job_id,
+                exclude_job_id=None,
                 tickers=[row.ticker for row in stocks],
                 since_fetched_at=comparison_cutoff.isoformat(),
+                exclude_sources=stock_sources,
             )
             changes = _adanos_trending_change_dicts(
                 stocks,
@@ -780,8 +924,15 @@ class HttpJobManager:
                     "sentiment_change_pct": options.sentiment_change_pct,
                     "minimum_mentions": options.minimum_mentions,
                 },
-                "skipped": result.skipped,
-                "skip_reason": "ADANOS_API_KEY is not configured." if result.skipped else None,
+                "response_cache": {
+                    "ttl_seconds": provider_config.response_cache_ttl_seconds,
+                    "hit_count": len(cached_responses),
+                    "miss_count": len(endpoint_requests) - len(cached_responses),
+                    "fetched_count": len(live_responses),
+                    "endpoints": response_cache_endpoints,
+                },
+                "skipped": not successful_responses and fetch_skipped,
+                "skip_reason": "ADANOS_API_KEY is not configured." if not successful_responses and fetch_skipped else None,
                 "pipeline_warnings": warning_data,
                 "failed_sections": warning_data,
             }
@@ -800,6 +951,8 @@ class HttpJobManager:
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
+            if is_adanos_inflight_leader and adanos_inflight_key is not None:
+                await self._release_inflight_adanos_request(adanos_inflight_key, job_id)
             if is_inflight_leader and cache_key is not None:
                 await self._release_inflight_report(cache_key, job_id)
             await self._run_retention(job_id)
@@ -1112,6 +1265,8 @@ class HttpJobManager:
     ) -> None:
         is_inflight_leader = False
         cache_key: str | None = None
+        is_adanos_inflight_leader = False
+        adanos_inflight_key: str | None = None
         try:
             self._mark_running(job_id, phase="cache_lookup")
             job = self._require_job(job_id)
@@ -1132,10 +1287,24 @@ class HttpJobManager:
                 await self._wait_for_coalesced_report_worker(job_id, inflight_report, options)
                 return
 
+            if kind == "trendings_report":
+                if not isinstance(options, TrendingsReportJobOptions):
+                    raise TypeError("Trendings worker received incompatible options.")
+                adanos_inflight_key = self._adanos_response_batch_key(options)
+                while not is_adanos_inflight_leader:
+                    is_adanos_inflight_leader, adanos_inflight = await self._join_or_register_inflight_adanos_request(
+                        job_id,
+                        adanos_inflight_key,
+                    )
+                    if not is_adanos_inflight_leader:
+                        await self._wait_for_inflight_adanos_request(job_id, adanos_inflight)
+
             await self._run_worker_operation(job_id, worker_operation, {"options": asdict(options)})
         except Exception as exc:
             self._mark_failed(job_id, str(exc))
         finally:
+            if is_adanos_inflight_leader and adanos_inflight_key is not None:
+                await self._release_inflight_adanos_request(adanos_inflight_key, job_id)
             if is_inflight_leader and cache_key is not None:
                 await self._release_inflight_report(cache_key, job_id)
             self._refresh_memory_status(job_id)
@@ -1384,6 +1553,42 @@ class HttpJobManager:
             self._inflight_reports[cache_key] = report
             return True, report
 
+    async def _join_or_register_inflight_adanos_request(
+        self,
+        job_id: str,
+        cache_key: str,
+    ) -> tuple[bool, _InFlightReport | None]:
+        async with self._inflight_adanos_lock:
+            existing = self._inflight_adanos_requests.get(cache_key)
+            if existing is not None and existing.leader_job_id != job_id:
+                return False, existing
+            report = _InFlightReport(
+                cache_key=cache_key,
+                leader_job_id=job_id,
+                started_at=datetime.now(timezone.utc),
+                done=asyncio.Event(),
+            )
+            self._inflight_adanos_requests[cache_key] = report
+            return True, report
+
+    async def _wait_for_inflight_adanos_request(
+        self,
+        job_id: str,
+        report: _InFlightReport | None,
+    ) -> None:
+        if report is None:
+            raise RuntimeError("No in-flight Adanos request was available to wait for.")
+        self._update(job_id, phase="waiting_for_adanos_response")
+        await report.done.wait()
+
+    async def _release_inflight_adanos_request(self, cache_key: str, job_id: str) -> None:
+        async with self._inflight_adanos_lock:
+            report = self._inflight_adanos_requests.get(cache_key)
+            if report is None or report.leader_job_id != job_id:
+                return
+            report.done.set()
+            del self._inflight_adanos_requests[cache_key]
+
     async def _release_inflight_report(self, cache_key: str, job_id: str) -> None:
         async with self._inflight_lock:
             report = self._inflight_reports.get(cache_key)
@@ -1602,6 +1807,20 @@ class HttpJobManager:
             )
         raise RuntimeError(f"Job kind is not cacheable: {kind}")
 
+    def _adanos_response_batch_key(self, options: TrendingsReportJobOptions) -> str:
+        from_date, to_date = _trendings_date_window(options)
+        requests = build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+        return self._structured_cache_key(
+            {
+                "version": 1,
+                "kind": "adanos_response_batch",
+                "endpoint_cache_keys": [
+                    adanos_response_cache_key(self.config.providers.adanos, request)
+                    for request in requests
+                ],
+            }
+        )
+
     def _bypass_completed_cache(
         self,
         kind: JobKind,
@@ -1708,3 +1927,32 @@ class HttpJobManager:
     def _write_json(path: Path, data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _adanos_cached_endpoint_result(entry: Any, request: AdanosEndpointRequest) -> AdanosEndpointResult:
+    if entry.platform != request.platform or entry.category != request.category:
+        raise ValueError("endpoint identity does not match the request")
+    if entry.endpoint != request.endpoint or entry.request_args != request.request_args:
+        raise ValueError("endpoint arguments do not match the request")
+    try:
+        payload = json.loads(entry.raw_response_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("raw response is not valid JSON") from exc
+    if not isinstance(payload, list):
+        raise ValueError("raw response is not a list")
+    rows = [item for item in payload if isinstance(item, dict)]
+    if len(rows) != entry.row_count:
+        raise ValueError("cached row count does not match the response")
+    fetched_at = _parse_utc_datetime(entry.fetched_at)
+    if fetched_at is None:
+        raise ValueError("fetched_at is invalid")
+    return AdanosEndpointResult(
+        platform=request.platform,
+        category=request.category,
+        endpoint=request.endpoint,
+        request_args=dict(request.request_args),
+        status="succeeded",
+        raw_response_text=entry.raw_response_text,
+        rows=rows,
+        fetched_at=fetched_at,
+    )

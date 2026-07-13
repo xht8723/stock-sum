@@ -70,6 +70,7 @@ api_key_env = "ADANOS_API_KEY"
 base_url = "https://api.adanos.org"
 timeout_seconds = 30
 max_concurrent_requests = 4
+response_cache_ttl_seconds = 43200
 
 [llm]
 provider = "deepseek"

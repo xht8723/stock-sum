@@ -21,6 +21,7 @@ from stock_sum.collectors.api.sec_13f import normalize_sec_name, sec_filing_url
 from stock_sum.core.models import ProviderApiResponse, RawItem, RawItemSaveResult
 from stock_sum.storage.mappers import MappedRawItem, map_raw_item
 from stock_sum.storage.models import (
+    StoredAdanosResponseCacheEntry,
     StoredAdanosTrendingSector,
     StoredAdanosTrendingStock,
     StoredCollectionRun,
@@ -199,6 +200,7 @@ class SQLiteStorageRepository:
         from_date: str,
         to_date: str,
         responses: list,
+        cache_keys_by_endpoint: dict[tuple[str, str], str] | None = None,
     ) -> None:
         """Persist raw and normalized Adanos trendings responses."""
 
@@ -211,6 +213,14 @@ class SQLiteStorageRepository:
                 category = str(getattr(response, "category"))
                 fetched_at = getattr(response, "fetched_at").isoformat()
                 rows = list(getattr(response, "rows", []) or [])
+                request_args_json = json.dumps(
+                    getattr(response, "request_args"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+                raw_response_text = str(getattr(response, "raw_response_text"))
+                status = str(getattr(response, "status"))
                 await db.execute(
                     """
                     INSERT INTO raw_adanos_trending_responses (
@@ -225,15 +235,46 @@ class SQLiteStorageRepository:
                         platform,
                         category,
                         str(getattr(response, "endpoint")),
-                        json.dumps(getattr(response, "request_args"), ensure_ascii=False, sort_keys=True, default=str),
-                        str(getattr(response, "raw_response_text")),
+                        request_args_json,
+                        raw_response_text,
                         getattr(response, "error", None),
-                        str(getattr(response, "status")),
+                        status,
                         len(rows),
                         fetched_at,
                     ),
                 )
-                if str(getattr(response, "status")) != "succeeded":
+                cache_key = (cache_keys_by_endpoint or {}).get((platform, category))
+                if status == "succeeded" and cache_key:
+                    await db.execute(
+                        """
+                        INSERT INTO adanos_response_cache_entries (
+                            cache_key, source_job_id, platform, category, endpoint,
+                            request_args_json, raw_response_text, row_count, fetched_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(cache_key) DO UPDATE SET
+                            source_job_id = excluded.source_job_id,
+                            platform = excluded.platform,
+                            category = excluded.category,
+                            endpoint = excluded.endpoint,
+                            request_args_json = excluded.request_args_json,
+                            raw_response_text = excluded.raw_response_text,
+                            row_count = excluded.row_count,
+                            fetched_at = excluded.fetched_at
+                        WHERE excluded.fetched_at >= adanos_response_cache_entries.fetched_at
+                        """,
+                        (
+                            cache_key,
+                            job_id,
+                            platform,
+                            category,
+                            str(getattr(response, "endpoint")),
+                            request_args_json,
+                            raw_response_text,
+                            len(rows),
+                            fetched_at,
+                        ),
+                    )
+                if status != "succeeded":
                     continue
                 if category == "stocks":
                     for fallback_rank, row in enumerate(rows, start=1):
@@ -306,6 +347,67 @@ class SQLiteStorageRepository:
                         )
             await db.commit()
 
+    async def read_adanos_response_cache_entries(
+        self,
+        *,
+        cache_keys: list[str],
+        fresh_after: str,
+    ) -> list[StoredAdanosResponseCacheEntry]:
+        """Read fresh Adanos endpoint responses and prune expired entries."""
+
+        await self.initialize()
+        normalized_keys = sorted({str(key).strip() for key in cache_keys if str(key).strip()})
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            await db.execute(
+                "DELETE FROM adanos_response_cache_entries WHERE fetched_at <= ?",
+                (fresh_after,),
+            )
+            if not normalized_keys:
+                await db.commit()
+                return []
+            placeholders = ", ".join("?" for _ in normalized_keys)
+            rows = await db.execute_fetchall(
+                f"""
+                SELECT cache_key, source_job_id, platform, category, endpoint,
+                       request_args_json, raw_response_text, row_count, fetched_at
+                FROM adanos_response_cache_entries
+                WHERE cache_key IN ({placeholders})
+                  AND fetched_at > ?
+                ORDER BY platform ASC, category ASC
+                """,
+                [*normalized_keys, fresh_after],
+            )
+            await db.commit()
+        return [
+            StoredAdanosResponseCacheEntry(
+                cache_key=row[0],
+                source_job_id=row[1],
+                platform=row[2],
+                category=row[3],
+                endpoint=row[4],
+                request_args=_json_obj(row[5]),
+                raw_response_text=row[6],
+                row_count=row[7],
+                fetched_at=row[8],
+            )
+            for row in rows
+        ]
+
+    async def delete_adanos_response_cache_entries(self, *, cache_keys: list[str]) -> None:
+        """Delete unusable Adanos endpoint cache entries."""
+
+        await self.initialize()
+        normalized_keys = sorted({str(key).strip() for key in cache_keys if str(key).strip()})
+        if not normalized_keys:
+            return
+        placeholders = ", ".join("?" for _ in normalized_keys)
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            await db.execute(
+                f"DELETE FROM adanos_response_cache_entries WHERE cache_key IN ({placeholders})",
+                normalized_keys,
+            )
+            await db.commit()
+
     async def read_adanos_trending_stocks(
         self,
         *,
@@ -351,12 +453,37 @@ class SQLiteStorageRepository:
             for row in rows
         ]
 
+    async def read_adanos_trending_stocks_for_sources(
+        self,
+        *,
+        sources: list[tuple[str, str]],
+    ) -> list[StoredAdanosTrendingStock]:
+        """Read stock rows from exact platform/source-job snapshots."""
+
+        await self.initialize()
+        normalized_sources = _normalized_adanos_sources(sources)
+        if not normalized_sources:
+            return []
+        predicate, params = _adanos_sources_predicate(normalized_sources)
+        sql = f"""
+            SELECT job_id, platform, rank, window_from, window_to, ticker,
+                   company_name, trend, mentions, bullish_pct, bearish_pct,
+                   sentiment_score, buzz_score, trend_history_json, raw_json, fetched_at
+            FROM raw_adanos_trending_stocks
+            WHERE {predicate}
+            ORDER BY platform ASC, rank ASC
+        """
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            rows = await db.execute_fetchall(sql, params)
+        return _stored_adanos_stock_rows(rows)
+
     async def read_latest_prior_adanos_trending_stocks(
         self,
         *,
-        exclude_job_id: str,
+        exclude_job_id: str | None,
         tickers: list[str],
         since_fetched_at: str,
+        exclude_sources: list[tuple[str, str]] | None = None,
     ) -> list[StoredAdanosTrendingStock]:
         """Read latest historical Adanos stock rows for each platform/ticker."""
 
@@ -365,13 +492,22 @@ class SQLiteStorageRepository:
         if not normalized_tickers:
             return []
         placeholders = ", ".join("?" for _ in normalized_tickers)
+        cte_exclusions, cte_exclusion_params = _adanos_history_exclusions(
+            exclude_job_id=exclude_job_id,
+            exclude_sources=exclude_sources,
+        )
+        outer_exclusions, outer_exclusion_params = _adanos_history_exclusions(
+            alias="s",
+            exclude_job_id=exclude_job_id,
+            exclude_sources=exclude_sources,
+        )
+        cte_conditions = [*cte_exclusions, "fetched_at >= ?", f"ticker IN ({placeholders})"]
+        outer_conditions = outer_exclusions or ["1 = 1"]
         sql = f"""
             WITH latest AS (
                 SELECT platform, ticker, MAX(fetched_at) AS latest_fetched_at
                 FROM raw_adanos_trending_stocks
-                WHERE job_id != ?
-                  AND fetched_at >= ?
-                  AND ticker IN ({placeholders})
+                WHERE {' AND '.join(cte_conditions)}
                 GROUP BY platform, ticker
             )
             SELECT s.job_id, s.platform, s.rank, s.window_from, s.window_to, s.ticker,
@@ -379,56 +515,46 @@ class SQLiteStorageRepository:
                    s.sentiment_score, s.buzz_score, s.trend_history_json, s.raw_json, s.fetched_at
             FROM raw_adanos_trending_stocks s
             JOIN latest l
-              ON s.platform = l.platform
+             ON s.platform = l.platform
              AND s.ticker = l.ticker
              AND s.fetched_at = l.latest_fetched_at
-            WHERE s.job_id != ?
+            WHERE {' AND '.join(outer_conditions)}
             ORDER BY s.platform ASC, s.ticker ASC, s.fetched_at DESC
         """
-        params: list[Any] = [exclude_job_id, since_fetched_at, *normalized_tickers, exclude_job_id]
+        params: list[Any] = [
+            *cte_exclusion_params,
+            since_fetched_at,
+            *normalized_tickers,
+            *outer_exclusion_params,
+        ]
         async with aiosqlite.connect(self.sqlite_path) as db:
             rows = await db.execute_fetchall(sql, params)
-        return [
-            StoredAdanosTrendingStock(
-                job_id=row[0],
-                platform=row[1],
-                rank=row[2],
-                window_from=row[3],
-                window_to=row[4],
-                ticker=row[5],
-                company_name=row[6],
-                trend=row[7],
-                mentions=row[8],
-                bullish_pct=row[9],
-                bearish_pct=row[10],
-                sentiment_score=row[11],
-                buzz_score=row[12],
-                trend_history=_json_list(row[13]),
-                raw_metadata=_json_obj(row[14]),
-                fetched_at=row[15],
-            )
-            for row in rows
-        ]
+        return _stored_adanos_stock_rows(rows)
 
     async def has_prior_adanos_trending_stock_history(
         self,
         *,
-        exclude_job_id: str,
+        exclude_job_id: str | None,
         since_fetched_at: str,
+        exclude_sources: list[tuple[str, str]] | None = None,
     ) -> bool:
         """Return whether any prior Adanos stock history exists in the comparison window."""
 
         await self.initialize()
+        exclusions, exclusion_params = _adanos_history_exclusions(
+            exclude_job_id=exclude_job_id,
+            exclude_sources=exclude_sources,
+        )
+        conditions = [*exclusions, "fetched_at >= ?"]
         async with aiosqlite.connect(self.sqlite_path) as db:
             cursor = await db.execute(
-                """
+                f"""
                 SELECT 1
                 FROM raw_adanos_trending_stocks
-                WHERE job_id != ?
-                  AND fetched_at >= ?
+                WHERE {' AND '.join(conditions)}
                 LIMIT 1
                 """,
-                (exclude_job_id, since_fetched_at),
+                [*exclusion_params, since_fetched_at],
             )
             row = await cursor.fetchone()
         return row is not None
@@ -477,6 +603,30 @@ class SQLiteStorageRepository:
             )
             for row in rows
         ]
+
+    async def read_adanos_trending_sectors_for_sources(
+        self,
+        *,
+        sources: list[tuple[str, str]],
+    ) -> list[StoredAdanosTrendingSector]:
+        """Read sector rows from exact platform/source-job snapshots."""
+
+        await self.initialize()
+        normalized_sources = _normalized_adanos_sources(sources)
+        if not normalized_sources:
+            return []
+        predicate, params = _adanos_sources_predicate(normalized_sources)
+        sql = f"""
+            SELECT job_id, platform, rank, window_from, window_to, sector,
+                   top_tickers_json, trend, mentions, bullish_pct, bearish_pct,
+                   sentiment_score, buzz_score, trend_history_json, raw_json, fetched_at
+            FROM raw_adanos_trending_sectors
+            WHERE {predicate}
+            ORDER BY platform ASC, rank ASC
+        """
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            rows = await db.execute_fetchall(sql, params)
+        return _stored_adanos_sector_rows(rows)
 
     async def start_llm_analysis_run(
         self,
@@ -1364,6 +1514,94 @@ class SQLiteStorageRepository:
         async with aiosqlite.connect(self.sqlite_path) as db:
             await _upsert_downloaded_media(db, media)
             await db.commit()
+
+def _normalized_adanos_sources(sources: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
+    return sorted(
+        {
+            (str(platform).strip(), str(job_id).strip())
+            for platform, job_id in (sources or [])
+            if str(platform).strip() and str(job_id).strip()
+        }
+    )
+
+
+def _adanos_sources_predicate(sources: list[tuple[str, str]], *, alias: str = "") -> tuple[str, list[Any]]:
+    prefix = f"{alias}." if alias else ""
+    clauses: list[str] = []
+    params: list[Any] = []
+    for platform, job_id in sources:
+        clauses.append(f"({prefix}platform = ? AND {prefix}job_id = ?)")
+        params.extend((platform, job_id))
+    return " OR ".join(clauses) or "0 = 1", params
+
+
+def _adanos_history_exclusions(
+    *,
+    exclude_job_id: str | None,
+    exclude_sources: list[tuple[str, str]] | None,
+    alias: str = "",
+) -> tuple[list[str], list[Any]]:
+    prefix = f"{alias}." if alias else ""
+    conditions: list[str] = []
+    params: list[Any] = []
+    if exclude_job_id:
+        conditions.append(f"{prefix}job_id != ?")
+        params.append(exclude_job_id)
+    normalized_sources = _normalized_adanos_sources(exclude_sources)
+    if normalized_sources:
+        predicate, source_params = _adanos_sources_predicate(normalized_sources, alias=alias)
+        conditions.append(f"NOT ({predicate})")
+        params.extend(source_params)
+    return conditions, params
+
+
+def _stored_adanos_stock_rows(rows: list[Any]) -> list[StoredAdanosTrendingStock]:
+    return [
+        StoredAdanosTrendingStock(
+            job_id=row[0],
+            platform=row[1],
+            rank=row[2],
+            window_from=row[3],
+            window_to=row[4],
+            ticker=row[5],
+            company_name=row[6],
+            trend=row[7],
+            mentions=row[8],
+            bullish_pct=row[9],
+            bearish_pct=row[10],
+            sentiment_score=row[11],
+            buzz_score=row[12],
+            trend_history=_json_list(row[13]),
+            raw_metadata=_json_obj(row[14]),
+            fetched_at=row[15],
+        )
+        for row in rows
+    ]
+
+
+def _stored_adanos_sector_rows(rows: list[Any]) -> list[StoredAdanosTrendingSector]:
+    return [
+        StoredAdanosTrendingSector(
+            job_id=row[0],
+            platform=row[1],
+            rank=row[2],
+            window_from=row[3],
+            window_to=row[4],
+            sector=row[5],
+            top_tickers=[str(item) for item in _json_list(row[6])],
+            trend=row[7],
+            mentions=row[8],
+            bullish_pct=row[9],
+            bearish_pct=row[10],
+            sentiment_score=row[11],
+            buzz_score=row[12],
+            trend_history=_json_list(row[13]),
+            raw_metadata=_json_obj(row[14]),
+            fetched_at=row[15],
+        )
+        for row in rows
+    ]
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()

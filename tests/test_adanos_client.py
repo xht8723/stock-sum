@@ -6,7 +6,12 @@ from datetime import date
 
 import httpx
 
-from stock_sum.collectors.api.adanos import ADANOS_FETCH_LIMIT, AdanosClient
+from stock_sum.collectors.api.adanos import (
+    ADANOS_FETCH_LIMIT,
+    AdanosClient,
+    adanos_response_cache_key,
+    build_adanos_trending_requests,
+)
 from stock_sum.config.models import AdanosProviderConfig
 
 
@@ -86,3 +91,35 @@ async def test_adanos_client_partial_failure_returns_warning(monkeypatch) -> Non
     assert len(result.responses) == 4
     assert len([response for response in result.responses if response.status == "succeeded"]) == 2
     assert len(result.warnings) == 2
+
+
+async def test_adanos_client_fetches_only_requested_endpoints(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setenv("ADANOS_API_KEY", "adanos-secret")
+    config = AdanosProviderConfig(api_key_env="ADANOS_API_KEY", base_url="HTTPS://API.ADANOS.ORG/")
+    requests = build_adanos_trending_requests(from_date=date(2026, 7, 1), to_date=date(2026, 7, 6))
+    selected = [requests[1], requests[3]]
+
+    result = await AdanosClient(config, transport=httpx.MockTransport(handler)).fetch_trendings(
+        from_date=date(2026, 7, 1),
+        to_date=date(2026, 7, 6),
+        requests=selected,
+    )
+
+    assert seen == [selected[0].endpoint, selected[1].endpoint]
+    assert [(response.platform, response.category) for response in result.responses] == [
+        ("reddit", "sectors"),
+        ("x", "sectors"),
+    ]
+    assert adanos_response_cache_key(config, requests[0]) == adanos_response_cache_key(
+        config.model_copy(update={"base_url": "https://api.adanos.org"}),
+        requests[0],
+    )
+    assert adanos_response_cache_key(config, requests[0]) != adanos_response_cache_key(config, requests[1])
+    other_window = build_adanos_trending_requests(from_date=date(2026, 7, 2), to_date=date(2026, 7, 7))
+    assert adanos_response_cache_key(config, requests[0]) != adanos_response_cache_key(config, other_window[0])

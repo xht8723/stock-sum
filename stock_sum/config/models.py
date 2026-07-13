@@ -109,6 +109,7 @@ class AdanosProviderConfig(BaseModel):
     base_url: str = "https://api.adanos.org"
     timeout_seconds: int = Field(default=30, ge=1)
     max_concurrent_requests: int = Field(default=4, ge=1)
+    response_cache_ttl_seconds: int = Field(default=43_200, ge=1)
 
 
 class ProvidersConfig(BaseModel):

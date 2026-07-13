@@ -181,6 +181,21 @@ class StoredSec13FHolding:
 
 
 @dataclass(frozen=True)
+class StoredAdanosResponseCacheEntry:
+    """One reusable successful Adanos endpoint response."""
+
+    cache_key: str
+    source_job_id: str
+    platform: str
+    category: str
+    endpoint: str
+    request_args: dict[str, Any]
+    raw_response_text: str
+    row_count: int
+    fetched_at: str
+
+
+@dataclass(frozen=True)
 class StoredAdanosTrendingStock:
     """Stored Adanos trending stock row."""
 

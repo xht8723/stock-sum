@@ -28,7 +28,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
             """
             SELECT name FROM sqlite_master
             WHERE type = 'table'
-              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "collection_runs",
@@ -51,6 +51,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
                 "raw_adanos_trending_responses",
                 "raw_adanos_trending_stocks",
                 "raw_adanos_trending_sectors",
+                "adanos_response_cache_entries",
             ),
         )
         try:
@@ -79,6 +80,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         "raw_adanos_trending_responses",
         "raw_adanos_trending_stocks",
         "raw_adanos_trending_sectors",
+        "adanos_response_cache_entries",
     }
 
     async with aiosqlite.connect(db_path) as db:
@@ -166,6 +168,95 @@ async def test_adanos_trendings_are_persisted_and_read(tmp_path) -> None:
     assert raw_rows == ['[{"sector":"Technology"}]', '[{"ticker":"NVDA"}]']
 
 
+async def test_adanos_response_cache_persists_successes_and_expires_without_sliding(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    fetched_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    response = AdanosEndpointResult(
+        platform="reddit",
+        category="stocks",
+        endpoint="/reddit/stocks/v1/trending",
+        request_args={"from": "2026-07-01", "to": "2026-07-06", "limit": 100},
+        status="succeeded",
+        raw_response_text='[{"ticker":"NVDA"}]',
+        rows=[{"ticker": "NVDA", "rank": 1}],
+        fetched_at=fetched_at,
+    )
+    await repository.save_adanos_trendings(
+        job_id="source-job",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        responses=[response],
+        cache_keys_by_endpoint={("reddit", "stocks"): "request-key"},
+    )
+
+    first = await repository.read_adanos_response_cache_entries(
+        cache_keys=["request-key"],
+        fresh_after=(fetched_at - timedelta(seconds=1)).isoformat(),
+    )
+    second = await repository.read_adanos_response_cache_entries(
+        cache_keys=["request-key"],
+        fresh_after=(fetched_at - timedelta(seconds=1)).isoformat(),
+    )
+
+    assert len(first) == 1
+    assert first[0].source_job_id == "source-job"
+    assert first[0].fetched_at == fetched_at.isoformat()
+    assert second[0].fetched_at == first[0].fetched_at
+
+    expired = await repository.read_adanos_response_cache_entries(
+        cache_keys=["request-key"],
+        fresh_after=fetched_at.isoformat(),
+    )
+    assert expired == []
+    async with aiosqlite.connect(db_path) as db:
+        assert await _count_rows(db, "adanos_response_cache_entries") == 0
+
+
+async def test_adanos_response_cache_keeps_empty_successes_but_not_failures(tmp_path) -> None:
+    repository = SQLiteStorageRepository(tmp_path / "storage.sqlite3")
+    now = datetime.now(timezone.utc)
+    await repository.save_adanos_trendings(
+        job_id="partial-job",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        responses=[
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={"from": "2026-07-01", "to": "2026-07-06", "limit": 100},
+                status="succeeded",
+                raw_response_text="[]",
+                rows=[],
+                fetched_at=now,
+            ),
+            AdanosEndpointResult(
+                platform="x",
+                category="stocks",
+                endpoint="/x/stocks/v1/trending",
+                request_args={"from": "2026-07-01", "to": "2026-07-06", "limit": 100},
+                status="failed",
+                raw_response_text='{"error":"down"}',
+                error="down",
+                fetched_at=now,
+            ),
+        ],
+        cache_keys_by_endpoint={
+            ("reddit", "stocks"): "empty-key",
+            ("x", "stocks"): "failed-key",
+        },
+    )
+
+    entries = await repository.read_adanos_response_cache_entries(
+        cache_keys=["empty-key", "failed-key"],
+        fresh_after=(now - timedelta(minutes=1)).isoformat(),
+    )
+    assert [(entry.cache_key, entry.row_count, entry.raw_response_text) for entry in entries] == [
+        ("empty-key", 0, "[]")
+    ]
+
+
 async def test_adanos_prior_stock_history_query_returns_latest_per_platform_ticker(tmp_path) -> None:
     db_path = tmp_path / "storage.sqlite3"
     repository = SQLiteStorageRepository(db_path)
@@ -241,6 +332,69 @@ async def test_adanos_prior_stock_history_query_returns_latest_per_platform_tick
     assert sorted((row.platform, row.ticker, row.mentions) for row in rows) == [
         ("reddit", "NVDA", 150),
         ("x", "NVDA", 90),
+    ]
+
+
+async def test_adanos_history_excludes_only_displayed_platform_source_pairs(tmp_path) -> None:
+    repository = SQLiteStorageRepository(tmp_path / "storage.sqlite3")
+    older_time = datetime.now(timezone.utc) - timedelta(hours=4)
+    displayed_time = datetime.now(timezone.utc) - timedelta(hours=2)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    await repository.save_adanos_trendings(
+        job_id="older-reddit",
+        from_date="2026-07-01",
+        to_date="2026-07-02",
+        responses=[
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={},
+                status="succeeded",
+                raw_response_text='[{"ticker":"NVDA"}]',
+                rows=[{"ticker": "NVDA", "rank": 1, "mentions": 100}],
+                fetched_at=older_time,
+            )
+        ],
+    )
+    await repository.save_adanos_trendings(
+        job_id="mixed-source",
+        from_date="2026-07-02",
+        to_date="2026-07-03",
+        responses=[
+            AdanosEndpointResult(
+                platform="reddit",
+                category="stocks",
+                endpoint="/reddit/stocks/v1/trending",
+                request_args={},
+                status="succeeded",
+                raw_response_text='[{"ticker":"NVDA"}]',
+                rows=[{"ticker": "NVDA", "rank": 1, "mentions": 200}],
+                fetched_at=displayed_time,
+            ),
+            AdanosEndpointResult(
+                platform="x",
+                category="stocks",
+                endpoint="/x/stocks/v1/trending",
+                request_args={},
+                status="succeeded",
+                raw_response_text='[{"ticker":"NVDA"}]',
+                rows=[{"ticker": "NVDA", "rank": 1, "mentions": 300}],
+                fetched_at=displayed_time,
+            ),
+        ],
+    )
+
+    rows = await repository.read_latest_prior_adanos_trending_stocks(
+        exclude_job_id=None,
+        exclude_sources=[("reddit", "mixed-source")],
+        tickers=["NVDA"],
+        since_fetched_at=cutoff,
+    )
+
+    assert sorted((row.platform, row.job_id, row.mentions) for row in rows) == [
+        ("reddit", "older-reddit", 100),
+        ("x", "mixed-source", 300),
     ]
 
 

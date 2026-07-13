@@ -10,12 +10,18 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from stock_sum.api.jobs import HttpJobManager, SocialReportJobOptions, Sec13FReportJobOptions, StatisticJobOptions, TradingReportJobOptions, TrendingsReportJobOptions
-from stock_sum.collectors.api.adanos import AdanosEndpointResult, AdanosTrendingsResult
+from stock_sum.collectors.api.adanos import (
+    AdanosClient,
+    AdanosEndpointResult,
+    AdanosTrendingsResult,
+    build_adanos_trending_requests,
+)
 from stock_sum.config.loader import load_config
 from stock_sum.config.models import XUserSourceConfig
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
 from stock_sum.retention import RetentionSummary
 from stock_sum.storage.models import (
+    StoredAdanosResponseCacheEntry,
     StoredCollectionRun,
     StoredAdanosTrendingSector,
     StoredAdanosTrendingStock,
@@ -348,7 +354,7 @@ async def test_statistic_job_creates_png_and_summary(tmp_path, monkeypatch) -> N
 
 
 async def test_trendings_job_fetches_persists_and_renders(tmp_path, monkeypatch) -> None:
-    async def fake_fetch(self, *, from_date, to_date):
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
         return AdanosTrendingsResult(
             skipped=False,
             responses=[
@@ -398,7 +404,7 @@ async def test_trendings_job_fetches_persists_and_renders(tmp_path, monkeypatch)
 
 
 async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tmp_path, monkeypatch) -> None:
-    async def fake_fetch(self, *, from_date, to_date):
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
         return AdanosTrendingsResult(
             skipped=False,
             responses=[
@@ -1191,7 +1197,7 @@ async def test_13f_report_uses_recent_cache(tmp_path) -> None:
 async def test_trendings_cache_reuses_summary_with_different_display_limit(tmp_path, monkeypatch) -> None:
     fetch_calls = 0
 
-    async def fake_fetch(self, *, from_date, to_date):
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
         nonlocal fetch_calls
         fetch_calls += 1
         return _adanos_result(from_date, to_date)
@@ -1219,6 +1225,258 @@ async def test_trendings_cache_reuses_summary_with_different_display_limit(tmp_p
     assert Path(second_status.artifact_path or "").read_text(encoding="utf-8") == "Trending Market Sentiment:discord:trendings:5"
     assert fetch_calls == 1
     assert repository.adanos_saved_job_ids == [first_job.job_id]
+
+
+async def test_trendings_response_cache_reuses_all_endpoints_for_report_option_changes(tmp_path, monkeypatch) -> None:
+    requested_batches: list[list[tuple[str, str]]] = []
+
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
+        selected = requests or build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+        requested_batches.append([(request.platform, request.category) for request in selected])
+        return _adanos_result_for_requests(from_date, to_date, selected)
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    config = _test_config(tmp_path)
+    config = config.model_copy(update={"server": config.server.model_copy(update={"report_cache_ttl_seconds": 0})})
+    manager = HttpJobManager(
+        config,
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    first_options = TrendingsReportJobOptions(
+        mode="json",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        mentions_change_pct=30,
+    )
+    second_options = TrendingsReportJobOptions(
+        mode="json",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        mentions_change_pct=31,
+    )
+    first_job = manager.create_trendings_report_job(first_options)
+    await manager.run_trendings_report_job(first_job.job_id, first_options)
+    second_job = manager.create_trendings_report_job(second_options)
+    await manager.run_trendings_report_job(second_job.job_id, second_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    assert second_status.cache_hit is False
+    summary = json.loads(Path(second_status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["response_cache"]["hit_count"] == 4
+    assert summary["response_cache"]["miss_count"] == 0
+    assert all(item["source_job_id"] == first_job.job_id for item in summary["response_cache"]["endpoints"])
+    assert requested_batches == [[("reddit", "stocks"), ("reddit", "sectors"), ("x", "stocks"), ("x", "sectors")]]
+    assert repository.adanos_saved_job_ids == [first_job.job_id]
+
+
+async def test_trendings_response_cache_retries_only_failed_endpoints(tmp_path, monkeypatch) -> None:
+    requested_batches: list[list[tuple[str, str]]] = []
+
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
+        selected = requests or build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+        requested_batches.append([(request.platform, request.category) for request in selected])
+        result = _adanos_result_for_requests(from_date, to_date, selected)
+        if len(requested_batches) == 1:
+            responses = [
+                AdanosEndpointResult(
+                    platform=response.platform,
+                    category=response.category,
+                    endpoint=response.endpoint,
+                    request_args=response.request_args,
+                    status="failed",
+                    raw_response_text='{"error":"temporary"}',
+                    error="temporary",
+                    fetched_at=response.fetched_at,
+                )
+                if (response.platform, response.category) == ("x", "sectors")
+                else response
+                for response in result.responses
+            ]
+            return AdanosTrendingsResult(skipped=False, responses=responses, warnings=["Adanos x sectors failed: temporary"])
+        return result
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    config = _test_config(tmp_path)
+    config = config.model_copy(update={"server": config.server.model_copy(update={"report_cache_ttl_seconds": 0})})
+    manager = HttpJobManager(
+        config,
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    first_options = TrendingsReportJobOptions(mode="json", from_date="2026-07-01", to_date="2026-07-06")
+    second_options = TrendingsReportJobOptions(
+        mode="json",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        sentiment_change_pct=31,
+    )
+    first_job = manager.create_trendings_report_job(first_options)
+    await manager.run_trendings_report_job(first_job.job_id, first_options)
+    second_job = manager.create_trendings_report_job(second_options)
+    await manager.run_trendings_report_job(second_job.job_id, second_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    summary = json.loads(Path(second_status.summary_path or "").read_text(encoding="utf-8"))
+    assert requested_batches[1] == [("x", "sectors")]
+    assert summary["response_cache"]["hit_count"] == 3
+    assert summary["response_cache"]["miss_count"] == 1
+    assert summary["response_cache"]["fetched_count"] == 1
+    assert repository.adanos_saved_job_ids == [first_job.job_id, second_job.job_id]
+    source_jobs = {
+        (item["platform"], item["category"]): item["source_job_id"]
+        for item in summary["response_cache"]["endpoints"]
+    }
+    assert source_jobs[("x", "sectors")] == second_job.job_id
+    assert source_jobs[("reddit", "stocks")] == first_job.job_id
+
+
+async def test_trendings_response_cache_replaces_corrupt_endpoint_only(tmp_path, monkeypatch) -> None:
+    requested_batches: list[list[tuple[str, str]]] = []
+
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
+        selected = requests or build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+        requested_batches.append([(request.platform, request.category) for request in selected])
+        return _adanos_result_for_requests(from_date, to_date, selected)
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    config = _test_config(tmp_path)
+    config = config.model_copy(update={"server": config.server.model_copy(update={"report_cache_ttl_seconds": 0})})
+    manager = HttpJobManager(
+        config,
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    first_options = TrendingsReportJobOptions(mode="json", from_date="2026-07-01", to_date="2026-07-06")
+    first_job = manager.create_trendings_report_job(first_options)
+    await manager.run_trendings_report_job(first_job.job_id, first_options)
+    corrupt_key, corrupt_entry = next(
+        (key, entry)
+        for key, entry in repository.adanos_cache_entries.items()
+        if (entry.platform, entry.category) == ("reddit", "stocks")
+    )
+    repository.adanos_cache_entries[corrupt_key] = StoredAdanosResponseCacheEntry(
+        cache_key=corrupt_entry.cache_key,
+        source_job_id=corrupt_entry.source_job_id,
+        platform=corrupt_entry.platform,
+        category=corrupt_entry.category,
+        endpoint=corrupt_entry.endpoint,
+        request_args=corrupt_entry.request_args,
+        raw_response_text="not-json",
+        row_count=corrupt_entry.row_count,
+        fetched_at=corrupt_entry.fetched_at,
+    )
+    second_options = TrendingsReportJobOptions(
+        mode="json",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        mentions_change_pct=31,
+    )
+    second_job = manager.create_trendings_report_job(second_options)
+    await manager.run_trendings_report_job(second_job.job_id, second_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None and second_status.status == "succeeded"
+    summary = json.loads(Path(second_status.summary_path or "").read_text(encoding="utf-8"))
+    assert requested_batches[1] == [("reddit", "stocks")]
+    assert summary["response_cache"]["hit_count"] == 3
+    assert "Ignored corrupt Adanos response cache entry" in json.dumps(summary["pipeline_warnings"])
+
+
+async def test_trendings_partial_cache_reports_missing_key_without_discarding_hits(tmp_path, monkeypatch) -> None:
+    original_fetch = AdanosClient.fetch_trendings
+
+    async def partial_fetch(self, *, from_date, to_date, requests=None):
+        selected = requests or build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+        result = _adanos_result_for_requests(from_date, to_date, selected)
+        responses = [
+            AdanosEndpointResult(
+                platform=response.platform,
+                category=response.category,
+                endpoint=response.endpoint,
+                request_args=response.request_args,
+                status="failed",
+                raw_response_text='{"error":"temporary"}',
+                error="temporary",
+                fetched_at=response.fetched_at,
+            )
+            if (response.platform, response.category) == ("x", "sectors")
+            else response
+            for response in result.responses
+        ]
+        return AdanosTrendingsResult(skipped=False, responses=responses, warnings=["Adanos x sectors failed: temporary"])
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", partial_fetch)
+    repository = FakeRepository(with_social_data=False)
+    config = _test_config(tmp_path)
+    config = config.model_copy(update={"server": config.server.model_copy(update={"report_cache_ttl_seconds": 0})})
+    manager = HttpJobManager(
+        config,
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    first_options = TrendingsReportJobOptions(mode="json", from_date="2026-07-01", to_date="2026-07-06")
+    first_job = manager.create_trendings_report_job(first_options)
+    await manager.run_trendings_report_job(first_job.job_id, first_options)
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", original_fetch)
+    monkeypatch.delenv("ADANOS_API_KEY", raising=False)
+    second_options = TrendingsReportJobOptions(
+        mode="json",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        sentiment_change_pct=31,
+    )
+    second_job = manager.create_trendings_report_job(second_options)
+    await manager.run_trendings_report_job(second_job.job_id, second_options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None and second_status.status == "succeeded"
+    summary = json.loads(Path(second_status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["response_cache"]["hit_count"] == 3
+    assert summary["response_cache"]["fetched_count"] == 0
+    assert summary["skipped"] is False
+    unavailable = [item for item in summary["response_cache"]["endpoints"] if item["status"] == "unavailable"]
+    assert [(item["platform"], item["category"]) for item in unavailable] == [("x", "sectors")]
+    assert "uncached endpoint(s) are unavailable" in json.dumps(summary["pipeline_warnings"])
+
+
+async def test_trendings_response_cache_persists_across_manager_recreation_without_api_key(tmp_path, monkeypatch) -> None:
+    fetch_calls = 0
+
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        selected = requests or build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+        return _adanos_result_for_requests(from_date, to_date, selected)
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    config = _test_config(tmp_path)
+    config = config.model_copy(update={"server": config.server.model_copy(update={"report_cache_ttl_seconds": 0})})
+    options = TrendingsReportJobOptions(mode="json", from_date="2026-07-01", to_date="2026-07-06")
+    first_manager = HttpJobManager(config, renderer_factory=lambda title: FakeRenderer(title, []))
+    first_job = first_manager.create_trendings_report_job(options)
+    await first_manager.run_trendings_report_job(first_job.job_id, options)
+
+    monkeypatch.delenv("ADANOS_API_KEY", raising=False)
+    second_manager = HttpJobManager(config, renderer_factory=lambda title: FakeRenderer(title, []))
+    second_job = second_manager.create_trendings_report_job(options)
+    await second_manager.run_trendings_report_job(second_job.job_id, options)
+
+    second_status = second_manager.get_job(second_job.job_id)
+    assert second_status is not None
+    assert second_status.status == "succeeded"
+    summary = json.loads(Path(second_status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["response_cache"]["hit_count"] == 4
+    assert summary["skipped"] is False
+    assert fetch_calls == 1
 
 
 async def test_statistic_cache_reuses_png_artifact(tmp_path, monkeypatch) -> None:
@@ -1265,7 +1523,7 @@ async def test_statistic_cache_reuses_png_artifact(tmp_path, monkeypatch) -> Non
 async def test_identical_concurrent_trendings_jobs_coalesce_to_one_fetch(tmp_path, monkeypatch) -> None:
     fetch_calls = 0
 
-    async def fake_fetch(self, *, from_date, to_date):
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
         nonlocal fetch_calls
         fetch_calls += 1
         await asyncio.sleep(0.05)
@@ -1294,6 +1552,58 @@ async def test_identical_concurrent_trendings_jobs_coalesce_to_one_fetch(tmp_pat
     assert second_status.coalesced_from_job_id == first_job.job_id
     assert second_status.cache_hit is False
     assert Path(second_status.artifact_path or "").read_text(encoding="utf-8") == "Trending Market Sentiment:discord:trendings:5"
+    assert fetch_calls == 1
+
+
+async def test_concurrent_trendings_variants_share_one_adanos_fetch(tmp_path, monkeypatch) -> None:
+    fetch_calls = 0
+
+    async def fake_fetch(self, *, from_date, to_date, requests=None):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        await asyncio.sleep(0.05)
+        selected = requests or build_adanos_trending_requests(from_date=from_date, to_date=to_date)
+        return _adanos_result_for_requests(from_date, to_date, selected)
+
+    monkeypatch.setattr("stock_sum.collectors.api.adanos.AdanosClient.fetch_trendings", fake_fetch)
+    repository = FakeRepository(with_social_data=False)
+    config = _test_config(tmp_path)
+    config = config.model_copy(update={"server": config.server.model_copy(update={"report_cache_ttl_seconds": 0})})
+    manager = HttpJobManager(
+        config,
+        repository_factory=lambda: repository,
+        renderer_factory=lambda title: FakeRenderer(title, []),
+    )
+    first_options = TrendingsReportJobOptions(
+        mode="json",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        mentions_change_pct=30,
+    )
+    second_options = TrendingsReportJobOptions(
+        mode="json",
+        from_date="2026-07-01",
+        to_date="2026-07-06",
+        mentions_change_pct=31,
+    )
+    first_job = manager.create_trendings_report_job(first_options)
+    second_job = manager.create_trendings_report_job(second_options)
+    await asyncio.gather(
+        manager.run_trendings_report_job(first_job.job_id, first_options),
+        manager.run_trendings_report_job(second_job.job_id, second_options),
+    )
+
+    first_status = manager.get_job(first_job.job_id)
+    second_status = manager.get_job(second_job.job_id)
+    assert first_status is not None and first_status.status == "succeeded"
+    assert second_status is not None and second_status.status == "succeeded"
+    assert first_status.coalesced_from_job_id is None
+    assert second_status.coalesced_from_job_id is None
+    summaries = [
+        json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+        for status in (first_status, second_status)
+    ]
+    assert sorted(summary["response_cache"]["hit_count"] for summary in summaries) == [0, 4]
     assert fetch_calls == 1
 
 
@@ -1345,6 +1655,7 @@ class FakeRepository:
         self.house_read_calls = 0
         self.sec_13f_read_calls = 0
         self.adanos_saved_job_ids: list[str] = []
+        self.adanos_cache_entries: dict[str, StoredAdanosResponseCacheEntry] = {}
         self.adanos_stocks: list[StoredAdanosTrendingStock] = []
         self.adanos_sectors: list[StoredAdanosTrendingSector] = []
 
@@ -1511,11 +1822,32 @@ class FakeRepository:
             rows = [row for row in rows if row.transaction_action == action]
         return rows
 
-    async def save_adanos_trendings(self, *, job_id, from_date, to_date, responses):
+    async def save_adanos_trendings(
+        self,
+        *,
+        job_id,
+        from_date,
+        to_date,
+        responses,
+        cache_keys_by_endpoint=None,
+    ):
         self.adanos_saved_job_ids.append(job_id)
         for response in responses:
             if response.status != "succeeded":
                 continue
+            cache_key = (cache_keys_by_endpoint or {}).get((response.platform, response.category))
+            if cache_key:
+                self.adanos_cache_entries[cache_key] = StoredAdanosResponseCacheEntry(
+                    cache_key=cache_key,
+                    source_job_id=job_id,
+                    platform=response.platform,
+                    category=response.category,
+                    endpoint=response.endpoint,
+                    request_args=dict(response.request_args),
+                    raw_response_text=response.raw_response_text,
+                    row_count=len(response.rows),
+                    fetched_at=response.fetched_at.isoformat(),
+                )
             for index, row in enumerate(response.rows, start=1):
                 if response.category == "stocks":
                     self.adanos_stocks.append(
@@ -1560,27 +1892,74 @@ class FakeRepository:
                         )
                     )
 
+    async def read_adanos_response_cache_entries(self, *, cache_keys, fresh_after):
+        expired = [
+            key
+            for key, entry in self.adanos_cache_entries.items()
+            if entry.fetched_at <= fresh_after
+        ]
+        for key in expired:
+            del self.adanos_cache_entries[key]
+        return [self.adanos_cache_entries[key] for key in cache_keys if key in self.adanos_cache_entries]
+
+    async def delete_adanos_response_cache_entries(self, *, cache_keys):
+        for key in cache_keys:
+            self.adanos_cache_entries.pop(key, None)
+
     async def read_adanos_trending_stocks(self, *, job_id: str, limit=None):
         rows = [row for row in self.adanos_stocks if row.job_id == job_id]
         return rows if limit is None else rows[:limit]
 
-    async def read_latest_prior_adanos_trending_stocks(self, *, exclude_job_id: str, tickers, since_fetched_at):
+    async def read_adanos_trending_stocks_for_sources(self, *, sources):
+        source_set = set(sources)
+        return [row for row in self.adanos_stocks if (row.platform, row.job_id) in source_set]
+
+    async def read_latest_prior_adanos_trending_stocks(
+        self,
+        *,
+        exclude_job_id,
+        tickers,
+        since_fetched_at,
+        exclude_sources=None,
+    ):
         ticker_set = {str(ticker).upper() for ticker in tickers}
+        source_set = set(exclude_sources or [])
         latest: dict[tuple[str, str], StoredAdanosTrendingStock] = {}
         for row in self.adanos_stocks:
-            if row.job_id == exclude_job_id or row.ticker.upper() not in ticker_set or row.fetched_at < since_fetched_at:
+            if (
+                (exclude_job_id and row.job_id == exclude_job_id)
+                or (row.platform, row.job_id) in source_set
+                or row.ticker.upper() not in ticker_set
+                or row.fetched_at < since_fetched_at
+            ):
                 continue
             key = (row.platform, row.ticker.upper())
             if key not in latest or row.fetched_at > latest[key].fetched_at:
                 latest[key] = row
         return list(latest.values())
 
-    async def has_prior_adanos_trending_stock_history(self, *, exclude_job_id: str, since_fetched_at: str):
-        return any(row.job_id != exclude_job_id and row.fetched_at >= since_fetched_at for row in self.adanos_stocks)
+    async def has_prior_adanos_trending_stock_history(
+        self,
+        *,
+        exclude_job_id,
+        since_fetched_at: str,
+        exclude_sources=None,
+    ):
+        source_set = set(exclude_sources or [])
+        return any(
+            (not exclude_job_id or row.job_id != exclude_job_id)
+            and (row.platform, row.job_id) not in source_set
+            and row.fetched_at >= since_fetched_at
+            for row in self.adanos_stocks
+        )
 
     async def read_adanos_trending_sectors(self, *, job_id: str, limit=None):
         rows = [row for row in self.adanos_sectors if row.job_id == job_id]
         return rows if limit is None else rows[:limit]
+
+    async def read_adanos_trending_sectors_for_sources(self, *, sources):
+        source_set = set(sources)
+        return [row for row in self.adanos_sectors if (row.platform, row.job_id) in source_set]
 
     async def start_llm_analysis_run(self, **kwargs):
         return None
@@ -1716,6 +2095,49 @@ def _adanos_result(from_date, to_date) -> AdanosTrendingsResult:
             )
         ],
     )
+
+
+def _adanos_result_for_requests(from_date, to_date, requests) -> AdanosTrendingsResult:
+    responses: list[AdanosEndpointResult] = []
+    for request in requests:
+        if request.category == "stocks":
+            ticker = "NVDA" if request.platform == "reddit" else "TSLA"
+            rows = [
+                {
+                    "ticker": ticker,
+                    "company_name": ticker,
+                    "rank": 1,
+                    "trend": "up",
+                    "mentions": 100,
+                    "bullish_pct": 60,
+                    "bearish_pct": 20,
+                }
+            ]
+        else:
+            sector = "Technology" if request.platform == "reddit" else "Consumer Cyclical"
+            rows = [
+                {
+                    "sector": sector,
+                    "rank": 1,
+                    "top_tickers": ["NVDA"],
+                    "trend": "up",
+                    "mentions": 50,
+                    "bullish_pct": 55,
+                    "bearish_pct": 15,
+                }
+            ]
+        responses.append(
+            AdanosEndpointResult(
+                platform=request.platform,
+                category=request.category,
+                endpoint=request.endpoint,
+                request_args=dict(request.request_args),
+                status="succeeded",
+                raw_response_text=json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
+                rows=rows,
+            )
+        )
+    return AdanosTrendingsResult(skipped=False, responses=responses)
 
 
 def _sec_13f_row() -> StoredSec13FHolding:
