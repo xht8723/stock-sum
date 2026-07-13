@@ -57,6 +57,7 @@ class TradingReportJobOptions:
     limit: int = 100
     title: str = "Official Trading Disclosures"
     force_refresh: bool = False
+    allow_empty: bool = False
 
     def __post_init__(self) -> None:
         if self.limit is None:

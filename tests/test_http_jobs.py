@@ -57,10 +57,13 @@ async def test_report_job_succeeds_with_collection_warning(tmp_path) -> None:
     assert status.status == "succeeded"
     assert status.artifact_path is not None
     assert len(status.warnings) == 1
-    summary = Path(status.summary_path or "").read_text(encoding="utf-8")
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
     assert "pipeline_warnings" in summary
     assert "failed_sections" in summary
-    assert "temporary reddit failure" in summary
+    assert "temporary reddit failure" in json.dumps(summary)
+    assert summary["generated_at"]
+    assert summary["source_windows"]["x"]["aleabitoreddit"]["lookback_hours"] == 24
+    assert summary["source_windows"]["x"]["aleabitoreddit"]["window_start"]
 
 
 async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
@@ -153,6 +156,34 @@ async def test_trading_report_succeeds_with_house_data_and_skips_llm(tmp_path) -
 
 def test_trading_report_options_default_limit_is_100() -> None:
     assert TradingReportJobOptions(days=30).limit == 100
+    assert TradingReportJobOptions(days=30).allow_empty is False
+
+
+async def test_trading_report_allow_empty_is_opt_in(tmp_path) -> None:
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[]),
+        llm_client_factory=lambda: FakeLLM(),
+    )
+
+    default_options = TradingReportJobOptions(mode="json", filing_days=1)
+    default_job = manager.create_trading_report_job(default_options)
+    await manager.run_trading_report_job(default_job.job_id, default_options)
+    assert manager.get_job(default_job.job_id).status == "failed"
+
+    allowed_options = TradingReportJobOptions(mode="json", filing_days=1, allow_empty=True)
+    allowed_job = manager.create_trading_report_job(allowed_options)
+    assert allowed_job.cache_key != default_job.cache_key
+    await manager.run_trading_report_job(allowed_job.job_id, allowed_options)
+
+    allowed_status = manager.get_job(allowed_job.job_id)
+    assert allowed_status is not None
+    assert allowed_status.status == "succeeded"
+    summary = json.loads(Path(allowed_status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["house_ptr"] == []
+    assert summary["filters"]["allow_empty"] is True
+    assert summary["filters"]["limit"] == 100
 
 
 def test_13f_report_options_default_limit_is_20() -> None:

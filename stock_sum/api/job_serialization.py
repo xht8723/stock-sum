@@ -261,6 +261,8 @@ def _analysis_response_data(
     provider: str,
     analysis: Any,
     input_media: dict[str, Any],
+    generated_at: str | None = None,
+    source_windows: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "report_type": "social",
@@ -269,6 +271,8 @@ def _analysis_response_data(
         "summary_text": json.dumps(analysis.summary, ensure_ascii=False),
         "summary": analysis.summary,
         "input_media": input_media,
+        "generated_at": generated_at,
+        "source_windows": source_windows or {"x": {}, "reddit": {}},
         "metadata": {
             "analysis_run_id": analysis.analysis_run_id,
             "prompt_version": analysis.prompt_version,

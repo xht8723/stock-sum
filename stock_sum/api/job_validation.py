@@ -204,6 +204,7 @@ def trading_filter_data(
         "filing_end": filing_end.isoformat() if filing_end else None,
         "limit": options.limit,
         "force_refresh": options.force_refresh,
+        "allow_empty": options.allow_empty,
     }
 
 

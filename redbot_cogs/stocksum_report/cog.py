@@ -366,6 +366,7 @@ class StockSumHttpClient:
         ticker: str | None = None,
         limit: int | None = None,
         force_refresh: bool = False,
+        allow_empty: bool = False,
     ) -> StockSumArtifact:
         """Create, poll, and download one stock-sum trading disclosure report job."""
 
@@ -390,6 +391,7 @@ class StockSumHttpClient:
                 "ticker": ticker,
                 "limit": limit,
                 "force_refresh": force_refresh,
+                "allow_empty": True if allow_empty else None,
             }
             job = await self._create_trading_report_job(
                 session,
@@ -1590,7 +1592,11 @@ class StockSumReport(commands.Cog):
 
         report_client = client or StockSumHttpClient.from_env()
         sections = await self._run_daily_report_bundle(report_client)
-        rendered = _format_daily_report(sections, sent_utc_date=sent_utc_date)
+        rendered = _format_daily_report(
+            sections,
+            sent_utc_date=sent_utc_date,
+            generated_at=datetime.now(timezone.utc),
+        )
         try:
             await _send_daily_dm(user, rendered)
         except Exception as exc:
@@ -1617,20 +1623,27 @@ class StockSumReport(commands.Cog):
         sections: list[DailyReportSection] = []
         sections.append(
             await _daily_section(
-                "Trendings",
-                lambda: client.run_trendings_report(output_format="discord"),
+                "trendings",
+                "Market Trends",
+                lambda: client.run_trendings_report(output_format="json"),
             )
         )
         sections.append(
             await _daily_section(
-                "Recent Posts",
-                lambda: client.run_social_report(output_format="discord", detail="minimum"),
+                "social",
+                "High-Priority Social Signals",
+                lambda: client.run_social_report(output_format="json", detail="minimum"),
             )
         )
         sections.append(
             await _daily_section(
-                "PTR Search",
-                lambda: client.run_trading_report(output_format="discord", filing_days=1),
+                "trading",
+                "House PTR Disclosures",
+                lambda: client.run_trading_report(
+                    output_format="json",
+                    filing_days=1,
+                    allow_empty=True,
+                ),
             )
         )
         return sections
@@ -1664,15 +1677,17 @@ def _validate_report_options(*, output_format: str, detail: str | None = None) -
     return None
 
 
-async def _send_daily_dm(user: Any, content: str) -> None:
+async def _send_daily_dm(user: Any, messages: list[str]) -> None:
     sender = getattr(user, "send", None)
     if not callable(sender):
         raise StockSumRequestError("Discord user cannot receive DMs.")
-    for chunk in _split_discord_markdown(content):
-        try:
-            await sender(chunk, suppress_embeds=True)
-        except TypeError:
-            await sender(chunk)
+    for message in messages:
+        chunks = [message] if len(message) <= DISCORD_INLINE_LIMIT else _split_discord_markdown(message)
+        for chunk in chunks:
+            try:
+                await sender(chunk, suppress_embeds=True)
+            except TypeError:
+                await sender(chunk)
 
 
 def _validate_x_handle(value: str) -> str | None:

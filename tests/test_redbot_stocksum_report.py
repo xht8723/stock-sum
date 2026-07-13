@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -22,6 +23,12 @@ from redbot_cogs.stocksum_report.cog import (
     _send_command_output,
     _send_report_output,
     _split_discord_markdown,
+)
+from redbot_cogs.stocksum_report.daily import (
+    DAILY_MESSAGE_LIMIT,
+    DAILY_SOCIAL_DISPLAY_LIMIT,
+    DailyReportSection,
+    _format_daily_report,
 )
 
 
@@ -226,11 +233,11 @@ async def test_due_daily_report_runs_once_per_utc_day() -> None:
     await report._run_due_daily_reports_once(now=now, client=client)
 
     assert client.calls == [
-        ("trendings", {"output_format": "discord"}),
-        ("social", {"output_format": "discord", "detail": "minimum"}),
-        ("trading", {"output_format": "discord", "filing_days": 1}),
+        ("trendings", {"output_format": "json"}),
+        ("social", {"output_format": "json", "detail": "minimum"}),
+        ("trading", {"output_format": "json", "filing_days": 1, "allow_empty": True}),
     ]
-    assert len(user.dm_messages) == 1
+    assert len(user.dm_messages) == 4
     subscriptions = await report._daily_store.all_subscriptions()
     assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
 
@@ -264,7 +271,7 @@ async def test_daily_report_starts_thirty_minutes_before_set_time() -> None:
     )
 
     assert [name for name, _kwargs in client.calls] == ["trendings", "social", "trading"]
-    assert len(user.dm_messages) == 1
+    assert len(user.dm_messages) == 4
     subscriptions = await report._daily_store.all_subscriptions()
     assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
 
@@ -303,10 +310,10 @@ async def test_daily_report_midnight_prestart_marks_target_utc_date() -> None:
     )
 
     assert len(client.calls) == 3
-    assert len(user.dm_messages) == 1
+    assert len(user.dm_messages) == 4
     subscriptions = await report._daily_store.all_subscriptions()
     assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
-    assert "UTC date: 2026-07-07" in user.dm_messages[0]["content"]
+    assert "Report date: `2026-07-07`" in user.dm_messages[0]["content"]
 
 
 async def test_daily_report_keeps_order_and_continues_after_job_failure() -> None:
@@ -322,19 +329,18 @@ async def test_daily_report_keeps_order_and_continues_after_job_failure() -> Non
     )
 
     assert client.calls == [
-        ("trendings", {"output_format": "discord"}),
-        ("social", {"output_format": "discord", "detail": "minimum"}),
-        ("trading", {"output_format": "discord", "filing_days": 1}),
+        ("trendings", {"output_format": "json"}),
+        ("social", {"output_format": "json", "detail": "minimum"}),
+        ("trading", {"output_format": "json", "filing_days": 1, "allow_empty": True}),
     ]
-    message = user.dm_messages[0]["content"]
-    trendings_index = message.index("## Trendings")
-    recent_index = message.index("## Recent Posts")
-    ptr_index = message.index("## PTR Search")
-    assert trendings_index < recent_index < ptr_index
-    assert "trendings body" in message
-    assert "Warning: Recent Posts failed: social broken" in message
-    assert "trading body" in message
-    assert "social body" not in message
+    messages = [message["content"] for message in user.dm_messages]
+    assert messages[0].startswith("**Stock-Sum Daily Brief**")
+    assert messages[1].startswith("**Market Trends**")
+    assert messages[2].startswith("**High-Priority Social Signals**")
+    assert messages[3].startswith("**House PTR Disclosures**")
+    assert "NVDA" in messages[1]
+    assert "Unavailable: High-Priority Social Signals failed: social broken" in messages[2]
+    assert "AAPL" in messages[3]
 
 
 async def test_daily_dm_failure_marks_sent_to_avoid_retry_spam() -> None:
@@ -352,6 +358,113 @@ async def test_daily_dm_failure_marks_sent_to_avoid_retry_spam() -> None:
     subscriptions = await report._daily_store.all_subscriptions()
     assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
     assert "Could not send Discord DM" in subscriptions[100]["last_error"]
+
+
+async def test_partial_daily_dm_failure_is_recorded_without_retrying() -> None:
+    user = FakeUser(100, fail_after=2)
+    bot = FakeBot(users={100: user})
+    client = FakeDailyStockSumClient()
+    report = StockSumReport(bot=bot)
+    await report._daily_store.set_subscription(user, time_utc="09:30")
+    now = datetime(2026, 7, 7, 9, 30, tzinfo=timezone.utc)
+
+    await report._run_due_daily_reports_once(now=now, client=client)
+    await report._run_due_daily_reports_once(now=now, client=client)
+
+    assert len(user.dm_messages) == 2
+    assert len(client.calls) == 3
+    subscriptions = await report._daily_store.all_subscriptions()
+    assert subscriptions[100]["last_sent_utc_date"] == "2026-07-07"
+    assert "Could not send Discord DM" in subscriptions[100]["last_error"]
+
+
+def test_daily_renderer_keeps_ptr_last_and_preserves_every_disclosure_row() -> None:
+    rows = [
+        {
+            "name": f"Filer {index}",
+            "stock_ticker": f"T{index:03d}",
+            "transaction_type": "Purchase",
+            "transaction_date": "2026-07-01",
+            "filing_date": "2026-07-07",
+            "amount": "$1,001 - $15,000",
+            "asset": f"Company {index} common stock",
+            "pdf_url": f"https://example.test/{index}.pdf",
+        }
+        for index in range(100)
+    ]
+    sections = _daily_renderer_sections(ptr_rows=rows)
+
+    messages = _format_daily_report(
+        sections,
+        sent_utc_date="2026-07-07",
+        generated_at=datetime(2026, 7, 7, 9, 5, tzinfo=timezone.utc),
+    )
+
+    assert messages[0].startswith("**Stock-Sum Daily Brief**")
+    assert "PTR" not in messages[0]
+    assert "Disclosure" not in messages[0]
+    ptr_index = next(index for index, message in enumerate(messages) if message.startswith("**House PTR Disclosures**"))
+    assert all(message.startswith("**House PTR Disclosures") for message in messages[ptr_index:])
+    ptr_text = "\n".join(messages[ptr_index:])
+    assert "Disclosure rows: `100`" in ptr_text
+    for index in range(100):
+        assert f"**T{index:03d}**" in ptr_text
+        assert f"[PDF](https://example.test/{index}.pdf)" in ptr_text
+    assert "**House PTR Disclosures (continued)**" in ptr_text
+    assert all(len(message) <= DAILY_MESSAGE_LIMIT for message in messages)
+
+
+def test_daily_renderer_sorts_and_caps_high_priority_social_signals() -> None:
+    posts = []
+    confidences = ["low", "high", "medium", "high", "low", "high", "medium"]
+    for index, confidence in enumerate(confidences):
+        posts.append(
+            {
+                "title": f"Signal {index}",
+                "post_summary": f"Summary {index}",
+                "sentiment": "bullish",
+                "importance": "high",
+                "confidence": confidence,
+                "tickers": [f"T{index}"],
+                "urls": [f"https://example.test/signal/{index}"],
+            }
+        )
+    sections = _daily_renderer_sections(social_posts=posts)
+
+    messages = _format_daily_report(
+        sections,
+        sent_utc_date="2026-07-07",
+        generated_at=datetime(2026, 7, 7, 9, 5, tzinfo=timezone.utc),
+    )
+    social_text = "\n".join(message for message in messages if message.startswith("**High-Priority Social Signals"))
+
+    assert f"Showing `{DAILY_SOCIAL_DISPLAY_LIMIT}` of `7` high-priority signals." in social_text
+    assert "2 additional high-priority signals were omitted" in social_text
+    expected_titles = ["Signal 1", "Signal 3", "Signal 5", "Signal 2", "Signal 6"]
+    positions = [social_text.index(title) for title in expected_titles]
+    assert positions == sorted(positions)
+    assert "Signal 0" not in social_text
+    assert "Signal 4" not in social_text
+
+
+def test_daily_renderer_reports_healthy_social_empty_state_and_coverage() -> None:
+    posts = [
+        {"title": "Medium", "importance": "medium", "confidence": "high"},
+        {"title": "Low", "importance": "low", "confidence": "low"},
+    ]
+    sections = _daily_renderer_sections(social_posts=posts)
+
+    messages = _format_daily_report(
+        sections,
+        sent_utc_date="2026-07-07",
+        generated_at=datetime(2026, 7, 7, 9, 5, tzinfo=timezone.utc),
+    )
+    social_text = "\n".join(message for message in messages if message.startswith("**High-Priority Social Signals"))
+
+    assert "Configured source lookback: X `24h`" in social_text
+    assert "No high-priority social signals were found" in social_text
+    assert "`2` medium/low signals were not included" in social_text
+    assert "Coverage: `3/3 healthy`" in messages[0]
 
 
 async def test_client_sends_report_request_and_downloads_artifact() -> None:
@@ -483,6 +596,28 @@ async def test_client_omits_trading_limit_by_default() -> None:
         {
             "headers": {},
             "json": {"filing_days": 1, "force_refresh": False},
+        },
+    )
+
+
+async def test_client_sends_allow_empty_only_when_enabled() -> None:
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "trade-empty"})],
+        get_responses=[
+            FakeResponse(200, {"job_id": "trade-empty", "status": "succeeded"}),
+            FakeResponse(200, body=b"{}", headers={"content-type": "application/json"}),
+        ],
+    )
+    client = StockSumHttpClient(base_url="http://stock-sum.local", session=session, poll_seconds=0)
+
+    await client.run_trading_report(output_format="json", filing_days=1, allow_empty=True)
+
+    assert session.requests[0] == (
+        "POST",
+        "http://stock-sum.local/v1/trading-reports/jobs/json",
+        {
+            "headers": {},
+            "json": {"filing_days": 1, "force_refresh": False, "allow_empty": True},
         },
     )
 
@@ -1770,29 +1905,193 @@ class FakeDailyStockSumClient:
         self.calls.append(("trendings", kwargs))
         if "trendings" in self.fail_methods:
             raise StockSumRequestError("trendings broken")
-        return _daily_artifact("trendings body")
+        return _daily_artifact(
+            {
+                "report_type": "trendings",
+                "summary": {
+                    "changes": [
+                        {
+                            "platform": "reddit",
+                            "ticker": "NVDA",
+                            "company_name": "NVIDIA",
+                            "change_type": "mentions + sentiment",
+                            "previous_mentions": 42,
+                            "current_mentions": 84,
+                            "mentions_delta_pct": 100.0,
+                            "bullish_delta_points": 35,
+                            "bearish_delta_points": -33,
+                        }
+                    ],
+                    "stocks": [
+                        {
+                            "platform": "reddit",
+                            "ticker": "NVDA",
+                            "company_name": "NVIDIA",
+                            "trend": "up",
+                            "mentions": 84,
+                            "bullish_pct": 65,
+                            "bearish_pct": 12,
+                        }
+                    ],
+                    "sectors": [],
+                },
+                "filters": {
+                    "from": "2026-07-07",
+                    "to": "2026-07-07",
+                    "display_limit": 5,
+                    "comparison_days": 7,
+                },
+            }
+        )
 
     async def run_social_report(self, **kwargs: Any) -> StockSumArtifact:
         self.calls.append(("social", kwargs))
         if "social" in self.fail_methods:
             raise StockSumRequestError("social broken")
-        return _daily_artifact("social body")
+        return _daily_artifact(
+            {
+                "report_type": "social",
+                "generated_at": "2026-07-07T09:00:00+00:00",
+                "source_windows": {
+                    "x": {
+                        "marketwatcher": {
+                            "window_start": "2026-07-06T09:00:00+00:00",
+                            "lookback_hours": 24,
+                        }
+                    },
+                    "reddit": {},
+                },
+                "summary": {
+                    "x_reports": [
+                        {
+                            "handle": "marketwatcher",
+                            "posts": [
+                                {
+                                    "title": "NVDA momentum",
+                                    "post_summary": "NVDA discussion accelerated.",
+                                    "sentiment": "bullish",
+                                    "importance": "high",
+                                    "confidence": "high",
+                                    "interpretation": "Momentum is broadening.",
+                                    "tickers": ["NVDA"],
+                                    "urls": ["https://x.com/marketwatcher/status/1"],
+                                }
+                            ],
+                        }
+                    ],
+                    "reddit_report": {"posts": []},
+                },
+            }
+        )
 
     async def run_trading_report(self, **kwargs: Any) -> StockSumArtifact:
         self.calls.append(("trading", kwargs))
         if "trading" in self.fail_methods:
             raise StockSumRequestError("trading broken")
-        return _daily_artifact("trading body")
+        return _daily_artifact(
+            {
+                "report_type": "trading",
+                "house_ptr": [
+                    {
+                        "name": "Jane Doe",
+                        "status": "Member",
+                        "state": "CA",
+                        "filing_date": "2026-07-07",
+                        "asset": "Apple Inc. - Common Stock",
+                        "stock_ticker": "AAPL",
+                        "transaction_type": "Purchase",
+                        "transaction_date": "2026-07-01",
+                        "amount": "$1,001 - $15,000",
+                        "pdf_url": "https://example.test/ptr.pdf",
+                    }
+                ],
+                "filters": {
+                    "filing_days": 1,
+                    "filing_start": "2026-07-06T09:00:00+00:00",
+                    "filing_end": "2026-07-07T09:00:00+00:00",
+                    "limit": 100,
+                    "allow_empty": True,
+                },
+            }
+        )
 
 
-def _daily_artifact(content: str) -> StockSumArtifact:
+def _daily_artifact(payload: dict[str, Any], *, status: dict[str, Any] | None = None) -> StockSumArtifact:
     return StockSumArtifact(
         job_id="daily",
-        filename="daily.md",
-        content_type="text/markdown; charset=utf-8",
-        content=content.encode("utf-8"),
-        status={"status": "succeeded"},
+        filename="daily.json",
+        content_type="application/json",
+        content=json.dumps(payload).encode("utf-8"),
+        status=status or {"status": "succeeded"},
     )
+
+
+def _daily_renderer_sections(
+    *,
+    social_posts: list[dict[str, Any]] | None = None,
+    ptr_rows: list[dict[str, Any]] | None = None,
+) -> list[DailyReportSection]:
+    return [
+        DailyReportSection(
+            kind="trendings",
+            title="Market Trends",
+            payload={
+                "summary": {
+                    "changes": [
+                        {
+                            "platform": "reddit",
+                            "ticker": "NVDA",
+                            "change_type": "mentions",
+                            "previous_mentions": 10,
+                            "current_mentions": 20,
+                            "mentions_delta_pct": 100.0,
+                        }
+                    ],
+                    "stocks": [],
+                    "sectors": [],
+                },
+                "filters": {
+                    "from": "2026-07-07",
+                    "to": "2026-07-07",
+                    "display_limit": 5,
+                    "comparison_days": 7,
+                },
+            },
+        ),
+        DailyReportSection(
+            kind="social",
+            title="High-Priority Social Signals",
+            payload={
+                "source_windows": {
+                    "x": {
+                        "marketwatcher": {
+                            "window_start": "2026-07-06T09:00:00+00:00",
+                            "lookback_hours": 24,
+                        }
+                    },
+                    "reddit": {},
+                },
+                "summary": {
+                    "x_reports": [{"handle": "marketwatcher", "posts": social_posts or []}],
+                    "reddit_report": {"posts": []},
+                },
+            },
+        ),
+        DailyReportSection(
+            kind="trading",
+            title="House PTR Disclosures",
+            payload={
+                "house_ptr": ptr_rows or [],
+                "filters": {
+                    "filing_days": 1,
+                    "filing_start": "2026-07-06T09:00:00+00:00",
+                    "filing_end": "2026-07-07T09:00:00+00:00",
+                    "limit": 100,
+                    "allow_empty": True,
+                },
+            },
+        ),
+    ]
 
 
 class FakeInteraction:
@@ -1947,13 +2246,14 @@ class FakeBot:
 
 
 class FakeUser:
-    def __init__(self, user_id: int, *, fail_send: bool = False) -> None:
+    def __init__(self, user_id: int, *, fail_send: bool = False, fail_after: int | None = None) -> None:
         self.id = user_id
         self.fail_send = fail_send
+        self.fail_after = fail_after
         self.dm_messages: list[dict[str, Any]] = []
 
     async def send(self, content: str, *, suppress_embeds: bool = False) -> None:
-        if self.fail_send:
+        if self.fail_send or (self.fail_after is not None and len(self.dm_messages) >= self.fail_after):
             raise RuntimeError("DMs closed")
         self.dm_messages.append({"content": content, "suppress_embeds": suppress_embeds})
 

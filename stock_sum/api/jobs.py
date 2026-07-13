@@ -380,6 +380,12 @@ class HttpJobManager:
                 provider=self.config.llm.provider,
                 analysis=analysis,
                 input_media=payload_data.get("media", {}) if isinstance(payload_data, dict) else {},
+                generated_at=payload_data.get("generated_at") if isinstance(payload_data, dict) else None,
+                source_windows=(
+                    payload_data.get("metadata", {}).get("source_windows")
+                    if isinstance(payload_data, dict) and isinstance(payload_data.get("metadata"), dict)
+                    else None
+                ),
             )
 
             warning_data = _warnings_to_dicts(warnings)
@@ -493,7 +499,7 @@ class HttpJobManager:
                 order_by_filing_date=order_by_filing_date,
             )
             rows = _sort_house_ptr_rows(rows, prefer_filing_date=order_by_filing_date)
-            if not rows:
+            if not rows and not options.allow_empty:
                 message = "No House PTR trade rows matched the trading report filters."
                 if warnings:
                     message += " Refresh warnings: " + "; ".join(warning.message for warning in warnings)
@@ -1512,6 +1518,7 @@ class HttpJobManager:
                         "ticker": options.ticker,
                         "limit": options.limit,
                         "force_refresh": options.force_refresh,
+                        "allow_empty": options.allow_empty,
                     },
                 }
             )

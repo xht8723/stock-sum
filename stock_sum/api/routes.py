@@ -87,6 +87,7 @@ class TradingReportJobRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1)
     title: str = "Official Trading Disclosures"
     force_refresh: bool = False
+    allow_empty: bool = False
 
 
 class Sec13FReportJobRequest(BaseModel):
