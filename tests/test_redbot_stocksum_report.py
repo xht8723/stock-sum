@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import subprocess
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,6 +27,27 @@ from redbot_cogs.stocksum_report.cog import (
 
 def test_default_report_timeout_is_30_minutes() -> None:
     assert DEFAULT_TIMEOUT_SECONDS == 30 * 60
+
+
+def test_cog_imports_from_redbot_addpath_layout() -> None:
+    addpath = Path("redbot_cogs").resolve()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                f"sys.path.insert(0, {str(addpath)!r}); "
+                "import stocksum_report.cog as cog; "
+                "assert cog.StockSumReport"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_required_slash_command_parameters_are_explicit() -> None:

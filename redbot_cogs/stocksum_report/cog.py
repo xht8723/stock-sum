@@ -11,7 +11,7 @@ import asyncio
 import os
 import re
 
-from redbot_cogs.stocksum_report.daily import (
+from .daily import (
     DailyReportSection,
     _coerce_utc,
     _daily_section,
