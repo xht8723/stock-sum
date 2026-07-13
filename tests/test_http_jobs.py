@@ -415,6 +415,15 @@ async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tm
                             "bullish_pct": 80,
                             "bearish_pct": 5,
                         },
+                        {
+                            "ticker": "META",
+                            "company_name": "Meta Platforms",
+                            "rank": 5,
+                            "trend": "up",
+                            "mentions": 400,
+                            "bullish_pct": 40,
+                            "bearish_pct": 30,
+                        },
                     ],
                 )
             ],
@@ -460,6 +469,24 @@ async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tm
                 raw_metadata={},
                 fetched_at=datetime.now(timezone.utc).isoformat(),
             ),
+            StoredAdanosTrendingStock(
+                job_id="prior-job",
+                platform="reddit",
+                rank=1,
+                window_from="2026-06-30",
+                window_to="2026-07-01",
+                ticker="META",
+                company_name="Meta Platforms",
+                trend="flat",
+                mentions=100,
+                bullish_pct=40,
+                bearish_pct=30,
+                sentiment_score=None,
+                buzz_score=None,
+                trend_history=[],
+                raw_metadata={},
+                fetched_at=datetime.now(timezone.utc).isoformat(),
+            ),
         ]
     )
     manager = HttpJobManager(
@@ -484,11 +511,12 @@ async def test_trendings_job_detects_mentions_sentiment_and_darkhorse_changes(tm
     changes = summary["summary"]["changes"]
 
     assert [(row["ticker"], row["change_type"]) for row in changes] == [
+        ("META", "mentions"),
         ("NVDA", "mentions + sentiment"),
         ("AMD", "sentiment"),
         ("TSLA", "darkhorse"),
     ]
-    nvda = changes[0]
+    nvda = changes[1]
     assert nvda["previous_mentions"] == 100
     assert nvda["current_mentions"] == 200
     assert nvda["mentions_delta_pct"] == 100.0

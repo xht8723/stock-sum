@@ -558,12 +558,28 @@ def test_renderer_outputs_adanos_trendings_in_discord_and_empty_state() -> None:
                     "current_bearish_pct": 12,
                     "previous_bearish_pct": 45,
                     "bearish_delta_points": -33,
+                },
+                {
+                    "platform": "reddit",
+                    "ticker": "AMD",
+                    "company_name": "Advanced Micro Devices",
+                    "change_type": "mentions",
+                    "current_mentions": 40,
+                    "previous_mentions": 20,
+                    "mentions_delta": 20,
+                    "mentions_delta_pct": 100.0,
+                    "current_bullish_pct": 55,
+                    "previous_bullish_pct": 55,
+                    "bullish_delta_points": 0,
+                    "current_bearish_pct": 20,
+                    "previous_bearish_pct": 20,
+                    "bearish_delta_points": 0,
                 }
             ],
         }
     }
 
-    discord = PresentationRenderer("Trendings").render_trendings(response, mode="discord", limit=5)
+    discord = PresentationRenderer("Trendings").render_trendings(response, mode="discord", limit=1)
     skipped = PresentationRenderer("Trendings").render_trendings({"skipped": True, "summary": {}}, mode="discord", limit=5)
 
     assert "**Trending stocks**" in discord
@@ -578,4 +594,5 @@ def test_renderer_outputs_adanos_trendings_in_discord_and_empty_state() -> None:
     assert "Change: **Mentions + Sentiment**" in discord
     assert "Mentions: 42 -> 84; delta: +42 (+100.0%)" in discord
     assert "Bullish: 30% -> 65% (+35 pts); Bearish: 45% -> 12% (-33 pts)" in discord
+    assert "AMD - Advanced Micro Devices" not in discord
     assert "Adanos API key is not configured" in skipped

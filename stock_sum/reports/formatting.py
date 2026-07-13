@@ -497,7 +497,7 @@ def _html_trendings(response: dict[str, Any], summary: dict[str, Any], limit: in
         return _html_section("Trending stocks", '<p class="empty">Adanos API key is not configured.</p>')
     stocks = _trendings_rows(summary, "stocks", limit)
     sectors = _trendings_rows(summary, "sectors", limit)
-    changes = _trendings_changes(summary)
+    changes = _trendings_changes(summary, limit)
     sections = [
         _html_section("Trending stocks", "\n".join(_html_trendings_platform_rows(stocks, is_sector=False))),
         _html_section("Trending sectors", "\n".join(_html_trendings_platform_rows(sectors, is_sector=True))),
@@ -576,7 +576,7 @@ def _plain_trendings(response: dict[str, Any], summary: dict[str, Any], limit: i
                 lines.extend(_trendings_plain_item(row, is_sector=is_sector, bullet=bullet, heading=heading))
                 lines.append("")
         lines.append("")
-    changes = _trendings_changes(summary)
+    changes = _trendings_changes(summary, limit)
     if changes:
         if heading == "**":
             lines.append("**Trending changes**")
@@ -620,11 +620,12 @@ def _trendings_rows(summary: dict[str, Any], key: str, limit: int) -> dict[str, 
     return grouped
 
 
-def _trendings_changes(summary: dict[str, Any]) -> list[dict[str, Any]]:
+def _trendings_changes(summary: dict[str, Any], limit: int) -> list[dict[str, Any]]:
     changes = summary.get("changes")
     if not isinstance(changes, list):
         return []
-    return [row for row in changes if isinstance(row, dict)]
+    rows = [row for row in changes if isinstance(row, dict)]
+    return rows[:limit]
 
 
 def _trendings_change_plain_item(row: dict[str, Any], *, bullet: str, heading: str) -> list[str]:

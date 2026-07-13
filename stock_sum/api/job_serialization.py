@@ -279,16 +279,31 @@ def _analysis_response_data(
     }
 
 
-def _adanos_trending_change_sort_key(row: dict[str, Any]) -> tuple[int, str, str]:
-    change_type = str(row.get("change_type") or "")
-    if change_type == "darkhorse":
-        return (99, str(row.get("platform") or ""), str(row.get("ticker") or ""))
-    type_rank = {
-        "mentions + sentiment": 0,
-        "mentions": 1,
-        "sentiment": 2,
-    }.get(change_type, 50)
-    return (type_rank, str(row.get("platform") or ""), str(row.get("ticker") or ""))
+def _adanos_trending_change_sort_key(row: dict[str, Any]) -> tuple[float, str, str]:
+    return (-_adanos_trending_change_score(row), str(row.get("platform") or ""), str(row.get("ticker") or ""))
+
+
+def _adanos_trending_change_score(row: dict[str, Any]) -> float:
+    mention_delta_pct = _safe_float(row.get("mentions_delta_pct"))
+    mention_delta = _safe_float(row.get("mentions_delta"))
+    sentiment_deltas = [
+        abs(delta)
+        for delta in (
+            _safe_float(row.get("bullish_delta_points")),
+            _safe_float(row.get("bearish_delta_points")),
+        )
+        if delta is not None
+    ]
+    components: list[float] = []
+    if mention_delta_pct is not None:
+        components.append(abs(mention_delta_pct))
+    elif mention_delta is not None:
+        components.append(abs(mention_delta))
+    if sentiment_deltas:
+        components.append(sum(sentiment_deltas) / len(sentiment_deltas))
+    if not components:
+        return 0.0
+    return sum(components) / len(components)
 
 
 def _adanos_darkhorse_change(row: Any) -> dict[str, Any]:
@@ -338,6 +353,15 @@ def _safe_int(value: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 
