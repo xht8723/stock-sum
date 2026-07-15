@@ -9,18 +9,18 @@
 
 ## Implementation Checklist
 
-- [ ] Add a transactional migration runner and `schema_migrations` table.
-- [ ] Add House PTR extraction warning/metadata storage, a `collected_at` index, and legacy backfill.
-- [ ] Preserve the first `collected_at` value during filing upserts.
-- [ ] Classify filing extraction as `succeeded`, `photo_scanned`, `unparsed`, or `failed`.
-- [ ] Skip already processed successful, photo-scanned, and unparsed filings while retrying failures.
-- [ ] Add `collected_days` to the trading-report job contract and use it for daily PTR reports.
-- [ ] Return filing-level results independently of extracted transaction rows.
-- [ ] Render photo-scanned and unparsed filings with warnings and official document links.
-- [ ] Bypass stale report artifacts when an explicit refresh is requested.
-- [ ] Add migration, persistence, collection, API, cache, and renderer coverage.
-- [ ] Run the full local test suite.
-- [ ] Back up the VM database, deploy, restart, and smoke-test known filings.
+- [x] Add a transactional migration runner and `schema_migrations` table.
+- [x] Add House PTR extraction warning/metadata storage, a `collected_at` index, and legacy backfill.
+- [x] Preserve the first `collected_at` value during filing upserts.
+- [x] Classify filing extraction as `succeeded`, `photo_scanned`, `unparsed`, or `failed`.
+- [x] Skip already processed successful, photo-scanned, and unparsed filings while retrying failures.
+- [x] Add `collected_days` to the trading-report job contract and use it for daily PTR reports.
+- [x] Return filing-level results independently of extracted transaction rows.
+- [x] Render photo-scanned and unparsed filings with warnings and official document links.
+- [x] Bypass stale report artifacts when an explicit refresh is requested.
+- [x] Add migration, persistence, collection, API, cache, and renderer coverage.
+- [x] Run the full local test suite.
+- [x] Back up the VM database, deploy, restart, and smoke-test known filings.
 
 ## Fixed Behavior
 

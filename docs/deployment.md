@@ -80,6 +80,19 @@ sudo systemctl status stock-sum
 journalctl -u stock-sum -f
 ```
 
+For source-checkout upgrades, refresh the installed package before restarting
+the service; a non-editable virtualenv install does not change when the Git
+working tree changes:
+
+```bash
+sudo systemctl stop stock-sum
+cp -p data/stock_sum.sqlite3 data/stock_sum.sqlite3.pre-deploy
+git pull --ff-only
+.venv/bin/python -m pip install --no-deps .
+sudo systemctl start stock-sum
+curl -fsS http://127.0.0.1:8000/health
+```
+
 ## Docker
 
 Build and run:
