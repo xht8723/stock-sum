@@ -16,6 +16,7 @@ from stock_sum.collectors.api.adanos import (
     AdanosTrendingsResult,
     build_adanos_trending_requests,
 )
+from stock_sum.collectors.api.xpoz import XPOZ_USAGE_LIMIT_MESSAGE
 from stock_sum.config.loader import load_config
 from stock_sum.config.models import XUserSourceConfig
 from stock_sum.core.models import CollectionRunResult, PipelineCollectionResult, PipelineSectionWarning, Summary
@@ -117,6 +118,44 @@ async def test_report_job_fails_when_no_usable_social_data(tmp_path) -> None:
     assert status.artifact_path is None
     assert llm.calls == 0
     assert status.warnings[0]["source_id"] == "x.missing"
+
+
+async def test_report_job_surfaces_shared_xpoz_usage_limit_error(tmp_path) -> None:
+    failed_runs = [
+        CollectionRunResult(
+            run_id=f"run-{index}",
+            collector_id=collector_id,
+            source_type=source_type,
+            status="failed",
+            collected_count=0,
+            inserted_count=0,
+            updated_count=0,
+            sqlite_path=str(tmp_path / "stock_sum.sqlite3"),
+            error=XPOZ_USAGE_LIMIT_MESSAGE,
+        )
+        for index, (collector_id, source_type) in enumerate(
+            (("x.aleabitoreddit", "x_user_timeline"), ("reddit.wallstreetbets", "reddit_subreddit")),
+            start=1,
+        )
+    ]
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(PipelineCollectionResult(scope="social", runs=failed_runs)),
+        repository_factory=lambda: FakeRepository(with_social_data=False, house_rows=[]),
+        llm_client_factory=lambda: FakeLLM(),
+    )
+    options = SocialReportJobOptions(mode="discord")
+    job = manager.create_social_report_job(options)
+
+    await manager.run_social_report_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    assert status is not None
+    assert status.status == "failed"
+    assert status.error == (
+        f"Collection failed with no usable source data. {XPOZ_USAGE_LIMIT_MESSAGE} "
+        "Failed collectors: x.aleabitoreddit, reddit.wallstreetbets."
+    )
 
 
 async def test_social_report_ignores_house_only_data_and_requires_social_data(tmp_path) -> None:

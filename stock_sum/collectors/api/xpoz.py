@@ -82,6 +82,11 @@ REDDIT_COMMENT_FIELDS = [
     "stickied",
 ]
 
+XPOZ_USAGE_LIMIT_MESSAGE = (
+    "Xpoz usage limit exceeded. The configured Xpoz account has no remaining credits. "
+    "Upgrade the plan or add credits at https://xpoz.ai/usage, then retry."
+)
+
 
 class XpozError(StockSumError):
     """Base error for Xpoz provider failures."""
@@ -256,7 +261,12 @@ class XpozClient:
         texts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
         if not texts:
             raise XpozResponseError(f"Xpoz tool {tool_name} returned no text content.")
-        return "\n".join(texts)
+        text = "\n".join(texts)
+        tool_error = _xpoz_tool_error(tool_name, text)
+        if tool_error is not None:
+            self._record_provider_response(tool_name, arguments, text, [])
+            raise tool_error
+        return text
 
     async def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -814,6 +824,33 @@ def _media_type_from_url(url: str) -> str:
     if re.search(r"\.gif(\?|$)", url, re.IGNORECASE):
         return "gif"
     return "image"
+
+
+def _xpoz_tool_error(tool_name: str, text: str) -> XpozError | None:
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        match = re.match(r"^\s*(status|error|category|message|suggestion):\s*(.*?)\s*$", line, re.IGNORECASE)
+        if match:
+            fields[match.group(1).lower()] = _xpoz_error_value(match.group(2))
+
+    if fields.get("status", "").lower() not in {"error", "failed"}:
+        return None
+
+    category = fields.get("category", "").lower()
+    summary = fields.get("error") or fields.get("message") or category or "Unknown Xpoz tool error."
+    if category in {"usage_limit", "credits", "quota", "rate_limit"} or "usage limit" in summary.lower():
+        return XpozCreditsError(XPOZ_USAGE_LIMIT_MESSAGE)
+
+    detail = fields.get("message") or summary
+    return XpozResponseError(f"Xpoz tool {tool_name} failed: {detail}")
+
+
+def _xpoz_error_value(value: str) -> str:
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return value.strip().strip('"')
+    return str(parsed).strip()
 
 
 def _clear_provider_responses(client: Any) -> None:

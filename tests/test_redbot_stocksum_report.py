@@ -763,6 +763,25 @@ async def test_client_reports_failed_job() -> None:
         await client.run_social_report(output_format="html")
 
 
+async def test_client_preserves_xpoz_usage_limit_job_error() -> None:
+    error = (
+        "Collection failed with no usable source data. Xpoz usage limit exceeded. "
+        "The configured Xpoz account has no remaining credits. "
+        "Upgrade the plan or add credits at https://xpoz.ai/usage, then retry. "
+        "Failed collectors: x.aleabitoreddit, reddit.wallstreetbets."
+    )
+    session = FakeSession(
+        post_responses=[FakeResponse(202, {"job_id": "job-xpoz-limit"})],
+        get_responses=[FakeResponse(200, {"job_id": "job-xpoz-limit", "status": "failed", "error": error})],
+    )
+    client = StockSumHttpClient(session=session, poll_seconds=0)
+
+    with pytest.raises(StockSumRequestError) as exc_info:
+        await client.run_social_report(output_format="discord")
+
+    assert error in str(exc_info.value)
+
+
 async def test_client_downloads_successful_job_with_warnings() -> None:
     session = FakeSession(
         post_responses=[FakeResponse(202, {"job_id": "job-warn"})],
@@ -934,6 +953,31 @@ async def test_report_command_sends_failure_message(monkeypatch) -> None:
     assert interaction.channel.messages == [
         {
             "content": "stock-sum report failed: broken",
+            "suppress_embeds": True,
+        }
+    ]
+
+
+async def test_report_command_renders_xpoz_usage_limit_failure(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    error = (
+        "Collection failed with no usable source data. Xpoz usage limit exceeded. "
+        "The configured Xpoz account has no remaining credits. "
+        "Upgrade the plan or add credits at https://xpoz.ai/usage, then retry. "
+        "Failed collectors: x.aleabitoreddit, reddit.wallstreetbets."
+    )
+    monkeypatch.setattr(
+        "redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env",
+        lambda: FakeFailingStockSumClient(error),
+    )
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
+
+    await report.recent_posts(interaction)
+
+    assert interaction.channel.messages == [
+        {
+            "content": f"stock-sum report failed: {error}",
             "suppress_embeds": True,
         }
     ]
@@ -1880,20 +1924,23 @@ class FakeStockSumClient:
 
 
 class FakeFailingStockSumClient:
+    def __init__(self, message: str = "broken") -> None:
+        self.message = message
+
     async def run_social_report(self, *, output_format: str, detail: str = "minimum") -> StockSumArtifact:
-        raise StockSumRequestError("broken")
+        raise StockSumRequestError(self.message)
 
     async def run_trading_report(self, **kwargs: Any) -> StockSumArtifact:
-        raise StockSumRequestError("broken")
+        raise StockSumRequestError(self.message)
 
     async def run_13f_report(self, **kwargs: Any) -> StockSumArtifact:
-        raise StockSumRequestError("broken")
+        raise StockSumRequestError(self.message)
 
     async def run_statistic(self, **kwargs: Any) -> StockSumArtifact:
-        raise StockSumRequestError("broken")
+        raise StockSumRequestError(self.message)
 
     async def run_trendings_report(self, **kwargs: Any) -> StockSumArtifact:
-        raise StockSumRequestError("broken")
+        raise StockSumRequestError(self.message)
 
 
 class FakeDailyStockSumClient:

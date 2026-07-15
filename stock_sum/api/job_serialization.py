@@ -58,10 +58,23 @@ def _summary_input_has_social_data(summary_input: Any) -> bool:
 
 
 def _no_social_data_message(result: Any) -> str:
-    failed = [run.collector_id for run in result.runs if run.status == "failed"]
-    message = "Collection completed with no usable source data."
-    if failed:
-        message += f" Failed collectors: {', '.join(failed)}."
+    failed = [run for run in result.runs if run.status == "failed"]
+    if not failed:
+        return "Collection completed with no usable source data."
+
+    message = "Collection failed with no usable source data."
+    errors = [str(run.error).strip() for run in failed if getattr(run, "error", None)]
+    unique_errors = list(dict.fromkeys(errors))
+    if len(unique_errors) == 1:
+        message += f" {unique_errors[0]}"
+        if message[-1] not in ".!?":
+            message += "."
+        message += f" Failed collectors: {', '.join(run.collector_id for run in failed)}."
+    elif unique_errors:
+        details = [f"{run.collector_id}: {run.error or 'Collector failed.'}" for run in failed]
+        message += f" Collector errors: {'; '.join(details)}"
+    else:
+        message += f" Failed collectors: {', '.join(run.collector_id for run in failed)}."
     return message
 
 

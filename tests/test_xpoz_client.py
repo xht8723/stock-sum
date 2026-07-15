@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from stock_sum.collectors.api.xpoz import (
+    XPOZ_USAGE_LIMIT_MESSAGE,
     XpozAuthError,
     XpozClient,
     XpozCreditsError,
@@ -118,6 +119,45 @@ async def test_client_maps_http_errors(monkeypatch, status_code, expected_error)
 
     with pytest.raises(expected_error):
         await client.call_tool_rows("getTwitterPostsByAuthor", {"username": "aleabitoreddit"})
+
+
+async def test_client_maps_text_usage_limit_error_and_archives_response(monkeypatch) -> None:
+    raw_error = (
+        "status: error\n"
+        "error: Usage limit exceeded\n"
+        "category: usage_limit\n"
+        'message: "You have used 2,500 of 2,500 monthly credits on the Free plan."\n'
+        'suggestion: "Upgrade your plan or purchase extra credits."'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload["method"] == "initialize":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {}})
+        if payload["method"] == "notifications/initialized":
+            return httpx.Response(202)
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": raw_error}]}},
+        )
+
+    monkeypatch.setenv("XPOZ_API_KEY", "secret")
+    client = XpozClient(
+        api_key_env="XPOZ_API_KEY",
+        server_url="https://mcp.xpoz.ai/mcp",
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(XpozCreditsError, match="usage limit exceeded") as exc_info:
+        await client.call_tool_rows("getTwitterPostsByAuthor", {"username": "aleabitoreddit", "limit": 100})
+
+    assert str(exc_info.value) == XPOZ_USAGE_LIMIT_MESSAGE
+    responses = client.take_provider_responses()
+    assert len(responses) == 1
+    assert responses[0].raw_response_text == raw_error
+    assert responses[0].parsed_rows == []
+    assert responses[0].row_count == 0
 
 
 def test_parse_mcp_sse_json() -> None:
