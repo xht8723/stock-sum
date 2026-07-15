@@ -12,6 +12,7 @@ from stock_sum.storage.models import (
     StoredAdanosTrendingStock,
     StoredCollectionRun,
     StoredDownloadedMedia,
+    StoredHousePtrFiling,
     StoredHousePtrTradeRow,
     StoredRedditPost,
     StoredSec13FHolding,
@@ -149,7 +150,25 @@ class StorageRepository(Protocol):
         """Read stored Reddit posts with media and comments."""
 
     async def existing_house_ptr_doc_ids(self, *, year: int | None = None) -> set[str]:
-        """Return successfully extracted House PTR DocIDs safe to skip."""
+        """Return terminally processed House PTR DocIDs safe to skip."""
+
+    async def read_house_ptr_filings(
+        self,
+        *,
+        name_contains: str | None = None,
+        transaction_start: datetime | None = None,
+        transaction_end: datetime | None = None,
+        filing_start: datetime | None = None,
+        filing_end: datetime | None = None,
+        collected_start: datetime | None = None,
+        collected_end: datetime | None = None,
+        asset_type: str | None = None,
+        ticker: str | None = None,
+        limit: int | None = None,
+        order_by_filing_date: bool = False,
+        order_by_collected_at: bool = False,
+    ) -> list[StoredHousePtrFiling]:
+        """Read filing metadata, including filings with no transaction rows."""
 
     async def read_house_ptr_trades(
         self,
@@ -159,6 +178,8 @@ class StorageRepository(Protocol):
         transaction_end: datetime | None = None,
         filing_start: datetime | None = None,
         filing_end: datetime | None = None,
+        collected_start: datetime | None = None,
+        collected_end: datetime | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,

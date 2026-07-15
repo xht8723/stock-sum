@@ -107,6 +107,28 @@ def _house_ptr_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _house_ptr_filings_to_dicts(filings: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "doc_id": filing.doc_id,
+            "year": filing.year,
+            "name": filing.name,
+            "status": filing.status,
+            "state": filing.state,
+            "filing_date": filing.filing_date,
+            "filing_date_utc": filing.filing_date_utc,
+            "pdf_url": filing.pdf_url,
+            "extraction_status": filing.extraction_status,
+            "extraction_error": filing.extraction_error,
+            "extraction_warnings": filing.extraction_warnings,
+            "extraction_metadata": filing.extraction_metadata,
+            "transaction_count": filing.transaction_count,
+            "collected_at": filing.collected_at,
+        }
+        for filing in filings
+    ]
+
+
 def _sec_13f_rows_to_dicts(rows: list[Any]) -> list[dict[str, Any]]:
     return [
         {

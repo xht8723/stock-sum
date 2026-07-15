@@ -82,6 +82,7 @@ class TradingReportJobRequest(BaseModel):
     filing_start_date: str | None = None
     filing_end_date: str | None = None
     filing_days: int | None = Field(default=None, ge=1)
+    collected_days: int | None = Field(default=None, ge=1)
     asset_type: str | None = None
     ticker: str | None = None
     limit: int | None = Field(default=None, ge=1)

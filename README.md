@@ -127,6 +127,10 @@ Canonical job endpoints:
 - `GET|POST|DELETE /v1/sources/subreddits`
 
 Supported modes are `html`, `markdown`, `discord`, `text`, and `json`.
+Trading reports accept `collected_days` for filings first discovered within a
+rolling UTC window. Their JSON output keeps transaction rows in `house_ptr` and
+adds `house_ptr_filings` so photo-scanned or otherwise unparsed filings remain
+visible with their official PDF links even when no transactions were extracted.
 Statistics jobs are separate from report modes: they render a PNG chart plus a
 JSON summary sidecar from existing SQLite social analysis or House PTR rows.
 Statistic fuzzy matching can resolve Discord `fuzzy_search` input from social

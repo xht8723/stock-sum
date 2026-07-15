@@ -135,6 +135,10 @@ The cog uses:
 - `POST /v1/sources/subreddits`
 - `DELETE /v1/sources/subreddits/{subreddit}`
 
+For daily House PTR discovery, the trading endpoint accepts `collected_days`.
+The response includes filing-level `house_ptr_filings` alongside the existing
+transaction-level `house_ptr` rows so photo-scanned filings remain visible.
+
 ## Operations
 
 Health and config:

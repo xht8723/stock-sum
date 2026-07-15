@@ -235,7 +235,7 @@ async def test_due_daily_report_runs_once_per_utc_day() -> None:
     assert client.calls == [
         ("trendings", {"output_format": "json"}),
         ("social", {"output_format": "json", "detail": "minimum"}),
-        ("trading", {"output_format": "json", "filing_days": 1, "allow_empty": True}),
+        ("trading", {"output_format": "json", "collected_days": 1, "allow_empty": True}),
     ]
     assert len(user.dm_messages) == 4
     subscriptions = await report._daily_store.all_subscriptions()
@@ -331,7 +331,7 @@ async def test_daily_report_keeps_order_and_continues_after_job_failure() -> Non
     assert client.calls == [
         ("trendings", {"output_format": "json"}),
         ("social", {"output_format": "json", "detail": "minimum"}),
-        ("trading", {"output_format": "json", "filing_days": 1, "allow_empty": True}),
+        ("trading", {"output_format": "json", "collected_days": 1, "allow_empty": True}),
     ]
     messages = [message["content"] for message in user.dm_messages]
     assert messages[0].startswith("**Stock-Sum Daily Brief**")
@@ -406,12 +406,50 @@ def test_daily_renderer_keeps_ptr_last_and_preserves_every_disclosure_row() -> N
     ptr_index = next(index for index, message in enumerate(messages) if message.startswith("**House PTR Disclosures**"))
     assert all(message.startswith("**House PTR Disclosures") for message in messages[ptr_index:])
     ptr_text = "\n".join(messages[ptr_index:])
-    assert "Disclosure rows: `100`" in ptr_text
+    assert "New filings: `100` · disclosure rows: `100`" in ptr_text
     for index in range(100):
         assert f"**T{index:03d}**" in ptr_text
         assert f"[PDF](https://example.test/{index}.pdf)" in ptr_text
     assert "**House PTR Disclosures (continued)**" in ptr_text
     assert all(len(message) <= DAILY_MESSAGE_LIMIT for message in messages)
+
+
+def test_daily_renderer_displays_photo_scanned_filing_and_link() -> None:
+    url = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/9116211.pdf"
+    section = DailyReportSection(
+        kind="trading",
+        title="House PTR Disclosures",
+        payload={
+            "house_ptr": [],
+            "house_ptr_filings": [
+                {
+                    "doc_id": "9116211",
+                    "name": "Photo Filer",
+                    "filing_date": "2026-07-08",
+                    "pdf_url": url,
+                    "extraction_status": "photo_scanned",
+                    "transaction_count": 0,
+                }
+            ],
+            "filters": {
+                "collected_days": 1,
+                "collected_start": "2026-07-14T09:00:00+00:00",
+                "collected_end": "2026-07-15T09:00:00+00:00",
+            },
+        },
+    )
+
+    rendered = "\n".join(
+        _format_daily_report(
+            [section],
+            sent_utc_date="2026-07-15",
+            generated_at=datetime(2026, 7, 15, 9, 5, tzinfo=timezone.utc),
+        )
+    )
+
+    assert "The filing is photo scanned" in rendered
+    assert f"[PDF]({url})" in rendered
+    assert "No new House PTR filings" not in rendered
 
 
 def test_daily_renderer_sorts_and_caps_high_priority_social_signals() -> None:

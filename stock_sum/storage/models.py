@@ -122,6 +122,26 @@ class StoredRedditPost:
 
 
 @dataclass(frozen=True)
+class StoredHousePtrFiling:
+    """Stored House PTR filing metadata independent of transaction rows."""
+
+    doc_id: str
+    year: int
+    name: str | None
+    status: str | None
+    state: str | None
+    filing_date: str | None
+    filing_date_utc: str | None
+    pdf_url: str | None
+    extraction_status: str
+    extraction_error: str | None
+    extraction_warnings: list[dict[str, Any]]
+    extraction_metadata: dict[str, Any]
+    transaction_count: int
+    collected_at: str
+
+
+@dataclass(frozen=True)
 class StoredHousePtrTradeRow:
     """Stored House PTR trade row joined with filing metadata."""
 

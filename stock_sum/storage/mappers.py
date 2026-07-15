@@ -206,6 +206,8 @@ def _map_house_ptr_filing(item: RawItem) -> MappedRawItem:
             "tables_json": raw_json(item.metadata.get("tables", [])),
             "extraction_status": item.metadata.get("extraction_status"),
             "extraction_error": item.metadata.get("extraction_error"),
+            "extraction_warnings_json": raw_json(item.metadata.get("extraction_warnings", [])),
+            "extraction_metadata_json": raw_json(item.metadata.get("extraction_metadata", {})),
             "collected_at": item.collected_at.isoformat(),
         },
         media_rows=trade_rows,

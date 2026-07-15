@@ -362,6 +362,7 @@ class StockSumHttpClient:
         filing_start_date: str | None = None,
         filing_end_date: str | None = None,
         filing_days: int | None = None,
+        collected_days: int | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
@@ -372,7 +373,7 @@ class StockSumHttpClient:
 
         if output_format not in SUPPORTED_FORMATS:
             raise StockSumRequestError(f"Unsupported report format: {output_format}")
-        if not any((name, start_date, end_date, days, filing_start_date, filing_end_date, filing_days, asset_type, ticker)):
+        if not any((name, start_date, end_date, days, filing_start_date, filing_end_date, filing_days, collected_days, asset_type, ticker)):
             raise StockSumRequestError(
                 "ptr_search requires at least one filter: name, transaction dates, filing dates, asset_type, or ticker."
             )
@@ -387,6 +388,7 @@ class StockSumHttpClient:
                 "filing_start_date": filing_start_date,
                 "filing_end_date": filing_end_date,
                 "filing_days": filing_days,
+                "collected_days": collected_days,
                 "asset_type": asset_type,
                 "ticker": ticker,
                 "limit": limit,
@@ -1641,7 +1643,7 @@ class StockSumReport(commands.Cog):
                 "House PTR Disclosures",
                 lambda: client.run_trading_report(
                     output_format="json",
-                    filing_days=1,
+                    collected_days=1,
                     allow_empty=True,
                 ),
             )

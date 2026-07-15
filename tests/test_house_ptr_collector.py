@@ -8,6 +8,8 @@ from zipfile import ZipFile
 from stock_sum.collectors.api.house import (
     HousePtrDisclosureCollector,
     HousePtrFiling,
+    HousePtrPdfExtraction,
+    classify_house_ptr_extraction,
     house_ptr_raw_item,
     normalize_house_ptr_tables,
     parse_house_asset_metadata,
@@ -112,6 +114,34 @@ def test_house_ptr_item_contains_pdf_url_and_trade_rows() -> None:
     assert item.source_type == "house_ptr_disclosures"
     assert item.metadata["pdf_url"].endswith("/2026/20024228.pdf")
     assert item.metadata["trade_rows"][0]["fields"]["asset"] == "AAPL"
+
+
+def test_empty_text_and_tables_are_classified_as_photo_scanned() -> None:
+    status, rows, warnings = classify_house_ptr_extraction(
+        HousePtrPdfExtraction(tables=[], page_count=6, text_page_count=0),
+        pdf_url="https://example.test/photo.pdf",
+    )
+
+    assert status == "photo_scanned"
+    assert rows == []
+    assert warnings == [
+        {
+            "code": "house_ptr_photo_scanned",
+            "message": "The filing is photo scanned",
+            "source_url": "https://example.test/photo.pdf",
+        }
+    ]
+
+
+def test_text_without_transactions_is_unparsed_not_photo_scanned() -> None:
+    status, rows, warnings = classify_house_ptr_extraction(
+        HousePtrPdfExtraction(tables=[], page_count=1, text_page_count=1),
+        pdf_url="https://example.test/text.pdf",
+    )
+
+    assert status == "unparsed"
+    assert rows == []
+    assert warnings[0]["code"] == "house_ptr_unparsed"
 
 
 async def test_house_ptr_collector_uses_repository_existing_doc_ids() -> None:

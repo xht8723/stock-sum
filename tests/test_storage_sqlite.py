@@ -1,6 +1,9 @@
 """SQLite storage repository tests."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import asyncio
+import json
 
 import aiosqlite
 import pytest
@@ -10,6 +13,8 @@ from stock_sum.core.errors import UnsupportedSourceTypeError
 from stock_sum.core.models import ProviderApiResponse, RawItem
 from stock_sum.media.downloader import remote_url_hash
 from stock_sum.storage.models import StoredDownloadedMedia
+from stock_sum.storage.migrations import apply_migrations
+from stock_sum.storage.schema import SCHEMA_SQL
 from stock_sum.storage.sqlite import SQLiteStorageRepository
 
 
@@ -28,7 +33,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
             """
             SELECT name FROM sqlite_master
             WHERE type = 'table'
-              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              AND name IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "collection_runs",
@@ -52,6 +57,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
                 "raw_adanos_trending_stocks",
                 "raw_adanos_trending_sectors",
                 "adanos_response_cache_entries",
+                "schema_migrations",
             ),
         )
         try:
@@ -81,6 +87,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         "raw_adanos_trending_stocks",
         "raw_adanos_trending_sectors",
         "adanos_response_cache_entries",
+        "schema_migrations",
     }
 
     async with aiosqlite.connect(db_path) as db:
@@ -89,6 +96,7 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
         comment_columns = await _columns(db, "raw_reddit_comments")
         llm_x_columns = await _columns(db, "llm_x_post_analyses")
         llm_reddit_columns = await _columns(db, "llm_reddit_post_analyses")
+        house_columns = await _columns(db, "raw_house_ptr_filings")
     assert "posted_at_utc" in x_columns
     assert "created_at_utc" in reddit_columns
     assert "created_at_utc" in comment_columns
@@ -96,6 +104,67 @@ async def test_initialize_creates_expected_tables(tmp_path) -> None:
     assert "importance" in llm_reddit_columns
     assert "tickers_json" in llm_x_columns
     assert "tickers_json" in llm_reddit_columns
+    assert "extraction_warnings_json" in house_columns
+    assert "extraction_metadata_json" in house_columns
+
+
+async def test_house_ptr_migration_backfills_legacy_empty_success(tmp_path) -> None:
+    db_path = tmp_path / "legacy.sqlite3"
+    async with aiosqlite.connect(db_path) as db:
+        await db.executescript(SCHEMA_SQL)
+        await db.execute(
+            """
+            INSERT INTO raw_house_ptr_filings (
+                doc_id, year, raw_xml_json, tables_json, extraction_status, collected_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("legacy-empty", 2026, "{}", "[]", "succeeded", "2026-07-01T00:00:00+00:00"),
+        )
+        await db.commit()
+
+    await SQLiteStorageRepository(db_path).initialize()
+
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute(
+            "SELECT extraction_status, extraction_warnings_json, extraction_metadata_json FROM raw_house_ptr_filings"
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        migration_count = await _count_rows(db, "schema_migrations")
+    assert row[0] == "unparsed"
+    assert json.loads(row[1])[0]["code"] == "house_ptr_unparsed"
+    assert json.loads(row[2]) == {"classification": "legacy_backfill"}
+    assert migration_count == 1
+
+
+async def test_concurrent_initialization_applies_each_migration_once(tmp_path) -> None:
+    db_path = tmp_path / "concurrent.sqlite3"
+    repositories = [SQLiteStorageRepository(db_path) for _ in range(4)]
+
+    await asyncio.gather(*(repository.initialize() for repository in repositories))
+
+    async with aiosqlite.connect(db_path) as db:
+        assert await _count_rows(db, "schema_migrations") == 1
+
+
+async def test_failed_migration_rolls_back_changes(tmp_path, monkeypatch) -> None:
+    import stock_sum.storage.migrations as migrations
+
+    async def failing_migration(db: aiosqlite.Connection) -> None:
+        await db.execute("CREATE TABLE migration_should_rollback (value TEXT)")
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", ((99, "failing", failing_migration),))
+    db_path = tmp_path / "rollback.sqlite3"
+    async with aiosqlite.connect(db_path) as db:
+        with pytest.raises(RuntimeError, match="migration failed"):
+            await apply_migrations(db)
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration_should_rollback'"
+        )
+        assert await cursor.fetchone() is None
+        await cursor.close()
+        assert await _count_rows(db, "schema_migrations") == 0
 
 
 async def test_adanos_trendings_are_persisted_and_read(tmp_path) -> None:
@@ -897,6 +966,56 @@ async def test_save_and_read_house_ptr_disclosures(tmp_path) -> None:
             },
         )
     ]
+
+
+async def test_photo_scanned_house_ptr_is_queryable_without_trade_rows_and_preserves_collected_at(tmp_path) -> None:
+    db_path = tmp_path / "storage.sqlite3"
+    repository = SQLiteStorageRepository(db_path)
+    first_collected = datetime(2026, 7, 14, 12, 30, tzinfo=timezone.utc)
+    item = RawItem(
+        source_id="9116211",
+        source_type="house_ptr_disclosures",
+        url="https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/9116211.pdf",
+        text="Photo scanned House PTR disclosure",
+        collected_at=first_collected,
+        metadata={
+            "entity_type": "house_ptr_filing",
+            "doc_id": "9116211",
+            "year": 2026,
+            "name": "Photo Filer",
+            "filing_date": "2026-07-08",
+            "pdf_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/9116211.pdf",
+            "raw_xml": {"DocID": "9116211"},
+            "tables": [],
+            "trade_rows": [],
+            "extraction_status": "photo_scanned",
+            "extraction_error": None,
+            "extraction_warnings": [
+                {
+                    "code": "house_ptr_photo_scanned",
+                    "message": "The filing is photo scanned",
+                    "source_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/9116211.pdf",
+                }
+            ],
+            "extraction_metadata": {"page_count": 6, "text_page_count": 0, "table_count": 0},
+        },
+    )
+
+    await repository.save_raw_items([item])
+    await repository.save_raw_items([replace(item, collected_at=first_collected + timedelta(days=1))])
+
+    filings = await repository.read_house_ptr_filings(
+        collected_start=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        collected_end=datetime(2026, 7, 14, 23, 59, tzinfo=timezone.utc),
+        order_by_collected_at=True,
+    )
+    assert len(filings) == 1
+    assert filings[0].extraction_status == "photo_scanned"
+    assert filings[0].transaction_count == 0
+    assert filings[0].extraction_warnings[0]["message"] == "The filing is photo scanned"
+    assert filings[0].collected_at == first_collected.isoformat()
+    assert await repository.read_house_ptr_trades(collected_start=first_collected) == []
+    assert await repository.existing_house_ptr_doc_ids(year=2026) == {"9116211"}
 
 
 async def test_read_house_ptr_trades_filters_and_orders_by_filing_date(tmp_path) -> None:

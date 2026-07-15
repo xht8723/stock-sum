@@ -26,6 +26,7 @@ from stock_sum.storage.models import (
     StoredCollectionRun,
     StoredAdanosTrendingSector,
     StoredAdanosTrendingStock,
+    StoredHousePtrFiling,
     StoredHousePtrTradeRow,
     StoredSec13FHolding,
     StoredSocialStatisticPoint,
@@ -228,6 +229,42 @@ async def test_trading_report_allow_empty_is_opt_in(tmp_path) -> None:
     summary = json.loads(Path(allowed_status.summary_path or "").read_text(encoding="utf-8"))
     assert summary["house_ptr"] == []
     assert summary["filters"]["allow_empty"] is True
+
+
+async def test_trading_report_succeeds_for_photo_scanned_filing_without_rows(tmp_path) -> None:
+    filing = StoredHousePtrFiling(
+        doc_id="9116211",
+        year=2026,
+        name="Photo Filer",
+        status="Member",
+        state="CA",
+        filing_date="2026-07-08",
+        filing_date_utc="2026-07-08T00:00:00+00:00",
+        pdf_url="https://example.test/9116211.pdf",
+        extraction_status="photo_scanned",
+        extraction_error=None,
+        extraction_warnings=[{"code": "house_ptr_photo_scanned", "message": "The filing is photo scanned"}],
+        extraction_metadata={"page_count": 6, "text_page_count": 0, "table_count": 0},
+        transaction_count=0,
+        collected_at="2026-07-15T00:00:00+00:00",
+    )
+    repository = FakeRepository(with_social_data=False, house_rows=[], house_filings=[filing])
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: repository,
+    )
+    options = TradingReportJobOptions(mode="json", collected_days=1)
+    job = manager.create_trading_report_job(options)
+
+    await manager.run_trading_report_job(job.job_id, options)
+
+    status = manager.get_job(job.job_id)
+    assert status is not None and status.status == "succeeded"
+    summary = json.loads(Path(status.summary_path or "").read_text(encoding="utf-8"))
+    assert summary["house_ptr"] == []
+    assert summary["house_ptr_filings"][0]["extraction_status"] == "photo_scanned"
+    assert summary["filters"]["collected_days"] == 1
     assert summary["filters"]["limit"] == 100
 
 
@@ -267,7 +304,7 @@ async def test_trading_report_filters_by_filing_days_and_orders_by_filing_date(t
     repository = FakeRepository(
         with_social_data=False,
         house_rows=[
-            _house_row(doc_id="old-filing", transaction_date="2026-07-09", filing_date="2026-07-01"),
+            _house_row(doc_id="old-filing", transaction_date="2026-07-09", filing_date="2026-07-02"),
             _house_row(doc_id="new-filing", transaction_date="2026-06-20", filing_date="2026-07-08"),
         ],
     )
@@ -1192,6 +1229,51 @@ async def test_trading_report_uses_recent_cache(tmp_path) -> None:
     assert repository.house_read_calls == 1
 
 
+async def test_collected_days_bypasses_completed_cache(tmp_path) -> None:
+    repository = FakeRepository(with_social_data=False, house_rows=[_house_row()])
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: FakePipeline(_successful_collection_result()),
+        repository_factory=lambda: repository,
+    )
+    options = TradingReportJobOptions(mode="json", collected_days=1)
+    first_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(first_job.job_id, options)
+    second_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None and second_status.status == "succeeded"
+    assert second_status.cache_hit is False
+    assert repository.house_read_calls == 2
+
+
+async def test_due_house_refresh_bypasses_pre_refresh_cache(tmp_path, monkeypatch) -> None:
+    pipeline = FakePipeline(_successful_collection_result())
+    repository = FakeRepository(with_social_data=False, house_rows=[_house_row()])
+    manager = HttpJobManager(
+        _test_config(tmp_path),
+        pipeline_factory=lambda: pipeline,
+        repository_factory=lambda: repository,
+    )
+    options = TradingReportJobOptions(mode="json", name="Jane")
+    first_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(first_job.job_id, options)
+
+    async def refresh_due(_repository):
+        return True
+
+    monkeypatch.setattr(manager, "_house_ptr_refresh_needed", refresh_due)
+    second_job = manager.create_trading_report_job(options)
+    await manager.run_trading_report_job(second_job.job_id, options)
+
+    second_status = manager.get_job(second_job.job_id)
+    assert second_status is not None and second_status.status == "succeeded"
+    assert second_status.cache_hit is False
+    assert pipeline.calls == 1
+    assert repository.house_read_calls == 2
+
+
 async def test_trading_report_force_refresh_bypasses_completed_cache(tmp_path) -> None:
     pipeline = FakePipeline(_successful_collection_result())
     manager = HttpJobManager(
@@ -1680,9 +1762,10 @@ class FakePipeline:
 
 
 class FakeRepository:
-    def __init__(self, *, with_social_data: bool, house_rows=None, sec_13f_rows=None, social_statistic_points=None, trading_statistic_points=None) -> None:
+    def __init__(self, *, with_social_data: bool, house_rows=None, house_filings=None, sec_13f_rows=None, social_statistic_points=None, trading_statistic_points=None) -> None:
         self.with_social_data = with_social_data
         self.house_rows = house_rows or []
+        self.house_filings = house_filings
         self.sec_13f_rows = sec_13f_rows or []
         self.social_statistic_points = social_statistic_points or []
         self.trading_statistic_points = trading_statistic_points or []
@@ -1754,6 +1837,35 @@ class FakeRepository:
     async def existing_house_ptr_doc_ids(self, *, year=None):
         return set()
 
+    async def read_house_ptr_filings(self, **kwargs):
+        if self.house_filings is not None:
+            return list(self.house_filings)
+        filings = []
+        seen = set()
+        for row in self.house_rows:
+            if row.doc_id in seen:
+                continue
+            seen.add(row.doc_id)
+            filings.append(
+                StoredHousePtrFiling(
+                    doc_id=row.doc_id,
+                    year=row.year,
+                    name=row.name,
+                    status=row.status,
+                    state=row.state,
+                    filing_date=row.filing_date,
+                    filing_date_utc=row.filing_date_utc,
+                    pdf_url=row.pdf_url,
+                    extraction_status="succeeded",
+                    extraction_error=None,
+                    extraction_warnings=[],
+                    extraction_metadata={},
+                    transaction_count=sum(1 for candidate in self.house_rows if candidate.doc_id == row.doc_id),
+                    collected_at=row.collected_at,
+                )
+            )
+        return filings
+
     async def read_house_ptr_trades(
         self,
         *,
@@ -1762,6 +1874,8 @@ class FakeRepository:
         transaction_end=None,
         filing_start=None,
         filing_end=None,
+        collected_start=None,
+        collected_end=None,
         asset_type=None,
         ticker=None,
         limit=None,
@@ -1775,6 +1889,8 @@ class FakeRepository:
             "transaction_end": transaction_end,
             "filing_start": filing_start,
             "filing_end": filing_end,
+            "collected_start": collected_start,
+            "collected_end": collected_end,
             "order_by_filing_date": order_by_filing_date,
         }
         rows = list(self.house_rows)

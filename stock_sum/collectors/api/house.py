@@ -61,6 +61,19 @@ class HousePtrFiling:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class HousePtrPdfExtraction:
+    """Text and table signals extracted from a House PTR PDF."""
+
+    tables: list[list[list[str]]]
+    page_count: int
+    text_page_count: int
+
+    @property
+    def has_text(self) -> bool:
+        return self.text_page_count > 0
+
+
 class HousePtrDisclosureCollector:
     """Collect House PTR filings and their PDF table contents."""
 
@@ -106,13 +119,31 @@ class HousePtrDisclosureCollector:
                 async with download_semaphore:
                     pdf_bytes = await _download_bytes(client, pdf_url)
                 async with parse_semaphore:
-                    tables = await asyncio.to_thread(extract_pdf_tables, pdf_bytes)
-                extraction_status = "succeeded"
+                    extraction = await asyncio.to_thread(extract_pdf_content, pdf_bytes)
+                tables = extraction.tables
+                extraction_status, trade_rows, extraction_warnings = classify_house_ptr_extraction(
+                    extraction,
+                    pdf_url=pdf_url,
+                )
                 extraction_error = None
+                extraction_metadata = {
+                    "page_count": extraction.page_count,
+                    "text_page_count": extraction.text_page_count,
+                    "table_count": len(tables),
+                }
             except Exception as exc:
                 tables = []
+                trade_rows = []
                 extraction_status = "failed"
                 extraction_error = str(exc)
+                extraction_warnings = [
+                    {
+                        "code": "house_ptr_extraction_failed",
+                        "message": str(exc),
+                        "source_url": pdf_url,
+                    }
+                ]
+                extraction_metadata = {}
                 self.warnings.append(
                     PipelineSectionWarning(
                         section="house_ptr",
@@ -121,7 +152,6 @@ class HousePtrDisclosureCollector:
                         message=str(exc),
                     )
                 )
-            trade_rows = normalize_house_ptr_tables(tables)
             return house_ptr_raw_item(
                 filing,
                 pdf_url=pdf_url,
@@ -129,6 +159,8 @@ class HousePtrDisclosureCollector:
                 trade_rows=trade_rows,
                 extraction_status=extraction_status,
                 extraction_error=extraction_error,
+                extraction_warnings=extraction_warnings,
+                extraction_metadata=extraction_metadata,
             )
 
         items = await asyncio.gather(*(build_item(filing) for filing in filings))
@@ -213,19 +245,69 @@ def parse_house_filing_xml(content: bytes, *, year: int) -> HousePtrFiling | Non
 def extract_pdf_tables(content: bytes) -> list[list[list[str]]]:
     """Extract tables from PTR PDF bytes with pdfplumber."""
 
+    return extract_pdf_content(content).tables
+
+
+def extract_pdf_content(content: bytes) -> HousePtrPdfExtraction:
+    """Extract table data and detect whether a PTR PDF has selectable text."""
+
     try:
         import pdfplumber
     except ImportError as exc:
         raise RuntimeError("pdfplumber is required for House PTR PDF extraction.") from exc
 
     tables: list[list[list[str]]] = []
+    page_count = 0
+    text_page_count = 0
     with pdfplumber.open(BytesIO(content)) as pdf:
         for page in pdf.pages:
+            page_count += 1
+            if (page.extract_text() or "").strip():
+                text_page_count += 1
             for table in page.extract_tables() or []:
                 cleaned = [[_clean_cell(cell) for cell in row] for row in table if row]
                 if cleaned:
                     tables.append(cleaned)
-    return tables
+    return HousePtrPdfExtraction(
+        tables=tables,
+        page_count=page_count,
+        text_page_count=text_page_count,
+    )
+
+
+def classify_house_ptr_extraction(
+    extraction: HousePtrPdfExtraction,
+    *,
+    pdf_url: str,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Classify an extracted PDF and return status, trade rows, and warnings."""
+
+    trade_rows = normalize_house_ptr_tables(extraction.tables)
+    if trade_rows:
+        return "succeeded", trade_rows, []
+    if not extraction.has_text and not extraction.tables:
+        return (
+            "photo_scanned",
+            [],
+            [
+                {
+                    "code": "house_ptr_photo_scanned",
+                    "message": "The filing is photo scanned",
+                    "source_url": pdf_url,
+                }
+            ],
+        )
+    return (
+        "unparsed",
+        [],
+        [
+            {
+                "code": "house_ptr_unparsed",
+                "message": "No House PTR transactions could be extracted from this filing.",
+                "source_url": pdf_url,
+            }
+        ],
+    )
 
 
 def normalize_house_ptr_tables(tables: list[list[list[str]]]) -> list[dict[str, Any]]:
@@ -270,6 +352,8 @@ def house_ptr_raw_item(
     trade_rows: list[dict[str, Any]],
     extraction_status: str,
     extraction_error: str | None,
+    extraction_warnings: list[dict[str, Any]] | None = None,
+    extraction_metadata: dict[str, Any] | None = None,
 ) -> RawItem:
     """Create a source-specific raw item for one House PTR filing."""
 
@@ -299,6 +383,8 @@ def house_ptr_raw_item(
             "trade_rows": trade_rows,
             "extraction_status": extraction_status,
             "extraction_error": extraction_error,
+            "extraction_warnings": extraction_warnings or [],
+            "extraction_metadata": extraction_metadata or {},
         },
     )
 

@@ -23,17 +23,20 @@ def validate_trading_filters(options: TradingReportJobOptions) -> None:
             options.filing_start_date,
             options.filing_end_date,
             options.filing_days,
+            options.collected_days,
             options.asset_type,
             options.ticker,
         )
     ):
         raise ValueError(
-            "Trading report requires at least one filter: name, transaction dates, filing dates, days, asset_type, or ticker."
+            "Trading report requires at least one filter: name, transaction dates, filing dates, collected_days, days, asset_type, or ticker."
         )
     if options.days is not None and options.days < 1:
         raise ValueError("Trading report days must be a positive integer.")
     if options.filing_days is not None and options.filing_days < 1:
         raise ValueError("Trading report filing_days must be a positive integer.")
+    if options.collected_days is not None and options.collected_days < 1:
+        raise ValueError("Trading report collected_days must be a positive integer.")
     if options.days is not None and (options.start_date or options.end_date):
         raise ValueError("Trading report accepts either days or explicit start/end dates, not both.")
     if options.filing_days is not None and (options.filing_start_date or options.filing_end_date):
@@ -131,6 +134,13 @@ def trading_filing_date_window(options: TradingReportJobOptions) -> tuple[dateti
     )
 
 
+def trading_collected_window(options: TradingReportJobOptions) -> tuple[datetime | None, datetime | None]:
+    if options.collected_days is None:
+        return None, None
+    now = datetime.now(timezone.utc)
+    return now - timedelta(days=options.collected_days), now
+
+
 def statistic_date_window(options: StatisticJobOptions) -> tuple[datetime | None, datetime | None]:
     if options.days is not None:
         now = datetime.now(timezone.utc)
@@ -187,6 +197,8 @@ def trading_filter_data(
     transaction_end: datetime | None,
     filing_start: datetime | None,
     filing_end: datetime | None,
+    collected_start: datetime | None,
+    collected_end: datetime | None,
 ) -> dict[str, Any]:
     return {
         "name": options.name,
@@ -196,12 +208,15 @@ def trading_filter_data(
         "filing_start_date": options.filing_start_date,
         "filing_end_date": options.filing_end_date,
         "filing_days": options.filing_days,
+        "collected_days": options.collected_days,
         "asset_type": options.asset_type,
         "ticker": options.ticker,
         "transaction_start": transaction_start.isoformat() if transaction_start else None,
         "transaction_end": transaction_end.isoformat() if transaction_end else None,
         "filing_start": filing_start.isoformat() if filing_start else None,
         "filing_end": filing_end.isoformat() if filing_end else None,
+        "collected_start": collected_start.isoformat() if collected_start else None,
+        "collected_end": collected_end.isoformat() if collected_end else None,
         "limit": options.limit,
         "force_refresh": options.force_refresh,
         "allow_empty": options.allow_empty,
@@ -276,6 +291,7 @@ _validate_trendings_filters = validate_trendings_filters
 _validate_statistic_filters = validate_statistic_filters
 _trading_date_window = trading_date_window
 _trading_filing_date_window = trading_filing_date_window
+_trading_collected_window = trading_collected_window
 _statistic_date_window = statistic_date_window
 _trendings_date_window = trendings_date_window
 _parse_yyyy_mm_dd = parse_yyyy_mm_dd

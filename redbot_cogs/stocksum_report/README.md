@@ -76,7 +76,9 @@ message chunks.
 Plot output is always a PNG file attachment.
 `/daily` stores a per-user UTC delivery time in `HH:MM` format and sends one
 daily DM containing `/trendings`, `/recent_posts` default output, and
-`/ptr_search filing_days:1` output for newly filed PTR disclosures. Report jobs
+the trading report's internal `collected_days:1` output for PTR disclosures
+first discovered during the rolling last 24 hours. Photo-scanned filings are
+shown with an explicit warning and their official PDF link. Report jobs
 start 30 minutes before the configured UTC time; if the configured time is
 already inside that 30-minute window, the next scheduler check starts the jobs
 immediately. The cog checks schedules locally; stock-sum does not run outbound

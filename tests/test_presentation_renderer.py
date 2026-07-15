@@ -473,6 +473,50 @@ def test_renderer_outputs_house_ptr_disclosures_in_all_modes() -> None:
     assert "Source: https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20024228.pdf" in text
 
 
+def test_renderer_outputs_photo_scanned_filing_without_trade_rows() -> None:
+    url = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/9116211.pdf"
+    response = {
+        "summary": {
+            "house_ptr": [],
+            "house_ptr_filings": [
+                {
+                    "doc_id": "9116211",
+                    "year": 2026,
+                    "name": "Photo Filer",
+                    "filing_date": "2026-07-08",
+                    "pdf_url": url,
+                    "extraction_status": "photo_scanned",
+                    "transaction_count": 0,
+                }
+            ],
+        },
+        "house_ptr": [],
+        "house_ptr_filings": [
+            {
+                "doc_id": "9116211",
+                "year": 2026,
+                "name": "Photo Filer",
+                "filing_date": "2026-07-08",
+                "pdf_url": url,
+                "extraction_status": "photo_scanned",
+                "transaction_count": 0,
+            }
+        ],
+    }
+
+    html = PresentationRenderer().render_trading(response, mode="html")
+    markdown = PresentationRenderer().render_trading(response, mode="markdown")
+    discord = PresentationRenderer().render_trading(response, mode="discord")
+    text = PresentationRenderer().render_trading(response, mode="text")
+
+    for rendered in (html, markdown, discord, text):
+        assert "The filing is photo scanned" in rendered
+        assert url in rendered
+    assert f'href="{url}"' in html
+    assert f"[Read PDF]({url})" in markdown
+    assert f"[PDF]({url})" in discord
+
+
 def test_renderer_outputs_sec_13f_holdings_in_all_modes() -> None:
     response = {
         "summary": {

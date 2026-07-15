@@ -45,6 +45,7 @@ from stock_sum.api.job_serialization import (
     _adanos_stock_rows_to_dicts,
     _adanos_trending_change_dicts,
     _analysis_response_data,
+    _house_ptr_filings_to_dicts,
     _house_ptr_rows_to_dicts,
     _jsonable,
     _no_social_data_message,
@@ -68,6 +69,7 @@ from stock_sum.api.job_validation import (
     _statistic_date_window,
     _statistic_filter_data,
     _trading_date_window,
+    _trading_collected_window,
     _trading_filing_date_window,
     _trading_filter_data,
     _trendings_date_window,
@@ -449,7 +451,13 @@ class HttpJobManager:
             job = self._require_job(job_id)
             cache_key = job.cache_key or self._artifact_job_cache_key("trading_report", options)
             self._update(job_id, cache_key=cache_key)
-            if not self._bypass_completed_cache("trading_report", options):
+            repository = self._repository_factory()
+            self._mark_running(job_id, phase="refresh_check")
+            refresh_required = False
+            if self.config.sources.house_ptr.enabled:
+                refresh_required = options.force_refresh or await self._house_ptr_refresh_needed(repository)
+            if not refresh_required and not self._bypass_completed_cache("trading_report", options):
+                self._update(job_id, phase="cache_lookup")
                 cache_hit = self._find_report_cache_hit(job_id, cache_key, kind="trading_report")
                 if cache_hit is not None:
                     self._write_cached_artifact_job_artifacts(job_id, cache_hit, options)
@@ -458,14 +466,11 @@ class HttpJobManager:
             if not is_inflight_leader:
                 await self._wait_for_coalesced_report(job_id, inflight_report, options)
                 return
-
-            self._mark_running(job_id, phase="refresh_check")
-            repository = self._repository_factory()
             warnings: list[PipelineSectionWarning] = []
             collection_result: PipelineCollectionResult | None = None
 
             if self.config.sources.house_ptr.enabled:
-                if options.force_refresh or await self._house_ptr_refresh_needed(repository):
+                if refresh_required:
                     self._update(job_id, phase="refreshing_house_ptr")
                     run = await self._pipeline_factory().collect_collector(
                         "house.ptr",
@@ -495,31 +500,60 @@ class HttpJobManager:
             self._update(job_id, phase="querying")
             transaction_start, transaction_end = _trading_date_window(options)
             filing_start, filing_end = _trading_filing_date_window(options)
+            collected_start, collected_end = _trading_collected_window(options)
             order_by_filing_date = filing_start is not None or filing_end is not None
+            order_by_collected_at = collected_start is not None or collected_end is not None
+            filings = await repository.read_house_ptr_filings(
+                name_contains=options.name,
+                transaction_start=transaction_start,
+                transaction_end=transaction_end,
+                filing_start=filing_start,
+                filing_end=filing_end,
+                collected_start=collected_start,
+                collected_end=collected_end,
+                asset_type=options.asset_type,
+                ticker=options.ticker,
+                limit=options.limit,
+                order_by_filing_date=order_by_filing_date,
+                order_by_collected_at=order_by_collected_at,
+            )
             rows = await repository.read_house_ptr_trades(
                 name_contains=options.name,
                 transaction_start=transaction_start,
                 transaction_end=transaction_end,
                 filing_start=filing_start,
                 filing_end=filing_end,
+                collected_start=collected_start,
+                collected_end=collected_end,
                 asset_type=options.asset_type,
                 ticker=options.ticker,
                 limit=options.limit,
                 order_by_filing_date=order_by_filing_date,
             )
             rows = _sort_house_ptr_rows(rows, prefer_filing_date=order_by_filing_date)
-            if not rows and not options.allow_empty:
-                message = "No House PTR trade rows matched the trading report filters."
+            if not filings and not rows and not options.allow_empty:
+                message = "No House PTR filings matched the trading report filters."
                 if warnings:
                     message += " Refresh warnings: " + "; ".join(warning.message for warning in warnings)
                 raise RuntimeError(message)
 
             warning_data = _warnings_to_dicts(warnings)
+            filing_data = _house_ptr_filings_to_dicts(filings)
+            row_data = _house_ptr_rows_to_dicts(rows)
             response_data = {
                 "report_type": "trading",
-                "summary": {"house_ptr": _house_ptr_rows_to_dicts(rows)},
-                "house_ptr": _house_ptr_rows_to_dicts(rows),
-                "filters": _trading_filter_data(options, transaction_start, transaction_end, filing_start, filing_end),
+                "summary": {"house_ptr": row_data, "house_ptr_filings": filing_data},
+                "house_ptr": row_data,
+                "house_ptr_filings": filing_data,
+                "filters": _trading_filter_data(
+                    options,
+                    transaction_start,
+                    transaction_end,
+                    filing_start,
+                    filing_end,
+                    collected_start,
+                    collected_end,
+                ),
                 "pipeline_warnings": warning_data,
                 "failed_sections": warning_data,
             }
@@ -1719,6 +1753,7 @@ class HttpJobManager:
                         "filing_start_date": options.filing_start_date,
                         "filing_end_date": options.filing_end_date,
                         "filing_days": options.filing_days,
+                        "collected_days": options.collected_days,
                         "asset_type": options.asset_type,
                         "ticker": options.ticker,
                         "limit": options.limit,
@@ -1826,7 +1861,11 @@ class HttpJobManager:
         kind: JobKind,
         options: SocialReportJobOptions | TradingReportJobOptions | Sec13FReportJobOptions | TrendingsReportJobOptions | StatisticJobOptions,
     ) -> bool:
-        return kind in {"trading_report", "13f_report"} and bool(getattr(options, "force_refresh", False))
+        if kind not in {"trading_report", "13f_report"}:
+            return False
+        if bool(getattr(options, "force_refresh", False)):
+            return True
+        return kind == "trading_report" and getattr(options, "collected_days", None) is not None
 
     def _structured_cache_key(self, payload: dict[str, Any]) -> str:
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)

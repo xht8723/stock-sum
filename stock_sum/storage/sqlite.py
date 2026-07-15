@@ -26,6 +26,7 @@ from stock_sum.storage.models import (
     StoredAdanosTrendingStock,
     StoredCollectionRun,
     StoredDownloadedMedia,
+    StoredHousePtrFiling,
     StoredHousePtrTradeRow,
     StoredMediaAsset,
     StoredRedditComment,
@@ -57,6 +58,7 @@ from stock_sum.storage.json_codec import (
 )
 from stock_sum.storage.analysis_writes import _replace_llm_reddit_ticker_rows, _replace_llm_x_ticker_rows
 from stock_sum.storage.media_sqlite import _get_downloaded_media, _upsert_downloaded_media
+from stock_sum.storage.migrations import apply_migrations
 from stock_sum.storage.schema import SCHEMA_SQL
 
 
@@ -71,8 +73,9 @@ class SQLiteStorageRepository:
 
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.sqlite_path) as db:
+            await db.execute("PRAGMA busy_timeout = 30000")
             await db.executescript(SCHEMA_SQL)
-            await db.commit()
+            await apply_migrations(db)
 
     async def start_collection_run(
         self,
@@ -1113,11 +1116,11 @@ class SQLiteStorageRepository:
         return posts
 
     async def existing_house_ptr_doc_ids(self, *, year: int | None = None) -> set[str]:
-        """Return successfully extracted House PTR DocIDs safe to skip."""
+        """Return terminally processed House PTR DocIDs safe to skip."""
 
         await self.initialize()
-        query = "SELECT doc_id FROM raw_house_ptr_filings WHERE extraction_status = ?"
-        params: list[Any] = ["succeeded"]
+        query = "SELECT doc_id FROM raw_house_ptr_filings WHERE extraction_status IN (?, ?, ?)"
+        params: list[Any] = ["succeeded", "photo_scanned", "unparsed"]
         if year is not None:
             query += " AND year = ?"
             params.append(year)
@@ -1129,6 +1132,110 @@ class SQLiteStorageRepository:
                 await cursor.close()
         return {str(row[0]) for row in rows}
 
+    async def read_house_ptr_filings(
+        self,
+        *,
+        name_contains: str | None = None,
+        transaction_start: datetime | None = None,
+        transaction_end: datetime | None = None,
+        filing_start: datetime | None = None,
+        filing_end: datetime | None = None,
+        collected_start: datetime | None = None,
+        collected_end: datetime | None = None,
+        asset_type: str | None = None,
+        ticker: str | None = None,
+        limit: int | None = None,
+        order_by_filing_date: bool = False,
+        order_by_collected_at: bool = False,
+    ) -> list[StoredHousePtrFiling]:
+        """Read filing metadata independently of extracted transaction rows."""
+
+        await self.initialize()
+        query = """
+            SELECT f.doc_id, f.year, COALESCE(f.display_name, f.name), f.status, f.state,
+                   f.filing_date, f.filing_date_utc, f.pdf_url, f.extraction_status,
+                   f.extraction_error, f.extraction_warnings_json, f.extraction_metadata_json,
+                   (SELECT COUNT(*) FROM raw_house_ptr_trade_rows count_rows WHERE count_rows.doc_id = f.doc_id),
+                   f.collected_at
+            FROM raw_house_ptr_filings f
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+        normalized_name = normalize_house_name(name_contains)
+        if normalized_name:
+            conditions.append("f.name_normalized LIKE ?")
+            params.append(f"%{normalized_name}%")
+        if filing_start is not None:
+            conditions.append("f.filing_date_utc >= ?")
+            params.append(_datetime_param(filing_start))
+        if filing_end is not None:
+            conditions.append("f.filing_date_utc <= ?")
+            params.append(_datetime_param(filing_end, end_of_day=True))
+        if collected_start is not None:
+            conditions.append("f.collected_at >= ?")
+            params.append(_datetime_param(collected_start))
+        if collected_end is not None:
+            conditions.append("f.collected_at <= ?")
+            params.append(_datetime_param(collected_end))
+
+        trade_conditions: list[str] = []
+        if transaction_start is not None:
+            trade_conditions.append("trade.transaction_date_utc >= ?")
+            params.append(_datetime_param(transaction_start))
+        if transaction_end is not None:
+            trade_conditions.append("trade.transaction_date_utc <= ?")
+            params.append(_datetime_param(transaction_end, end_of_day=True))
+        normalized_asset_type = _normalized_upper_filter(asset_type)
+        if normalized_asset_type:
+            trade_conditions.append("UPPER(trade.asset_type_code) = ?")
+            params.append(normalized_asset_type)
+        normalized_ticker = _normalized_upper_filter(ticker)
+        if normalized_ticker:
+            trade_conditions.append("UPPER(trade.stock_ticker) = ?")
+            params.append(normalized_ticker)
+        if trade_conditions:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM raw_house_ptr_trade_rows trade WHERE trade.doc_id = f.doc_id AND "
+                + " AND ".join(trade_conditions)
+                + ")"
+            )
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        if order_by_collected_at:
+            query += " ORDER BY f.collected_at DESC, f.doc_id DESC"
+        elif order_by_filing_date:
+            query += " ORDER BY COALESCE(f.filing_date_utc, f.collected_at) DESC, f.collected_at DESC, f.doc_id DESC"
+        else:
+            query += " ORDER BY f.collected_at DESC, f.doc_id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        async with aiosqlite.connect(self.sqlite_path) as db:
+            cursor = await db.execute(query, params)
+            try:
+                rows = await cursor.fetchall()
+            finally:
+                await cursor.close()
+        return [
+            StoredHousePtrFiling(
+                doc_id=row[0],
+                year=row[1],
+                name=row[2],
+                status=row[3],
+                state=row[4],
+                filing_date=row[5],
+                filing_date_utc=row[6],
+                pdf_url=row[7],
+                extraction_status=row[8],
+                extraction_error=row[9],
+                extraction_warnings=[item for item in _json_list(row[10]) if isinstance(item, dict)],
+                extraction_metadata=_json_obj(row[11]),
+                transaction_count=int(row[12] or 0),
+                collected_at=row[13],
+            )
+            for row in rows
+        ]
+
     async def read_house_ptr_trades(
         self,
         *,
@@ -1137,6 +1244,8 @@ class SQLiteStorageRepository:
         transaction_end: datetime | None = None,
         filing_start: datetime | None = None,
         filing_end: datetime | None = None,
+        collected_start: datetime | None = None,
+        collected_end: datetime | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
@@ -1173,6 +1282,12 @@ class SQLiteStorageRepository:
         if filing_end is not None:
             conditions.append("f.filing_date_utc <= ?")
             params.append(_datetime_param(filing_end, end_of_day=True))
+        if collected_start is not None:
+            conditions.append("f.collected_at >= ?")
+            params.append(_datetime_param(collected_start))
+        if collected_end is not None:
+            conditions.append("f.collected_at <= ?")
+            params.append(_datetime_param(collected_end))
         normalized_asset_type = _normalized_upper_filter(asset_type)
         if normalized_asset_type:
             conditions.append("UPPER(r.asset_type_code) = ?")
@@ -2228,10 +2343,12 @@ async def _upsert_house_ptr_filing(db: aiosqlite.Connection, row: dict[str, Any]
             doc_id, year, name, prefix, first_name, last_name, suffix, display_name,
             name_normalized, status, state, filing_date, filing_date_utc, pdf_url,
             raw_xml_json, tables_json, extraction_status, extraction_error, collected_at
+            , extraction_warnings_json, extraction_metadata_json
         ) VALUES (
             :doc_id, :year, :name, :prefix, :first_name, :last_name, :suffix, :display_name,
             :name_normalized, :status, :state, :filing_date, :filing_date_utc, :pdf_url,
             :raw_xml_json, :tables_json, :extraction_status, :extraction_error, :collected_at
+            , :extraction_warnings_json, :extraction_metadata_json
         )
         ON CONFLICT (doc_id) DO UPDATE SET
             year = excluded.year,
@@ -2251,7 +2368,8 @@ async def _upsert_house_ptr_filing(db: aiosqlite.Connection, row: dict[str, Any]
             tables_json = excluded.tables_json,
             extraction_status = excluded.extraction_status,
             extraction_error = excluded.extraction_error,
-            collected_at = excluded.collected_at
+            extraction_warnings_json = excluded.extraction_warnings_json,
+            extraction_metadata_json = excluded.extraction_metadata_json
         """,
         row,
     )

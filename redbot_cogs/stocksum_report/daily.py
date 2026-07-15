@@ -272,20 +272,27 @@ def _render_daily_trading(section: DailyReportSection) -> list[str]:
             ["_Rolling filing window: last 24 hours_", f"_Unavailable: {_compact_text(section.error, 500)}_"],
         )
     payload = section.payload or {}
-    rows = _dict_items(payload.get("house_ptr") or _dict_value(payload.get("summary")).get("house_ptr"))
+    summary = _dict_value(payload.get("summary"))
+    rows = _dict_items(payload.get("house_ptr") or summary.get("house_ptr"))
+    filings = _dict_items(payload.get("house_ptr_filings") or summary.get("house_ptr_filings"))
+    if not filings:
+        filings = _filings_from_trade_rows(rows)
     filters = _dict_value(payload.get("filters"))
-    blocks = ["_Rolling filing window: last 24 hours_"]
-    filing_start = _compact_text(filters.get("filing_start"), 80)
-    filing_end = _compact_text(filters.get("filing_end"), 80)
-    if filing_start or filing_end:
-        blocks.append(f"UTC coverage: `{filing_start or '?'}` to `{filing_end or '?'}`")
+    blocks = ["_Rolling collection window: last 24 hours_"]
+    collected_start = _compact_text(filters.get("collected_start"), 80)
+    collected_end = _compact_text(filters.get("collected_end"), 80)
+    if collected_start or collected_end:
+        blocks.append(f"UTC coverage: `{collected_start or '?'}` to `{collected_end or '?'}`")
     blocks.extend(_warning_blocks(section))
-    if not rows:
+    if not filings:
         blocks.append("_No new House PTR filings in the rolling last 24 hours._")
         return _pack_daily_section(section.title, blocks)
 
-    blocks.append(f"Disclosure rows: `{len(rows)}`")
-    blocks.extend(_trading_disclosure_block(row) for row in rows)
+    blocks.append(f"New filings: `{len(filings)}` · disclosure rows: `{len(rows)}`")
+    rows_by_doc: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        rows_by_doc.setdefault(str(row.get("doc_id") or ""), []).append(row)
+    blocks.extend(_trading_filing_block(filing, rows_by_doc.get(str(filing.get("doc_id") or ""), [])) for filing in filings)
     return _pack_daily_section(section.title, blocks)
 
 
@@ -509,6 +516,37 @@ def _trading_disclosure_block(row: dict[str, Any]) -> str:
     if row.get("pdf_url"):
         lines.append(f"[PDF]({row['pdf_url']})")
     return "\n".join(lines)
+
+
+def _trading_filing_block(filing: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    name = _compact_text(filing.get("name") or "Unknown filer", 120)
+    filer_parts = [name]
+    filer_parts.extend(_compact_text(filing.get(key), 60) for key in ("status", "state") if filing.get(key))
+    lines = [f"**{' / '.join(filer_parts)}**"]
+    if filing.get("filing_date"):
+        lines.append(f"Filed {_compact_text(filing.get('filing_date'), 40)}")
+    extraction_status = str(filing.get("extraction_status") or "")
+    if extraction_status == "photo_scanned":
+        lines.append("The filing is photo scanned")
+    elif extraction_status == "unparsed":
+        lines.append("No House PTR transactions could be extracted from this filing.")
+    for row in rows:
+        lines.append(_trading_disclosure_block({**filing, **row}))
+    if not rows and filing.get("pdf_url"):
+        lines.append(f"[PDF]({filing['pdf_url']})")
+    return "\n".join(lines)
+
+
+def _filings_from_trade_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        key = str(row.get("doc_id") or f"legacy-{index}")
+        if key in seen:
+            continue
+        seen.add(key)
+        filings.append(row)
+    return filings
 
 
 def _trending_tickers(payload: dict[str, Any]) -> set[str]:

@@ -152,6 +152,7 @@ def _html_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
     body_rows = []
     for row in rows:
         pdf_url = row.get("pdf_url")
+        warning = _house_extraction_warning(row)
         link = ""
         if pdf_url:
             link = f'<a href="{escape(str(pdf_url), quote=True)}" rel="noreferrer">PDF</a>'
@@ -161,7 +162,7 @@ def _html_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
             f"<td>{escape(_house_value(row.get('status')))}</td>"
             f"<td>{escape(_house_value(row.get('state')))}</td>"
             f"<td>{escape(_house_value(row.get('filing_date')))}</td>"
-            f"<td>{escape(_house_value(row.get('asset') or _raw_cells_preview(row)))}</td>"
+            f"<td>{escape(warning or _house_value(row.get('asset') or _raw_cells_preview(row)))}</td>"
             f"<td>{escape(_house_asset_type(row))}</td>"
             f"<td>{escape(_house_value(row.get('stock_ticker')))}</td>"
             f"<td>{escape(_house_trade_action(row.get('transaction_action') or row.get('transaction_type')))}</td>"
@@ -278,6 +279,12 @@ def _markdown_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> st
         title = " / ".join(str(value) for value in (row.get("name"), row.get("status"), row.get("state")) if value)
         lines.append(f"- **{title or 'Unknown filer'}**")
         lines.append(f"  - Filed: {_house_value(row.get('filing_date'))}")
+        warning = _house_extraction_warning(row)
+        if warning:
+            lines.append(f"  - Warning: {warning}")
+            if row.get("pdf_url"):
+                lines.append(f"  - Source: [Read PDF]({row['pdf_url']})")
+            continue
         lines.append(f"  - Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
         if _house_asset_type(row):
             lines.append(f"  - Type: {_house_asset_type(row)}")
@@ -364,6 +371,11 @@ def _discord_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str
         return "\n".join([*lines, "_No official trading disclosures._"])
     for row in rows:
         title = " / ".join(str(value) for value in (row.get("name"), row.get("status"), row.get("state")) if value)
+        warning = _house_extraction_warning(row)
+        if warning:
+            source = f" [PDF]({row['pdf_url']})" if row.get("pdf_url") else ""
+            lines.append(f"- **{title or 'Unknown filer'}**: {warning}{source}")
+            continue
         detail = " · ".join(
             part
             for part in (
@@ -460,6 +472,12 @@ def _text_house_ptr(response: dict[str, Any], summary: dict[str, Any]) -> str:
         title = " / ".join(str(value) for value in (row.get("name"), row.get("status"), row.get("state")) if value)
         lines.append(f"- {title or 'Unknown filer'}")
         lines.append(f"  Filed: {_house_value(row.get('filing_date'))}")
+        warning = _house_extraction_warning(row)
+        if warning:
+            lines.append(f"  Warning: {warning}")
+            if row.get("pdf_url"):
+                lines.append(f"  Source: {row['pdf_url']}")
+            continue
         lines.append(f"  Asset: {_house_value(row.get('asset') or _raw_cells_preview(row))}")
         if _house_asset_type(row):
             lines.append(f"  Type: {_house_asset_type(row)}")
@@ -788,8 +806,34 @@ def _social_items(summary: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _house_ptr_items(response: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
-    value = response.get("house_ptr") or summary.get("house_ptr")
-    return [item for item in _as_list(value) if isinstance(item, dict)]
+    rows = [item for item in _as_list(response.get("house_ptr") or summary.get("house_ptr")) if isinstance(item, dict)]
+    filings = [
+        item
+        for item in _as_list(response.get("house_ptr_filings") or summary.get("house_ptr_filings"))
+        if isinstance(item, dict)
+    ]
+    if not filings:
+        return rows
+    rows_by_doc: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        rows_by_doc.setdefault(str(row.get("doc_id") or ""), []).append(row)
+    items: list[dict[str, Any]] = []
+    for filing in filings:
+        matched = rows_by_doc.get(str(filing.get("doc_id") or ""), [])
+        if matched:
+            items.extend({**filing, **row} for row in matched)
+        else:
+            items.append(filing)
+    return items
+
+
+def _house_extraction_warning(row: dict[str, Any]) -> str:
+    status = str(row.get("extraction_status") or "")
+    if status == "photo_scanned":
+        return "The filing is photo scanned"
+    if status == "unparsed":
+        return "No House PTR transactions could be extracted from this filing."
+    return ""
 
 
 def _sec_13f_items(response: dict[str, Any], summary: dict[str, Any]) -> list[dict[str, Any]]:
