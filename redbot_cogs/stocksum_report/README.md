@@ -47,7 +47,8 @@ Its `detail` option defaults to `minimum`, which shows only high-importance
 posts. Use `medium` for high plus medium, or `full` for all social posts.
 `/ptr_search` generates official House PTR trading disclosure reports from
 SQLite without LLM analysis; it requires at least one filter such as `name`,
-transaction dates (`days`, `start_date`, `end_date`), filing dates
+the rolling discovery window (`days`, based on `collected_at`), explicit
+transaction dates (`start_date`, `end_date`), filing dates
 (`filing_days`, `filing_start_date`, `filing_end_date`), `asset_type`, or
 `ticker`. Asset type filters use House codes such as `ST`, `GS`, `OI`, `CS`,
 and `OT`; ticker filters apply to `ST` stock rows. If `limit` is omitted,

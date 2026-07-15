@@ -912,7 +912,7 @@ class StockSumReport(commands.Cog):
         name="case-insensitive fuzzy filer name filter",
         start_date="transaction start date, YYYY-MM-DD",
         end_date="transaction end date, YYYY-MM-DD",
-        days="transaction records from the last N days",
+        days="filings first collected in the last N days",
         filing_start_date="filing start date, YYYY-MM-DD",
         filing_end_date="filing end date, YYYY-MM-DD",
         filing_days="filings published in the last N days",
@@ -965,9 +965,6 @@ class StockSumReport(commands.Cog):
         if error := _validate_positive_int(filing_days, label="filing_days", maximum=MAX_DAYS_FILTER):
             await _send_validation_error(interaction, error)
             return
-        if days is not None and (start_filter or end_filter):
-            await _send_validation_error(interaction, "Use either days or transaction start/end dates, not both.")
-            return
         if filing_days is not None and (filing_start_filter or filing_end_filter):
             await _send_validation_error(interaction, "Use either filing_days or filing start/end dates, not both.")
             return
@@ -995,7 +992,7 @@ class StockSumReport(commands.Cog):
         ):
             await _send_validation_error(
                 interaction,
-                "ptr_search requires at least one filter: name, transaction dates, filing dates, asset_type, or ticker.",
+                "ptr_search requires at least one filter: name, collected days, transaction dates, filing dates, asset_type, or ticker.",
             )
             return
 
@@ -1009,7 +1006,7 @@ class StockSumReport(commands.Cog):
                 name=name_filter,
                 start_date=start_filter,
                 end_date=end_filter,
-                days=days,
+                collected_days=days,
                 filing_start_date=filing_start_filter,
                 filing_end_date=filing_end_filter,
                 filing_days=filing_days,

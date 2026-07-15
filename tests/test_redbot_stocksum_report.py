@@ -1125,7 +1125,7 @@ async def test_ptr_search_command_rejects_missing_filters(monkeypatch) -> None:
 
     assert interaction.response.messages == [
         {
-            "content": "stock-sum report failed: ptr_search requires at least one filter: name, transaction dates, filing dates, asset_type, or ticker.",
+            "content": "stock-sum report failed: ptr_search requires at least one filter: name, collected days, transaction dates, filing dates, asset_type, or ticker.",
             "ephemeral": True,
             "suppress_embeds": True,
         }
@@ -1173,6 +1173,26 @@ async def test_ptr_search_rejects_invalid_filing_date_before_api_call(monkeypatc
             "suppress_embeds": True,
         }
     ]
+
+
+async def test_ptr_search_days_uses_collected_at_and_combines_with_transaction_dates(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"trade")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
+
+    await report.ptr_search(
+        interaction,
+        days=7,
+        start_date="2026-07-01",
+        end_date="2026-07-08",
+    )
+
+    assert client.trading_calls[0]["days"] is None
+    assert client.trading_calls[0]["collected_days"] == 7
+    assert client.trading_calls[0]["start_date"] == "2026-07-01"
+    assert client.trading_calls[0]["end_date"] == "2026-07-08"
 
 
 async def test_ptr_search_rejects_mixed_filing_days_and_dates(monkeypatch) -> None:
@@ -1229,7 +1249,8 @@ async def test_ptr_search_command_sends_discord_report(monkeypatch) -> None:
             "name": "Pelosi",
             "start_date": None,
             "end_date": None,
-            "days": 30,
+            "days": None,
+            "collected_days": 30,
             "filing_start_date": None,
             "filing_end_date": None,
             "filing_days": 1,
@@ -1272,6 +1293,8 @@ async def test_ptr_search_command_does_not_clip_large_limit(monkeypatch) -> None
     await report.ptr_search(interaction, days=30, limit=5000)
 
     assert client.trading_calls[0]["output_format"] == "discord"
+    assert client.trading_calls[0]["days"] is None
+    assert client.trading_calls[0]["collected_days"] == 30
     assert client.trading_calls[0]["limit"] == 5000
 
 
@@ -1897,6 +1920,7 @@ class FakeStockSumClient:
         filing_start_date: str | None = None,
         filing_end_date: str | None = None,
         filing_days: int | None = None,
+        collected_days: int | None = None,
         asset_type: str | None = None,
         ticker: str | None = None,
         limit: int | None = None,
@@ -1912,6 +1936,7 @@ class FakeStockSumClient:
                 "filing_start_date": filing_start_date,
                 "filing_end_date": filing_end_date,
                 "filing_days": filing_days,
+                "collected_days": collected_days,
                 "asset_type": asset_type,
                 "ticker": ticker,
                 "limit": limit,
