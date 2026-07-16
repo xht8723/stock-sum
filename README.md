@@ -175,9 +175,9 @@ API and exposes:
 
 Report commands always use Discord-specific markdown sent inline in chunks.
 `/trendings` returns recent Adanos stock and sector trend rows from Reddit and
-X. The slash command always uses the latest 24-hour UTC window; `limit` controls
-trend rows and comparison tickers, and optional `comparison_days` controls
-notable-change history.
+X. The slash command always uses the latest 24-hour UTC window; `limit` defaults
+to 5 and controls trend rows and comparison tickers, while optional
+`comparison_days` controls notable-change history.
 `/plot` returns a PNG attachment for social sentiment or House disclosure
 activity over time. Public report/plot slash commands no longer expose a
 private-mode option. `/settings list` is public; owner-only source mutations

@@ -1170,7 +1170,7 @@ class StockSumReport(commands.Cog):
 
     @app_commands.command(name="trendings", description="Generate Adanos trending stocks and sectors.")
     @app_commands.describe(
-        limit="rows to display per platform and section; stock-sum default if omitted",
+        limit="rows to display per platform and section; default is 5",
         comparison_days="comparison history window in days; stock-sum default is 7",
         mentions_change_pct="mentions change threshold percentage; stock-sum default is 30",
         sentiment_change_pct="sentiment percentage-point threshold; stock-sum default is 30",
@@ -1179,7 +1179,7 @@ class StockSumReport(commands.Cog):
     async def trendings(
         self,
         interaction,
-        limit: int | None = None,
+        limit: int = 5,
         comparison_days: int | None = None,
         mentions_change_pct: float | None = None,
         sentiment_change_pct: float | None = None,

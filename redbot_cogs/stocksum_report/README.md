@@ -60,10 +60,10 @@ filter such as `manager`, `issuer`, `cik`, `cusip`, `figi`, date range,
 server-side default.
 `/trendings` generates a concise Adanos trendings report for Reddit Stocks and
 X Stocks. It queries trending stocks and trending sectors for the latest
-24-hour UTC window. `limit` controls displayed trend rows and comparison
-tickers; notable-change history can be overridden with `comparison_days` and
-defaults to 7. stock-sum fetches the provider maximum so SQLite keeps more
-history.
+24-hour UTC window. `limit` defaults to 5 and controls displayed trend rows and
+comparison tickers; notable-change history can be overridden with
+`comparison_days` and defaults to 7. stock-sum fetches the provider maximum so
+SQLite keeps more history.
 `/plot` generates a PNG chart from existing SQLite data. Use
 `mode:social` for X/Reddit sentiment over time or `mode:trading` for House PTR
 purchase/sale activity over time. It requires at least one filter such as

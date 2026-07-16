@@ -1059,6 +1059,18 @@ async def test_trendings_command_sends_public_discord_report(monkeypatch) -> Non
     ]
 
 
+async def test_trendings_command_defaults_limit_to_five(monkeypatch) -> None:
+    interaction = FakeInteraction()
+    report = StockSumReport(bot=None)
+    client = FakeStockSumClient(content=b"**Trending stocks**\n- NVDA")
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.StockSumHttpClient.from_env", lambda: client)
+    monkeypatch.setattr("redbot_cogs.stocksum_report.cog.discord", FakeDiscord)
+
+    await report.trendings(interaction)
+
+    assert client.trendings_calls[0]["limit"] == 5
+
+
 async def test_trendings_command_rejects_invalid_limit(monkeypatch) -> None:
     interaction = FakeInteraction()
     report = StockSumReport(bot=None)
